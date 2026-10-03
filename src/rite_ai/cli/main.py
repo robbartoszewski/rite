@@ -221,40 +221,100 @@ def _tracked_runtime_state(root: Path) -> list[str]:
     ]
 
 
-def _gate_root() -> Path:
-    """Where the publish gate scans.
+def _git_toplevel(path: Path) -> Path | None:
+    """The toplevel of the git repository containing `path`, or None.
 
-    The gate is a REPOSITORY operation — it lists tracked files and walks
-    history — so its root is the git worktree, not the rite project. Those
-    are usually the same directory and are not always: rite's own repo has a
-    `.rite/` holding the gate's suppressions and the review checklist, and is
-    not a rite project (no `PROJECT_MARKERS`). Resolving the gate through the
-    project marker alone would fall back to cwd there, so running
-    `rite publish check` from a subdirectory would scan that subdirectory and
-    silently miss `.rite/gitleaksignore` — a gate that reports clean about
-    the wrong tree.
-
-    Project root wins when there is one, so a scanned project still uses its
-    own config; otherwise the git toplevel; cwd only if neither answers.
+    Resolved, so a caller can compare it to a candidate directory and learn
+    whether that directory IS a repository root rather than merely a
+    directory sitting inside one. On macOS `/tmp` is a symlink to
+    `/private/tmp` and git answers with the resolved form, so an unresolved
+    comparison says "not a repo" about a repo.
     """
     import subprocess
 
-    cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        if _is_project(parent):
-            return parent
     try:
         proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
             errors="replace",
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
-        return cwd
-    if proc.returncode == 0 and proc.stdout.strip():
-        return Path(proc.stdout.strip())
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        return Path(proc.stdout.strip()).resolve()
+    except OSError:
+        return None
+
+
+def _is_repo_root(path: Path) -> bool:
+    """Is `path` itself the toplevel of a git repository?
+
+    Not `(path / ".git").exists()`: that is false for a linked worktree in
+    some layouts and, worse, the question being asked here is not "is there
+    a repo somewhere at or above this" — a project root sitting INSIDE a
+    larger repository would answer yes to that and send the gate off to scan
+    the wrong tree.
+    """
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return _git_toplevel(resolved) == resolved
+
+
+def _gate_root() -> Path:
+    """Where the publish gate scans.
+
+    The gate is a REPOSITORY operation — it lists tracked files and walks
+    history — so its root has to BE a git repository. The rite project root
+    usually is one and is not always, and the case where it is not had the
+    gate failing closed on every push:
+
+    🔴 SCRUM-60. `rite prepare` lays a project out as a non-repo directory
+    holding its `.rite/` with the module repositories as subdirectories
+    (`~/projects/yoloAI/.rite/`, repo at `~/projects/yoloAI/yoloai`). The
+    project marker wins the walk, so the gate was handed `~/projects/yoloAI`
+    — not a repository — and both `rite publish check` and the `pre-push`
+    hook died on `'git ls-files' failed: fatal: not a git repository`. The
+    hook fails closed, so that is EVERY push from the layout refused, and
+    `rite deliver` could never push a branch or open a pull request for it.
+
+    So a candidate root is accepted only if it is a repository toplevel; the
+    git toplevel of cwd answers when none is. Project root still wins when it
+    qualifies, so a scanned project keeps using its own `.rite/` config and
+    suppressions, which is why that preference exists at all: rite's own repo
+    tracks `.rite/gitleaksignore`, and resolving through the git toplevel
+    alone would scan a subdirectory and silently miss it.
+
+    `RITE_PROJECT_ROOT` is checked first, for the same reason
+    `_find_project_root` checks it: a sandboxed Worker is TOLD its root
+    rather than finding it, and a module that is itself a rite project makes
+    the upward walk pick the inner one. It was not consulted here at all,
+    so the gate and every other command could disagree about which tree they
+    were talking about.
+    """
+    cwd = Path.cwd()
+
+    candidates: list[Path] = []
+    override = os.environ.get(PROJECT_ROOT_ENV)
+    if override:
+        candidates.append(Path(override).expanduser().resolve())
+    for parent in [cwd, *cwd.parents]:
+        if _is_project(parent):
+            candidates.append(parent)
+            break
+
+    for candidate in candidates:
+        if _is_repo_root(candidate):
+            return candidate
+
+    toplevel = _git_toplevel(cwd)
+    if toplevel is not None:
+        return toplevel
     return cwd
 
 
