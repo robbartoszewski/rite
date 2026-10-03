@@ -9345,6 +9345,7 @@ def _start_a_manager(
     from rite_ai.managers.broker import for_project
     from rite_ai.managers.chores import create_asked_for
     from rite_ai.managers.chores import instructions as chore_instructions
+    from rite_ai.managers.recovery import recover_stalled_workers
     from rite_ai.refinement.protocol import step as refinement_step
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
@@ -9488,6 +9489,10 @@ def _start_a_manager(
             # TR9: a User's instruction becomes a chore, written by rite
             # outside the boundary, on the same board the broker checks.
             chores=lambda say: create_asked_for(root, role.name, board, say),
+            # SCRUM-38: recover a stalled Worker — restart its session in place
+            # (preserving its unapplied work), or re-stage its ticket when its
+            # sandbox is gone — at the cycle boundary, off the two-second poll.
+            recover=lambda say: recover_stalled_workers(root, role.name, say),
             # TR2: the rounds this Manager asks for, and what the User's
             # replies to them do, decided outside the boundary on this board.
             # Only the Manager that refines does anything (TRQ7).
