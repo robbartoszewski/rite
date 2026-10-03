@@ -73,6 +73,11 @@ class Step:
     branch: str = ""
     commit: str = ""
     claim_disagreed: bool = False
+    worker: str = ""
+    """Which Worker ran it, when one did. Empty means this ran at MANAGER tier,
+    on the host, which is what happened before SCRUM-54 and still happens when
+    no Worker is assigned to the ticket."""
+    sandbox: str = ""
     verify_output: str = ""
     lines: list[str] = field(default_factory=list)
     problem: str = ""
@@ -152,11 +157,18 @@ def take_one_step(
     verifier=None,
     committer=None,
     claims=None,
+    placement=None,
 ) -> Step:
     """Run the next planned subtask of `ticket`, or say why nothing ran.
 
     Every dependency is injectable and every default is the production one, so
     a test substitutes the agent without substituting the path.
+
+    `placement` is where the subtask runs (SCRUM-54), and it is injectable for
+    the same reason the agent is: the sandboxed path's workspace, branch and
+    claim identity all come from it, so a test that could only substitute the
+    agent could not reach them. Left unset — and with no agent passed either —
+    it is resolved from the project, which is the production path.
     """
     root = Path(root)
     step = Step(ticket=ticket)
@@ -207,11 +219,47 @@ def take_one_step(
         step.problem = f"{ticket} {subtask.id}: {slice_problem}"
         return step
 
+    # WHERE this subtask runs (SCRUM-54). A local Worker assigned to the ticket
+    # runs it inside its own sandbox, against that sandbox's copy of its
+    # checkout; with no such Worker this is empty and everything below is the
+    # Manager-tier path exactly as it was.
+    #
+    # ⚠ Asked BEFORE the agent is defaulted, and the agent is defaulted FROM it.
+    # A placement whose agent was overwritten by `_agent_for`'s host-run Goose
+    # would run the turn on the operator's own tree while every other part of
+    # this call — the workspace, the branch, the verify — pointed at a sandbox.
+    if placement is None and agent is None:
+        from rite_ai.local.worker_step import placement_for
+
+        placement = placement_for(root, manager, ticket)
+    if placement is not None and placement.problem:
+        step.problem = f"{ticket} {subtask.id}: {placement.problem}"
+        return step
+    placed = bool(placement and placement.sandboxed)
+    if placed:
+        step.worker = placement.worker
+        step.sandbox = placement.sandbox
+
     if agent is None:
-        agent, agent_problem = _agent_for(root, manager)
-        if agent_problem:
-            step.problem = agent_problem
+        if placed and placement.agent is not None:
+            agent = placement.agent
+        elif placed:
+            step.problem = (
+                f"{ticket} {subtask.id}: {placement.worker} was placed in "
+                f"sandbox {placement.sandbox} but no agent was built for it"
+            )
             return step
+        else:
+            agent, agent_problem = _agent_for(root, manager)
+            if agent_problem:
+                step.problem = agent_problem
+                return step
+
+    # ⚠ The workspace is the SANDBOX's copy for a placed turn, and it has to be
+    # all three of these together: the agent edits the copy, so a verify in the
+    # host root would test a tree the model never touched, and a commit there
+    # would put the work where `deliver` does not look for it.
+    workspace = placement.workspace if placed else str(root)
 
     if verifier is None:
         from rite_ai.local.runners import SubprocessVerifier
@@ -231,7 +279,9 @@ def take_one_step(
     # Level 2 (DD-2.4, OL6): the unit's own steps, with its DECOMPOSITION model,
     # before it edits anything. Advisory by design — a unit with no decomposition
     # model, or a Level-2 turn that could not run, executes exactly as before.
-    approach, approach_note = _approach_for(root, manager, subtask, spec_slice)
+    approach, approach_note = _approach_for(
+        root, manager, subtask, spec_slice, placement if placed else None
+    )
 
     # ⚠ The boundary, checked rather than trusted (DD-2.4). Level 2 runs between
     # approval and execution, so a subtask it altered would be rewriting what
@@ -250,19 +300,43 @@ def take_one_step(
     outcome = run_subtask(
         state=state,
         manager=manager,
-        worker=manager,
+        # ⚠ The CLAIM is taken in the Worker's name for a placed turn, not the
+        # Manager's. Two Workers of one Manager working two tickets would
+        # otherwise both claim as that Manager, and the claims ledger — whose
+        # one job is exclusion — would read their overlapping scopes as one
+        # holder re-claiming its own paths and let both through.
+        worker=placement.worker if placed else manager,
         plan=plan,
         subtask=subtask,
         spec_slice=spec_slice,
-        workspace=str(root),
+        workspace=workspace,
         agent=agent,
         verifier=verifier,
         committer=committer,
         claims=claims,
         approach=approach,
+        # The ticket for a placed turn: `deliver` collects `refs/heads/<ticket>`
+        # from the sandbox and nothing else. See `run_subtask`'s own note.
+        branch=placement.branch if placed else "",
     )
     step.ran = True
     _record(state, plan, subtask, outcome, read.version, step)
+    if placed:
+        # ⚠ AFTER `_record`, which ASSIGNS `step.lines` from the outcome — the
+        # same trap `_approach_for`'s note below describes, and appending before
+        # it would silently drop the line.
+        # ⚠ Only says "committed" when there is a commit. A failed verify makes
+        # no branch, and a line claiming one sends whoever reads it looking in a
+        # sandbox for a ref that was never created.
+        landed = (
+            f"committed to {outcome.branch} ({outcome.commit[:8]})"
+            if outcome.commit
+            else f"nothing committed: {outcome.status}"
+        )
+        step.lines.append(
+            f"ran inside {placement.worker}'s sandbox {placement.sandbox}, "
+            f"in {placement.subdir}/, {landed}"
+        )
     if approach_note:
         # ⚠ AFTER `_record`, which assigns `step.lines` from the outcome — a note
         # appended before it was silently dropped, which is how a Level-2 failure
@@ -271,8 +345,18 @@ def take_one_step(
     return step
 
 
-def _approach_for(root: Path, manager: str, subtask, spec_slice: str):
+def _approach_for(root: Path, manager: str, subtask, spec_slice: str, placement=None):
     """(the approach, a note to record) — Level 2 for this unit (DD-2.4, OL6).
+
+    ⚠ **A PLACED turn plans inside its own sandbox, with the Worker's own
+    model**, and the placement carries that callable ready-made
+    (`worker_step.Placement.approach`). Reading the Manager's role for a placed
+    subtask was wrong three ways: it ran a write-capable auto-mode model turn on
+    the HOST in the operator's real project tree — the containment the placement
+    exists to provide, skipped by the planning half; it planned against a tree
+    where the subtask's module-relative scope paths do not exist and the earlier
+    subtasks' commits are not present; and it ignored OL3's model split, so a
+    Claude Manager driving a GPU Worker produced no approach at all.
 
     ⚠ **Never raises and never refuses the turn.** An approach improves a turn;
     it is not a gate on one. So every failure here returns `("", why)` and the
@@ -284,6 +368,19 @@ def _approach_for(root: Path, manager: str, subtask, spec_slice: str):
     unit has nothing to gain from loading a second set of weights beside the one
     it is about to implement with.
     """
+    if placement is not None:
+        # ⚠ A placed turn gets the PLACEMENT's Level 2 or none at all — never
+        # the Manager's, which runs on the host in the operator's project root.
+        # Falling through would have put the thing this just fixed back behind
+        # a `None`, and a placement built without an approach (a test's, or a
+        # future caller's) is exactly where that would happen silently.
+        if placement.approach is None:
+            return "", ""
+        result = placement.approach(subtask, spec_slice)
+        if result.ok:
+            return result.steps, ""
+        return "", f"no Level-2 approach for {subtask.id}: {result.problem}"
+
     from rite_ai.config.managers import decomposition_model_for
     from rite_ai.config.parse import ParseError, parse_config
     from rite_ai.local.approach import plan_approach
@@ -385,7 +482,17 @@ def _record(state, plan, subtask, outcome: Outcome, version: str, step: Step) ->
         replace(
             subtask,
             status=outcome.status,
-            attempts=subtask.attempts + 1,
+            # ⚠ **RL-47, through the property that decides it.**
+            # `Outcome.counts_as_attempt` says "work counts, and a turn that
+            # never happened does not" — and this incremented
+            # unconditionally, so the property had no reader in `src/` at all
+            # and the rule it states was not in force anywhere. An endpoint
+            # that was down, a sandbox a delivery had just stopped, a launch
+            # rite's own leak guard refused: each spent one of the subtask's
+            # attempts, and its own docstring says why that is wrong — "it is
+            # a machine that was not ready, and counting it would retire a
+            # subtask nobody tried".
+            attempts=subtask.attempts + (1 if outcome.counts_as_attempt else 0),
             branch=outcome.branch,
             last_failure=(
                 "" if outcome.accepted else (outcome.verify_output or "")[:500]

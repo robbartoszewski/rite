@@ -183,6 +183,31 @@ class GooseAgent:
     probe: Callable | None = None
     launch: Callable | None = None
     env: dict = field(default_factory=dict)
+    inherit_environment: bool = True
+    """Whether the turn's environment starts from the HOST's.
+
+    ⚠ **True is right on the host and FATAL in a sandbox, which is why this
+    exists.** `goose` on the host needs the operator's `PATH`, `HOME` and the
+    rest to run at all, so the host turn inherits. A sandboxed turn is launched
+    by `in_sandbox.exec_launcher`, which forwards a CLOSED set of keys and
+    REFUSES — by design, SB12 — to put a secret-shaped variable on argv, where
+    every other sandbox on the machine could read it.
+
+    Put together, inheriting meant a sandboxed turn died on the operator's own
+    shell. Measured on this machine: with `GITHUB_TOKEN` merely present in the
+    environment, the turn returned `could not start goose: SecretOnArgv:
+    GITHUB_TOKEN was passed to a sandboxed turn` — and `AgentReport` has no way
+    to say "I could not run at all" for a launch failure, so it was recorded as
+    a failed ATTEMPT against the subtask. RL-47 says only work counts; a turn
+    refused by rite's own leak guard is not work. ⚠ And it would have fired on
+    EVERY yoloAI-launched session, whose launch line exports every token the
+    operator holds — so the sandboxed path would have been dead on the machine
+    it was built for while looking like a model that could not edit a file.
+
+    False builds the environment from nothing but Goose's own keys and `env`.
+    Nothing is lost: the launcher forwards only `FORWARDED` anyway, so what the
+    host environment contributed to a sandboxed turn was never more than the
+    chance of refusing it."""
     instruction_dir: str = ""
     """Where the instruction file is CREATED. Empty means the system temp root,
     which is right on the host and wrong in a sandbox (OL5).
@@ -240,16 +265,47 @@ class GooseAgent:
             instruction_path = handle_file.name
 
         argv = [self.binary, "run", "-n", handle, "-i", instruction_path]
-        environment = dict(os.environ)
+        # ⚠ `dict(os.environ)` ONLY when inheriting. See `inherit_environment`:
+        # a sandboxed turn that starts from the host environment is refused by
+        # its own launcher over a variable it never wanted.
+        environment = dict(os.environ) if self.inherit_environment else {}
         environment.update(goose_environment(self.endpoint, self.model))
         environment["GOOSE_MODE"] = self.mode
         environment.update(self.env)
         try:
             completed = self._launch(argv, workspace, environment)
+        except subprocess.TimeoutExpired as e:
+            # ⚠ **A timeout is NOT a turn that never happened.** It ran for
+            # `RUN_TIMEOUT_SECONDS` — twenty minutes, comfortably above the
+            # benchmark's slowest measured task — so it had every chance to
+            # edit files, and the verify below is the only thing that can say
+            # whether it got anywhere. Marking it an infrastructure fault would
+            # make a model that stalls for twenty minutes cost no attempt, and
+            # a subtask that hangs every time would be retried for ever.
+            return AgentReport(
+                claimed_success=False,
+                summary=(
+                    f"{self.binary} did not finish within "
+                    f"{getattr(e, 'timeout', RUN_TIMEOUT_SECONDS)}s and was "
+                    "stopped; whatever it had already changed is still there"
+                ),
+            )
         except Exception as e:  # noqa: BLE001 - a launch failure is a result
+            # ⚠ `infrastructure_fault=True`, and it was missing. A launch that
+            # RAISED is by definition a turn that did not happen — which is
+            # this field's own documented meaning, "a binary that is missing" —
+            # and without it RL-47 broke on every launch failure: the subtask
+            # spent an attempt proving that a tool could not be started.
+            #
+            # Two real cases reach here, both from the sandboxed launcher and
+            # both measured: `SecretOnArgv` (the operator's shell held a token,
+            # so rite's own leak guard refused the argv) and `SandboxGone` (a
+            # delivery stopped the Worker's sandbox between the placement check
+            # and the turn). Neither is evidence about the work.
             return AgentReport(
                 claimed_success=False,
                 summary=f"could not start {self.binary}: {type(e).__name__}: {e}",
+                infrastructure_fault=True,
             )
         finally:
             try:

@@ -547,12 +547,28 @@ def add_worker(
     module_subset: list[str] | None = None,
     instructions: str = "",
     follow_docs: list[str] | None = None,
+    engine: str = "",
+    endpoint: str = "",
+    model: str = "",
+    agent: str = "",
+    context_window: int = 0,
 ) -> AddWorkerResult:
     """`instructions` is SPEC §8.4's `claude_instructions` — extra standing
     direction for this one Worker, stored in its `worker.yml` and rendered
     into its `CLAUDE.md`. It had neither a writer nor a reader before, so
     the documented key could only ever be set by hand and was then dropped
-    on the next write."""
+    on the next write.
+
+    The five engine keys are OL3's (SCRUM-55). `_write_worker_manifest` has
+    written them since OL3 and nothing could SET them, so a GPU Worker was
+    declared by hand-editing `worker.yml` — which SPEC §8.5 makes a UX defect
+    rather than a shortcut: basic setup goes through the CLI, because a person
+    who has to hand-edit a manifest to add a Worker has no way to learn that
+    `agent: goose` is the only agent with window enforcement, or that a window
+    is mandatory, until a run has already gone wrong.
+
+    Empty `engine` keeps every pre-OL3 default, so a Claude Worker is added by
+    exactly the call that added one before."""
     # Same boundary as `remove_worker`. Creating `workers/../x` is not
     # destructive, but it writes a workspace outside the project that every
     # later command then fails to find, and it is the same missing check.
@@ -563,6 +579,19 @@ def add_worker(
     rite_dir = root / ".rite"
     if not rite_dir.is_dir():
         return AddWorkerResult(False, "no .rite/ directory — run `rite init` first")
+
+    # ⚠ **Checked BEFORE anything is created**, and with the SHARED rule.
+    # `engine_shape_problem` is the one `parse_worker` and `parse_managers`
+    # already apply — "a second copy of 'a local engine must say all three' is a
+    # second copy that drifts", in its own words — so the CLI cannot come to
+    # accept a manifest the parser then rejects. Half a Worker whose `worker.yml`
+    # will not parse is worse than no Worker: every later command that walks
+    # `workers/` reports it, and the person has to know to delete a directory.
+    engine_problem = _engine_declaration_problem(
+        name, engine, endpoint, model, agent, context_window
+    )
+    if engine_problem:
+        return AddWorkerResult(False, f"refusing to add: {engine_problem}")
 
     modules_path = rite_dir / "modules.yaml"
     all_modules = parse_modules(modules_path)
@@ -630,12 +659,19 @@ def add_worker(
             continue
         cloned.append(m.name)
 
+    from rite_ai.config.managers import CLAUDE as _CLAUDE
+
     manifest = WorkerManifest(
         name=name,
         manager=manager,
         modules=[m.name for m in modules],
         claude_instructions=instructions,
         follow_module_docs=list(follow_docs or []),
+        engine=engine or _CLAUDE,
+        endpoint=endpoint,
+        model=model,
+        agent=agent,
+        context_window=context_window,
     )
     _write_worker_manifest(worker_dir, manifest)
     _write_worker_claude_config(
@@ -652,6 +688,72 @@ def add_worker(
         cloned_modules=cloned,
         failed_modules=failed,
     )
+
+
+def _engine_declaration_problem(
+    name: str,
+    engine: str,
+    endpoint: str,
+    model: str,
+    agent: str,
+    context_window: int,
+) -> str:
+    """Why these five values cannot be written as a Worker's engine, or "".
+
+    ⚠ **Every rule comes from `config.managers`, none from here.** The shape
+    rule (`engine_shape_problem`) and the window rule (`window_problem`) are the
+    ones a manifest is PARSED by, applied to the same dict shape, so a `rite add
+    worker` that succeeded always produces a `worker.yml` that parses.
+
+    The one rule added here is Goose-only, and it is a REFUSAL rather than a
+    note because of what the alternative costs. `worker_step` and
+    `step._agent_for` both refuse a non-Goose local unit at run time (S35:
+    window enforcement is `GOOSE_CONTEXT_LIMIT`-shaped, so another agent runs at
+    the server's default, 4,096 on this Mac, smaller than the agents' own
+    prompts). Letting the declaration through would create a Worker that is
+    correct on disk, passes `rite doctor`, and refuses every turn it is ever
+    given — a failure discovered at the end of a scheduled run rather than at
+    the moment someone could fix it in a word.
+    """
+    from rite_ai.config.managers import (
+        engine_shape_problem,
+        is_local_engine,
+        window_problem,
+    )
+
+    raw: dict[str, object] = {}
+    if engine:
+        raw["engine"] = engine
+    for key, value in (("endpoint", endpoint), ("model", model), ("agent", agent)):
+        if value:
+            raw[key] = value
+    if context_window:
+        raw["context_window"] = context_window
+    if not raw:
+        return ""
+    subject = f"worker {name}"
+    problem = engine_shape_problem(raw, subject) or window_problem(raw, subject)
+    if problem:
+        return problem
+    if not is_local_engine(raw.get("engine", "")):
+        return ""
+    # A local Worker with no window: `window_problem` only checks a window that
+    # is PRESENT, and `window_undeclared` — what `rite start` and `worker_step`
+    # ask — refuses an absent one. Said at declaration, where it is one flag.
+    if not context_window:
+        return (
+            f"{subject}: a {raw['engine']} engine must also say context_window "
+            "— a model served at its endpoint's default has its prompt silently "
+            "cut from the front (4,096 tokens on an unconfigured Ollama), and "
+            "the default cannot be read before the model loads"
+        )
+    if agent != "goose":
+        return (
+            f"{subject}: agent {agent!r} has no window enforcement today (S35), "
+            "so the Worker would be created correctly and then refuse every "
+            "turn — only 'goose' can run a local Worker"
+        )
+    return ""
 
 
 def unsaved_work(worker_dir: Path) -> list[UnsavedWork]:

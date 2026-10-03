@@ -180,20 +180,40 @@ def run_subtask(
     claims: Claims,
     in_flight: int = 1,
     approach: str = "",
+    branch: str = "",
 ) -> Outcome:
     """One subtask: claim, run, verify, commit, report, release.
 
     Refuses to start unless the plan was approved (RL-6). Releasing happens on
     every path out, because a claim held by a finished subtask blocks the
     fleet until something notices.
+
+    `branch` overrides `branch_for`, and exactly one caller needs it. A
+    Manager-tier subtask commits to `rite-local/<ticket>/<subtask>`, one branch
+    per subtask, and something later composes them (RL-T30, unbuilt). A subtask
+    run in a WORKER's sandbox has a harder constraint: `publishing/deliver.py`
+    collects `refs/heads/<ticket>` from that sandbox's copy and nothing else, so
+    a per-subtask branch there is work `deliver` reports as "the Worker made no
+    branch <ticket>". `worker_step` passes the ticket, and the subtasks of one
+    ticket — run one at a time, in plan order, in one copy — compose by being
+    committed in sequence onto it. ⚠ That is not a shortcut around RL-T30: it is
+    why the Worker path does not NEED it, and the Manager path still does.
     """
-    outcome = Outcome(subtask_id=subtask.id, branch=branch_for(plan.ticket, subtask.id))
+    outcome = Outcome(
+        subtask_id=subtask.id, branch=branch or branch_for(plan.ticket, subtask.id)
+    )
 
     if not plan.released:
         # The gate, enforced where the work would start rather than trusted to
         # whoever assigns. A subtask running from an unapproved plan is the one
         # thing plan review exists to prevent.
         outcome.status = FAILED
+        # ⚠ Not an attempt: nothing ran. `counts_as_attempt` is the one place
+        # RL-47 is decided, and these two early returns are the harness's OWN
+        # "nothing ran" paths — the claim conflict below says so in its note
+        # and still spent one, which is how a subtask blocked by a neighbour's
+        # claim could be retired without ever having been tried.
+        outcome.infrastructure_fault = True
         outcome.notes.append(
             f"{plan.ticket} is not approved by a plan-review holder, so nothing "
             "from its decomposition may run"
@@ -202,6 +222,8 @@ def run_subtask(
 
     if not claims.take(subtask.scope, worker):
         outcome.status = FAILED
+        # The note already said this; now it is true. See above.
+        outcome.infrastructure_fault = True
         outcome.notes.append(
             f"another worker holds part of {', '.join(subtask.scope)} — not "
             "started, so nothing here counts as an attempt"

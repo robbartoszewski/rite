@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### A GPU Worker can run a ticket, and you can add one with a command
+
+rite could be *told* about a Worker that runs a local model on your own GPU —
+`worker.yml` has had the keys for a while — but two things stopped a mixed
+fleet of Claude and GPU Workers from actually working.
+
+**A GPU Worker had nothing to run it.** The local-model path ran at Manager
+level, in your project directory, rather than inside a Worker's own sandbox.
+A GPU Worker now takes a subtask, works on it inside its sandbox, and hands
+back the same way a Claude Worker does — rite runs the verify and makes the
+commit itself, on the branch `rite deliver` already looks for.
+
+**And you had to hand-edit a file to declare one.** `rite add worker` now
+takes the engine directly:
+
+    rite add worker gpu1 --engine local:small \
+      --endpoint http://localhost:11434 \
+      --model qwen3.8:latest --agent goose --context-window 32768
+
+It refuses a declaration that would not work rather than creating a Worker
+that looks right and then does nothing: a local model needs a context window
+(its server's default is often 4,096 tokens, which silently cuts the start of
+every prompt), and `goose` is the only agent whose window rite can pin today.
+
+**A subtask no longer loses a try when the machine was not ready.** rite counts
+how many times a subtask has been attempted, and it was counting runs where
+nothing ran at all: an endpoint that was down, a model that is not installed, a
+sandbox that had just been stopped, or another Worker holding one of the files.
+Those are now not attempts, so a subtask nobody has actually tried is not
+retired as a failing one. A run that genuinely timed out still counts — it had
+twenty minutes and may have changed something.
+
+If you give two local Workers different models, rite now tells you: they will
+evict each other from the graphics card for the whole run — roughly three
+times slower than two Workers sharing one model. It does not stop you, since
+running them at different hours is perfectly reasonable; use `rite schedule`
+to keep them apart, or give them the same model.
+
+
 ### Your answer to a Worker's question reaches the Worker (SCRUM-52)
 
 When you replied in a Worker's question thread, the reply reached the
