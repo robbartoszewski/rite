@@ -49,9 +49,25 @@ directory as the tree to scan, git said `not a git repository`, and both
 that was **every push from such a project refused**, and `rite deliver` could
 never push a branch or open a pull request for one.
 
-The gate now scans the repository: the project root when it is one, otherwise
-the repository you are in. `RITE_PROJECT_ROOT` is honoured here too, as it
-already was everywhere else.
+The gate now scans the repository you are in, and reads its rules and
+suppressions (`.rite/config.yaml`, `gitleaks.toml`, `gitleaksignore`) from the
+rite project above it — two questions that used to share one answer. Run it
+from inside a module; at a project root that is not itself a repository the
+gate says so and points at the modules, rather than repeating git's
+`not a git repository`.
+
+If your project lives in a *subdirectory* of a bigger repository, the gate now
+scans the whole repository rather than that subdirectory. Existing
+`.rite/gitleaksignore` entries were written against subdirectory-relative
+paths and will not match — re-add them from the fingerprints the gate prints.
+It fails loudly rather than quietly, so nothing is cleared that was not before.
+
+### The pre-push hook blocks a secret in a commit message
+
+It did not. A commit message is not a file, so the check that separates "this
+push added it" from "this was already here" could never match one — and every
+commit-message finding was filed as pre-existing and waved through. `rite
+publish check` reported the same secret as blocking. The hook now blocks it.
 
 ### The gate says what it scanned (SCRUM-63)
 
@@ -73,7 +89,8 @@ and proves it. But two things it said were not trustworthy:
   file content across every ref; rite's commit-message scan only followed the
   branch you were on. A secret in the commit message of an unmerged branch was
   reported clean. Stashes and notes are excluded from both — they are local and
-  never published, and a stashed line used to be unsuppressable.
+  never published, and a stashed line used to be unsuppressable. (A secret
+  written into a git *note* and then pushed deliberately is out of scope.)
 
 ### Your answer to a Worker's question reaches the Worker (SCRUM-52)
 

@@ -311,15 +311,14 @@ def _gate_config_root() -> Path:
     cwd = Path.cwd()
     override = os.environ.get(PROJECT_ROOT_ENV)
     if override:
-        # Only when cwd is inside it — see `_gate_root`'s sibling reasoning.
-        # The override names the project a Worker belongs to; it is not a
-        # licence to read another tree's suppressions over this one's.
-        named = Path(override).expanduser().resolve()
-        try:
-            if named == cwd.resolve() or named in cwd.resolve().parents:
-                return named
-        except OSError:
-            pass
+        # Unconditionally, exactly as `_find_project_root` takes it. The
+        # guard that briefly stood here was aimed at the SCAN root, where an
+        # unrelated override fed one repository's shas to another; the scan
+        # root no longer consults the variable at all. Which PROJECT a
+        # Worker belongs to is the question this variable answers, and
+        # answering it differently here than everywhere else is how the gate
+        # and the rest of the CLI came to disagree about the same tree.
+        return Path(override).expanduser().resolve()
     for parent in [cwd, *cwd.parents]:
         if _is_project(parent):
             return parent
@@ -1184,14 +1183,19 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
     # disarmable layer and not this one — the same asymmetry that let the hook
     # defect exist, since nobody asked the question.
     #
-    # Project root only, and said so: `rite init` writes the workflow there
-    # alone, because the gate reads its scan patterns and suppressions from
-    # `.rite/`, which lives there. A bare "active" would otherwise read as
-    # "every repo is covered".
+    # Asked about the REPOSITORY, which is where `.github/workflows/` can
+    # live and where `rite publish install-ci` writes. Doctor asked about
+    # the project root instead, and once the gate's own root became the
+    # repository the two stopped agreeing: install-ci reported installing a
+    # workflow while doctor went on saying there was none and telling the
+    # reader to run install-ci — a loop that never clears. Falls back to
+    # the project root when cwd is not in a repository, so the sentence
+    # below is still about something.
     from rite_ai.gate.ci import ci_workflow_status
 
+    ci_root = _gate_root() if _git_toplevel(Path.cwd()) is not None else root
     with _doctor_check("publish gate CI", problems):
-        ci_gate = ci_workflow_status(root)
+        ci_gate = ci_workflow_status(ci_root)
         if ci_gate.state != "not_a_repo":
             if ci_gate.active:
                 click.echo(
@@ -4858,13 +4862,9 @@ def publish_pre_push() -> None:
         click.echo("rite publish gate: nothing to scan")
         raise SystemExit(0)
 
-    # Said on this path as well as in `publish check`. In the `rite prepare`
-    # layout the gate root is the module repository and not the project root,
-    # so `.rite/config.yaml` and `.rite/gitleaksignore` are read from the
-    # module — and a push that goes through because the project's
-    # suppressions were not where the gate looked should at least name the
-    # tree it looked at. The remaining half of that — reading config from the
-    # project while scanning the repo — is a larger change than this one.
+    # Said on this path as well as in `publish check`: in the `rite prepare`
+    # layout the tree being scanned and the tree the rules come from are
+    # different directories, and that is worth stating before a verdict.
     note = _gate_root_note(root, config_root)
     if note:
         click.echo(f"rite publish gate: {note}")

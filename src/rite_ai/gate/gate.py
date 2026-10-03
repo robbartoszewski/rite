@@ -14,7 +14,12 @@ from rite_ai.config.parse import parse_config
 from rite_ai.gate import gitleaks_runner, pattern_scan
 from rite_ai.gate import suppression as supp_mod
 from rite_ai.gate.builtin_rules import BUILTIN_PATH_PATTERNS
-from rite_ai.gate.findings import Finding, publishable_scope, rev_range_args
+from rite_ai.gate.findings import (
+    COMMIT_MESSAGE_FILE,
+    Finding,
+    publishable_scope,
+    rev_range_args,
+)
 from rite_ai.gate.suppression import DEFAULT_SUPPRESSION_PATH, Suppression
 
 # TWO QUESTIONS, TWO ANSWERS. `outcome` says what was found; the exit code
@@ -228,6 +233,24 @@ def _run_gate(
 
     tracked = pattern_scan.list_tracked_files(root)
     if isinstance(tracked, pattern_scan.ScanError):
+        if not _looks_like_a_repo(root):
+            # 🔴 SCRUM-60's other half. The gate cannot scan a directory
+            # that is not a repository and should not pretend otherwise —
+            # but `'git ls-files' failed: fatal: not a git repository` is
+            # git talking to git, and it leaves the reader of a `rite`
+            # command with nowhere to go. In the `rite prepare` layout this
+            # is exactly what `rite publish check` says at the project root,
+            # where the repositories are one level down.
+            return GateReport(
+                errors=errors
+                + [
+                    f"{root} is not a git repository, and the publish gate "
+                    "scans repositories — it lists tracked files and walks "
+                    "history. If this is a rite project root, the "
+                    "repositories are the modules beneath it: run the gate "
+                    "inside one of them."
+                ]
+            )
         # `errors +` and not `[...]`: a missing gitleaks is recorded above,
         # and dropping it here left the user reading about the second problem
         # with no mention of the first.
@@ -401,6 +424,24 @@ def _run_gate(
     )
 
 
+def _looks_like_a_repo(root: Path) -> bool:
+    """Is `root` inside a git repository at all? Used only to choose which
+    error to print, never to decide whether to scan."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--git-dir"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return proc.returncode == 0
+
+
 def _is_default_config(configured: str) -> bool:
     """Is this the default `gitleaks_config`, however it is spelt?
 
@@ -551,8 +592,28 @@ def _split_off_pre_existing(
     touched = pattern_scan.files_touched_by(root, rev_range)
     if isinstance(touched, pattern_scan.ScanError):
         return blocking, []
-    still_blocking = [f for f in blocking if not f.file or f.file in touched]
-    pre_existing = [f for f in blocking if f.file and f.file not in touched]
+
+    def _from_this_push(f: Finding) -> bool:
+        if not f.file:
+            return True
+        if f.file == COMMIT_MESSAGE_FILE:
+            # 🔴 A commit message is not a file, and matching it against a
+            # touched-FILE set can only ever fail — so EVERY commit-message
+            # finding was demoted, and the pre-push hook exited 0 over a
+            # token in the message of the very commit being pushed.
+            # Measured: `rite publish check` exit 2, the hook exit 0, the
+            # push allowed, under the words "already in the repository, NOT
+            # from this push".
+            #
+            # It is from this push by construction: both message scanners
+            # are given the same `rev_range`, so in hook mode every message
+            # finding came out of a commit the push would publish. There is
+            # no demotion to make.
+            return True
+        return f.file in touched
+
+    still_blocking = [f for f in blocking if _from_this_push(f)]
+    pre_existing = [f for f in blocking if not _from_this_push(f)]
     return still_blocking, pre_existing
 
 

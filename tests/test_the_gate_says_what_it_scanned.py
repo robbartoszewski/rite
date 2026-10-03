@@ -321,3 +321,53 @@ def test_the_default_config_is_recognised_however_it_is_spelt(tmp_path):
 
     assert report.errors == []
     assert report.exit_code == EXIT_CLEAN
+
+
+@requires_gitleaks
+def test_the_hook_blocks_a_secret_in_the_commit_message_it_is_pushing(tmp_path):
+    """🔴 The one that mattered most. A commit message is not a file, so
+    matching `<commit message>` against a touched-FILE set can only ever
+    fail — and `_split_off_pre_existing` therefore demoted EVERY
+    commit-message finding to "already in the repository, NOT from this
+    push". Measured: `rite publish check` exit 2 and the pre-push hook exit
+    0 on the same repository, over a token in the message of the very commit
+    being pushed. The push was allowed, under a sentence saying the finding
+    predated it.
+
+    Asserted at `run_gate` with the hook's own range shape, since the whole
+    defect lived in the range-scoped path that `publish check` never takes.
+    """
+    init_repo(tmp_path)
+    write(tmp_path, "README.md", "hello\n")
+    commit_all(tmp_path, "base")
+    subprocess.run(["git", "branch", "-M", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=tmp_path, check=True)
+    write(tmp_path, "feature.txt", "feature\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"deploy {A_PLANTED_TOKEN}"],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    report = run_gate(tmp_path, rev_range="main..work")
+
+    assert report.pre_existing == [], [f.rule_id for f in report.pre_existing]
+    assert report.exit_code == EXIT_FAIL
+    assert "github-pat" in {f.rule_id for f in report.findings}
+
+
+@requires_gitleaks
+def test_a_non_repository_is_told_what_to_do(tmp_path):
+    """The gate cannot scan a directory that is not a repository and must not
+    pretend otherwise — but `'git ls-files' failed: fatal: not a git
+    repository` is git talking to git. In the `rite prepare` layout that is
+    what `rite publish check` says at the project root, where the
+    repositories are one level down."""
+    (tmp_path / ".rite").mkdir()
+    (tmp_path / ".rite" / "brief.yaml").write_text("project:\n  name: p\n")
+
+    report = run_gate(tmp_path)
+
+    assert report.exit_code == EXIT_ERROR
+    assert any("modules beneath it" in e for e in report.errors)

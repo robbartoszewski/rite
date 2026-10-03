@@ -117,21 +117,27 @@ def redact(secret: str, keep: int = 4) -> str:
     return f"{secret[:keep]}{'*' * (len(secret) - keep * 2)}{secret[-keep:]}"
 
 
-"""Every ref a push could publish — NOT `--all`.
+COMMIT_MESSAGE_FILE = "<commit message>"
+"""The `file` both commit-message scanners report, since a commit message is
+not a file. Named, because `_split_off_pre_existing` has to recognise it:
+matching it against a touched-FILE set can only ever fail."""
 
-`--all` adds `refs/stash` and `refs/notes`, which are local by definition
-and never leave the machine. Measured: a `git stash push -m "wip <token>"`
-made `rite publish check` fail on a repository with nothing wrong with it,
-over text in no commit, in no branch, and on its way nowhere. It cannot even
-be suppressed — the fingerprint embeds the stash commit's sha, and that sha
-changes every time the stash is rebuilt.
-
-That is the shape this gate exists to avoid in the other direction: a block
-nobody can clear is a gate people turn off. Worse here than it sounds,
-because a stash stack is repository-global and shared by every worktree, so
-one stash blocks every one of them.
-"""
 PUBLISHABLE_REFS = ("--branches", "--tags", "--remotes")
+"""Every ref a push could carry — NOT `--all`.
+
+`--all` adds `refs/stash`, which is local by definition: a stash cannot be
+pushed. Measured — a `git stash push -m "wip <token>"` failed the gate over
+text in no commit and no branch, and the block could not be cleared, because
+a suppression fingerprint embeds the stash commit's sha and that sha changes
+every time the stash is rebuilt. A block nobody can clear is a gate people
+turn off, and one stash stack is shared by every worktree of a repository.
+
+`refs/notes` go too, and the honest reason is narrower: notes are not
+carried by a branch push and are not pushed without asking. They CAN be
+pushed deliberately (`git push origin refs/notes/*`), so this is a scope
+limit rather than an impossibility — a secret written into a git note and
+then explicitly pushed is out of scope for this gate.
+"""
 
 
 def publishable_scope(root: Path) -> list[str]:

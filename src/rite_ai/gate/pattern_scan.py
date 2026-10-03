@@ -23,6 +23,7 @@ from pathlib import Path
 
 from rite_ai.config.models import ScanPattern
 from rite_ai.gate.findings import (
+    COMMIT_MESSAGE_FILE,
     Finding,
     content_digest,
     iter_commit_messages,
@@ -323,7 +324,7 @@ def scan_commit_messages(
                         Finding(
                             rule_id=_rule_id(pattern),
                             description=pattern.description or pattern.pattern,
-                            file="<commit message>",
+                            file=COMMIT_MESSAGE_FILE,
                             line=lineno,
                             commit=sha,
                             match_preview=redact(m.group(0)),
