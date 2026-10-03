@@ -98,6 +98,16 @@ class Message:
     kind: str = ""
     """What produced it, for the outbox (RP1): one of `KINDS`, or "" when
     nothing recorded one. Read with `_needs_action`, never compared to ""."""
+    by_rite: bool = False
+    """True when rite itself wrote these words, not the Manager.
+
+    ⚠ **`kind` records the COMMAND, which is not the same as the SPEAKER.**
+    `rite reply` writes `REPLY`, and so does rite's own narration about
+    refinement (`refinement.protocol._tell_user`) — same kind, different
+    author. Nothing needed to tell them apart until the Slack relay began
+    routing a Manager's reply under the Owner's message it answers
+    (SCRUM-56): rite's narration is not the Manager answering anybody, and
+    threading it under the Owner's question says it is."""
 
 
 QUESTION = "question"
@@ -310,6 +320,7 @@ def send(
     *,
     sent_at: float | None = None,
     kind: str = "",
+    by_rite: bool = False,
 ) -> Path:
     """Put one message in a box. Returns the path written.
 
@@ -348,14 +359,16 @@ def send(
     # a position the reader has already passed. Widths cover every pid Linux
     # and macOS issue (≤ 7 digits) and a counter no process reaches.
     path = where / f"{int(ts * 1000)}_{os.getpid():07d}_{next(_SEQUENCE):012d}.json"
-    write_atomic(path, _encoded(text, ts, kind))
+    write_atomic(path, _encoded(text, ts, kind, by_rite))
     return path
 
 
-def _encoded(text: str, timestamp: float, kind: str) -> str:
+def _encoded(text: str, timestamp: float, kind: str, by_rite: bool = False) -> str:
     data: dict = {"text": text, "timestamp": timestamp}
     if kind:
         data["kind"] = kind
+    if by_rite:
+        data["by_rite"] = True
     return json.dumps(data) + "\n"
 
 
@@ -531,6 +544,7 @@ def read(root: Path, manager: str, box: str) -> list[Message]:
                 _as_time(data.get("timestamp")),
                 path,
                 kind if kind in KINDS else "",
+                by_rite=data.get("by_rite") is True,
             )
         )
     return out

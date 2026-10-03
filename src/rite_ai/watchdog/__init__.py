@@ -51,6 +51,8 @@ from pathlib import Path
 from rite_ai.claims.ledger import ClaimsLedger
 from rite_ai.config.parse import load_project
 from rite_ai.duration import format_duration
+from rite_ai.handback import Handback
+from rite_ai.handback import read_all as read_handbacks
 from rite_ai.reporting.heartbeat import StallReport, detect_stalls
 from rite_ai.reporting.outbox import OutboxMessage, list_pending
 from rite_ai.state import CorruptStateError
@@ -103,6 +105,27 @@ class WatchdogResult:
     `_unwatched_workers`. Reported separately from `stalled` because the
     condition is different in kind: a stall is a worker that went quiet,
     this is a worker nothing would notice going quiet."""
+    handed_back: list[Handback] = field(default_factory=list)
+    """Workers that finished and said so (`rite done`). NOT a fault, and
+    never also in `stalled` — see `run_watchdog_check`."""
+    handed_back_reasons: list[str] = field(default_factory=list)
+    """The entries of `reasons` about a handback that needs nothing yet.
+
+    ⚠ **NOT every handback reason.** A handback past `NOT_INTEGRATED_AFTER`
+    is left out of this list on purpose, so the scheduler does NOT filter it
+    out of the tick: finished work nobody has taken up for half a day is a
+    standing condition somebody must act on, and it is treated exactly as a
+    stall is — said every cycle until it stops being true. The terminating
+    check caught the first version putting it in here, where the one reader
+    that would have carried it unattended subtracted it again, so the
+    escalation existed only for a hand-run `rite watchdog`.
+
+    Carried rather than recomputed or matched by substring. The scheduler
+    has to tell them apart from the rest to keep a standing condition out of
+    its per-tick log, and deciding that by `"handed back" in reason` is the
+    matcher-fires-on-prose mistake this codebase has already paid for; two
+    calls to a shared formatter would compare unequal the moment one of them
+    crossed the `NOT_INTEGRATED_AFTER` boundary."""
 
 
 def run_watchdog_check(root: Path) -> WatchdogResult:
@@ -126,7 +149,35 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         * 60
         * project.config.heartbeat.stall_threshold
     )
-    stalled = detect_stalls(root, workers, threshold_seconds=threshold_seconds)
+    # ⚠ **A WORKER THAT HANDED BACK IS NOT STALLED, and this is where the two
+    # stop being the same observation.** Measured in the dogfood of
+    # 2026-10-03: a Worker finished its ticket, stopped beating because it had
+    # nothing left to do, and was reported "stalled — 42m since last
+    # heartbeat". The Manager read that and restarted it. Silence after a
+    # handback is the expected state, so the handback is subtracted from the
+    # stall set rather than reported alongside it: a Worker in both lists is
+    # a Worker a reader has to adjudicate, and the dogfood shows which way
+    # that goes.
+    #
+    # Subtracted and not merely annotated, deliberately. `scheduler`'s
+    # `_stall_records` turns `stalled` into standing outbox blockers and
+    # `reporting.status` prints it as STALLED; both read the list, not the
+    # prose beside it.
+    # ⚠ An UNREADABLE handback counts here too, and that is a judgement, not
+    # an oversight. The two rules this codebase already holds pull opposite
+    # ways — "cannot tell is never stalled" (D-58, §3.4) against
+    # `not_started`'s "a missed stall is worse than a false one" — and the
+    # file existing at all is evidence the Worker reached the step where it
+    # says it is done. So it suppresses the stall and is reported as its own
+    # reason, loudly, saying that rite could not read it: a person looks,
+    # and nothing restarts a Worker on the assumption it is hung.
+    handed_back = sorted(read_handbacks(root, workers).values(), key=lambda h: h.worker)
+    done = {h.worker for h in handed_back}
+    stalled = [
+        s
+        for s in detect_stalls(root, workers, threshold_seconds=threshold_seconds)
+        if s.worker not in done
+    ]
     unwatched = _unwatched_workers(root, workers)
 
     blockers = [msg for msg in list_pending(root) if msg.kind in ATTENTION_KINDS]
@@ -155,6 +206,48 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
             when = f"{format_duration(s.seconds_silent)} since last heartbeat"
         verb = "stalled" if s.known else "cannot be checked"
         reasons.append(f"worker '{s.worker}' {verb} — {when}{ticket_note}")
+    handback_reasons: list[str] = []
+    for h in handed_back:
+        # ⚠ The words "do NOT restart" are in the line on purpose. This text
+        # is what a Manager reads on its own polling cadence, and in the
+        # dogfood the Manager restarted a finished Worker because the only
+        # line about it said "stalled". Saying what the state is was not
+        # enough; the line says what not to do with it.
+        #
+        # ⚠ **And the unreadable case gets its OWN sentence, because the
+        # confident one is not true of it.** Review caught the first version
+        # appending "it is FREE and NOT hung … Integrate the work" to a
+        # record rite had just said it could not read — three claims nobody
+        # established, on the strength of a corrupt file. The stall is still
+        # suppressed (the file existing is evidence the Worker reached the
+        # step where it says it is done), and that is all that is claimed.
+        if not h.done:
+            # Not added to `handback_reasons` either: a record nobody can
+            # parse is a fault, and the scheduler must carry it to whoever
+            # reads the log unattended rather than filtering it as routine.
+            reasons.append(
+                f"worker '{h.worker}' {h.describe()} — so rite cannot say "
+                "whether it finished. It is NOT being reported as stalled, "
+                "because the record exists; do not restart it on the "
+                "assumption it is hung, and do not treat this as nothing "
+                "having been said. Read the file, and look at its branch"
+            )
+            continue
+        waited = (
+            f" It has been waiting {format_duration(h.age_seconds())} and "
+            "nobody has taken it up."
+            if h.not_integrated()
+            else ""
+        )
+        line = (
+            f"worker '{h.worker}' {h.describe()} — it is FREE and NOT hung, "
+            "so do NOT restart it and do not force-release its claims. Its "
+            f"silence from here on is expected.{waited} Integrate the work, "
+            "or give that worker the next ticket"
+        )
+        reasons.append(line)
+        if not h.not_integrated():
+            handback_reasons.append(line)
     for b in blockers:
         detail = b.payload.get("detail") or b.payload.get("reason") or ""
         reasons.append(f"{b.kind} in outbox" + (f": {detail}" if detail else ""))
@@ -198,6 +291,8 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         blocked=blocked,
         unreadable=unreadable,
         unwatched=[name for name, _ in unwatched],
+        handed_back=handed_back,
+        handed_back_reasons=handback_reasons,
     )
 
 

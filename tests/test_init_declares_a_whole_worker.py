@@ -133,8 +133,13 @@ class TestTheWorkerIsLinkedToTheManager:
         brief = _brief_of(root)
         assert "Your Manager is **lead**." in brief
         assert "No Manager assigned yet." not in brief
-        # The unconditional lines that made the contradiction visible.
-        assert "Tell your Manager you are free" in brief
+        # The unconditional lines that made the contradiction visible. The
+        # line this used to name — "Tell your Manager you are free" — is
+        # gone: it told the Worker to do something no command could do, and
+        # `rite done` replaced it (SCRUM-57). Two lines are checked now, so
+        # the next rewording of one does not quietly empty this assertion.
+        assert "your Manager holds the" in brief
+        assert "escalate to your Manager" in brief
 
     def test_init_says_which_manager_it_linked(self, tmp_path):
         """A line saying how many modules were cloned looked complete."""

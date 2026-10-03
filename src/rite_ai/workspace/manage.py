@@ -618,6 +618,17 @@ def add_worker(
 
     worker_dir.mkdir(parents=True)
 
+    # ⚠ A handback left by a PREVIOUS Worker of this name is not this one's.
+    # `remove_worker` deliberately leaves `.rite/` bookkeeping behind (see
+    # its docstring on two mechanisms disagreeing about one directory), and
+    # the remedy the "predates `rite done`" warning prints is remove-then-add
+    # — so without this, the new Worker reads as already finished and its
+    # stall stays suppressed until its first successful start. Cleared where
+    # a fresh Worker is established, not where an old one is destroyed.
+    from rite_ai import handback
+
+    handback.clear(root, name)
+
     cloned: list[str] = []
     failed: list[tuple[str, str]] = []
     for m in modules:
@@ -1150,12 +1161,23 @@ def render_worker_claude_md(
     """A Worker's `CLAUDE.md`, as `rite add worker` writes it — separate from
     the writing so `rite update` can regenerate it and compare."""
     from rite_ai.generated_sections import mark_sections
+    from rite_ai.managers import stdin_text
 
     manager_line = (
         f"Your Manager is **{manifest.manager}**."
         if manifest.manager
         else "No Manager assigned yet."
     )
+    # F14's form for a GENERATED file: the text goes in a file, named as an
+    # argument. A Worker's handback quotes its ticket and its own commit
+    # messages, so it must not be in double quotes on the command line — and
+    # a heredoc cannot go here, because this file is regenerated and
+    # compared. `stdin_text.FROM_A_FILE` carries that reasoning.
+    done_command = (
+        f"rite done --worker {manifest.name} --ticket <id> --branch <branch> \\\n"
+        f"  --summary-file <path to a file holding what you did>"
+    )
+    done_rule = stdin_text.FROM_A_FILE
     modules_lines = "\n".join(f"- `{m}/`" for m in manifest.modules)
 
     # The other half of `claude_instructions` having a writer: a key stored
@@ -1287,15 +1309,31 @@ exactly that and stop: never invent the missing piece.
 
 ## When this ticket is done
 
-Tell your Manager you are free, in the same message that reports the work.
-Do not start another ticket on your own: your Manager holds the board and the
-capacity, and two Workers picking their own next ticket is how the same path
-gets claimed twice.
+Hand it back by RUNNING this as a tool call — writing it in your answer does
+nothing, and it is the only thing that tells your Manager you have finished:
 
-If nothing comes back, stop — and say you are stopping because you were not
-given more, rather than going quiet. A Worker that finishes and falls silent
-is indistinguishable from one that died mid-ticket, and only one of those
-needs somebody woken up.
+```
+{done_command}
+```
+
+{done_rule}
+
+⚠ **Do not try to message your Manager instead.** A Manager's inbox is
+outside this project and your sandbox cannot write it, so `rite message`
+and `rite reply` are both refused from here — anything in that inbox is
+delivered as the User's own instruction, which is not yours to send.
+Writing a file of your own somewhere and hoping it is read is not a
+handback either: nothing reads it. `rite done` is the channel.
+
+This is also what stops you being reported STALLED. Until you run it, your
+silence is indistinguishable from having died mid-ticket, and the watchdog
+will have somebody woken up and your work restarted. After it, your silence
+is expected and `rite status` says you are free.
+
+Then stop. Do not start another ticket on your own: your Manager holds the
+board and the capacity, and two Workers picking their own next ticket is how
+the same path gets claimed twice. If nothing comes back, say you are stopping
+because you were not given more, rather than going quiet.
 
 ## What you must not do
 

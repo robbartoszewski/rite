@@ -1768,6 +1768,43 @@ def _doctor_board_can_create(root: Path, problems: list[str]) -> None:
     problems.append(said)
 
 
+def _clear_previous_handback(root: Path, worker: str, since: float) -> None:
+    """Drop `worker`'s last handback now that it HAS started new work.
+
+    A handback is permanent until this runs — that is what stops a finished
+    Worker's silence reading as a stall. The cost is that a stale one would
+    hide the NEXT stall, so a start is where it goes.
+
+    ⚠ **CALLED ONLY AFTER THE START SUCCEEDED, and `since` is why that is
+    safe.** Review measured the other order: a `rite prepare` blocked on a
+    dirty tree, and a `rite sandbox start` refusing a non-REFINED ticket,
+    had already dropped the record — so a Worker that really had finished
+    was reported STALLED again by a command that started nothing, which is
+    the defect `rite done` exists to close. `since` is the moment the start
+    began, so a handback the newly started Worker has itself written is
+    newer and is kept.
+
+    Said, never silent: if nothing had passed it to the Manager yet, this is
+    the moment a completion stops being recorded anywhere.
+    """
+    from rite_ai import handback
+
+    try:
+        had = handback.clear(root, worker, older_than=since)
+    except Exception as e:  # noqa: BLE001 - never fail a started Worker on this
+        click.echo(
+            f"warning: could not clear '{worker}'s previous handback: {e}", err=True
+        )
+        return
+    if had is None:
+        return
+    on = f" on {had.ticket}" if had.ticket else ""
+    click.echo(
+        f"cleared '{worker}'s previous handback{on}: it has started new work, "
+        "so its silence counts as a stall again from now on."
+    )
+
+
 def _warn_if_unregistered(worker: str) -> None:
     """Say so, at the moment it happens, when state is being recorded for
     a worker nothing will watch.
@@ -6043,8 +6080,16 @@ def prepare(worker: str, branch: str | None) -> None:
     root = _find_project_root()
     worker_dir, modules = _worker_modules_or_exit(root, worker)
 
+    began = time.time()
     result = prepare_workspace(worker_dir, modules, root, branch=branch)
     click.echo(result.summary())
+    if result.ok:
+        # "No residue from the previous task" includes the previous task's
+        # handback: this Worker is working again, so its silence is a
+        # question again. ⚠ Only on `ok` — a prepare that blocked on a dirty
+        # tree started nothing, and dropping the record there reported a
+        # finished Worker as stalled again (measured in review).
+        _clear_previous_handback(root, worker, began)
     if modules:
         # Resolved NOW, from modules.yaml and detection. A Worker's CLAUDE.md
         # lists them as of `rite add worker`; modules.yaml may have been
@@ -6082,6 +6127,10 @@ def heartbeat(worker: str, ticket: str, message: str) -> None:
     reports "no heartbeat ever recorded". One with neither a heartbeat nor a
     claim reads as not started, which is not a stall.
 
+    A Worker that has handed its work back with `rite done` is not reported
+    as stalled however long it stays quiet: once it has finished, silence is
+    expected. Stop beating when you hand back, not before.
+
     Examples:
       rite heartbeat --worker alpha
       rite heartbeat --worker alpha --ticket ABC-12 --message "running tests"
@@ -6098,6 +6147,125 @@ def heartbeat(worker: str, ticket: str, message: str) -> None:
     _warn_if_unregistered(worker)
 
 
+# --- Handing work back ---
+
+
+@cli.command("done")
+@click.argument("summary", default="")
+@click.option("--worker", "-w", required=True, help="Worker name")
+@click.option("--ticket", "-t", default="", help="Ticket that is finished")
+@click.option(
+    "--branch",
+    "-b",
+    default="",
+    help="Branch the work is on, for whoever integrates it",
+)
+@click.option(
+    "--summary-file",
+    "summary_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="A file holding what you did. Use this rather than quoting the text "
+    "on the command line, for the reason a commit message goes in a file.",
+)
+def done(
+    summary: str,
+    worker: str,
+    ticket: str,
+    branch: str,
+    summary_file: Path | None,
+) -> None:
+    """Hand a Worker's finished work back to its Manager.
+
+    Run this when a ticket is done. It is the only way a Worker can tell
+    its Manager it has FINISHED: a Manager's inbox is outside the project
+    and a Worker's sandbox cannot write it, so `rite message` is refused
+    from in there. This records the completion where the supervisor reads it
+    on the host, and the supervisor passes it on.
+
+    It is not the only channel out. `rite handover write --blocker` records
+    something you are stuck on, which the watchdog reports as BLOCKED.
+
+    It also stops the Worker reading as stalled. Once this is recorded, the
+    Worker's silence is expected rather than a question: `rite status` and
+    `rite watchdog` report it as handed back and ready to integrate, so
+    nothing restarts a Worker that has already finished.
+
+    Leave the claim held — it is released when the work lands — and do not
+    start another ticket. The Manager holds the board and the capacity.
+
+    What you did goes in a file named by --summary-file, or on stdin with
+    SUMMARY as `-`. Never in double quotes on the command line: the shell
+    runs anything in backticks there before rite sees it, and your text
+    quotes a ticket somebody else wrote. The branch and the summary are
+    recorded as your own report of the work, not as anything rite checked.
+
+    \b
+    Examples:
+      rite done --worker alpha --ticket ABC-12 --branch ABC-12
+      rite done --worker alpha --ticket ABC-12 --summary-file done.md
+    """
+    from rite_ai import handback
+    from rite_ai.managers import stdin_text
+    from rite_ai.names import UnsafeName
+
+    root = _require_project_root()
+    text = ""
+    if summary and summary_file is not None:
+        # Refused rather than one silently winning: the two are the same
+        # argument given twice, and a handback that records half of what the
+        # Worker meant to say is worse than one it is told to send again.
+        click.echo(
+            "refusing: give the summary in --summary-file or on stdin, not both.",
+            err=True,
+        )
+        raise SystemExit(1)
+    if summary_file is not None:
+        try:
+            text = summary_file.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            click.echo(f"refusing: {summary_file} could not be read: {e}", err=True)
+            raise SystemExit(1) from None
+    elif summary:
+        try:
+            text = stdin_text.read(summary)
+        except stdin_text.OnTheCommandLine:
+            click.echo(
+                stdin_text.refusal(
+                    f"rite done --worker {worker}"
+                    + (f" --ticket {ticket}" if ticket else ""),
+                    "<what you did>",
+                )
+                + "\n\nOr put it in a file: --summary-file <path>.",
+                err=True,
+            )
+            raise SystemExit(1) from None
+    try:
+        path = handback.write(
+            root, worker, ticket=ticket, branch=branch, summary=text.strip()
+        )
+    except (UnsafeName, handback.BadHandback) as e:
+        click.echo(f"refusing to record a handback: {e}", err=True)
+        raise SystemExit(1) from None
+    except OSError as e:
+        # ⚠ Said as a FAILURE, loudly. A Worker that believes it handed back
+        # and did not is the exact state this command exists to remove: it
+        # will fall silent, and nothing will know the silence is expected.
+        click.echo(
+            f"could not record the handback for '{worker}': {e}. You are NOT "
+            "handed back — say so, and do not go quiet: a Worker that stops "
+            "without this record reads as one that died.",
+            err=True,
+        )
+        raise SystemExit(1) from None
+    on = f" on {ticket}" if ticket else ""
+    click.echo(
+        f"'{worker}' handed back{on} — recorded in {path}. Its Manager is told "
+        "at its next turn; the Worker is no longer read as stalled."
+    )
+    _warn_if_unregistered(worker)
+
+
 # --- Watchdog ---
 
 
@@ -6110,12 +6278,14 @@ def watchdog() -> None:
     \b
     EXIT CODES — three, because two conditions need different responses:
       0  nothing needs attention
-      2  every finding is an ANSWERABLE QUESTION — one or more workers are
-         alive, beating, and blocked on a decision. Go and reply.
+      2  nothing is WRONG, and there is work waiting for you: a worker that
+         is alive, beating and blocked on a decision (go and reply), or one
+         that has finished and handed back (go and integrate it). Neither is
+         a fault, and a worker that handed back must not be restarted.
       1  something may be WRONG — a stalled (probably dead) worker, an
          unregistered worker nothing is watching, a config error, or an
          outbox blocker. Go and investigate. If a project has both, this
-         wins: 1 is the one you cannot resolve by typing an answer.
+         wins: 2 is work to do, 1 is something to fix.
 
     Anything non-zero still means "attention", so a caller that only tests
     `|| notify` keeps working unchanged.
@@ -6124,7 +6294,7 @@ def watchdog() -> None:
       rite watchdog
       */5 * * * * cd /path/to/project && rite watchdog || notify-manager
       rite watchdog; case $? in
-        2) echo "answer a question";;
+        2) echo "answer a question, or integrate finished work";;
         1) echo "investigate";;
       esac
     """
@@ -6142,14 +6312,26 @@ def watchdog() -> None:
         # and a continuation line scrolling into view unattributed is the
         # exact problem this labelling exists to fix.
         click.echo(decorate(root, reason))
-    # A blocked worker is answerable; everything else is an investigation.
-    # `len(reasons) == len(blocked)` is the test for "answerable only" —
-    # counting rather than re-deriving, so a condition added to
-    # `run_watchdog_check` later cannot silently fall into the wrong
-    # bucket: a new reason nobody mapped makes this 1, which is the safe
-    # side.
-    only_questions = bool(result.blocked) and len(result.reasons) == len(result.blocked)
-    raise SystemExit(2 if only_questions else 1)
+    # A blocked worker and a handed-back one are both work waiting for
+    # somebody; everything else is an investigation. Counting rather than
+    # re-deriving, so a condition added to `run_watchdog_check` later cannot
+    # silently fall into the wrong bucket: a new reason nobody mapped makes
+    # this 1, which is the safe side.
+    #
+    # ⚠ A handback is in the 2 bucket, not the 1 bucket, and that matters
+    # more than the number. 1 is documented as "something may be WRONG — go
+    # and investigate", and in the dogfood of 2026-10-03 a finished Worker
+    # reported that way was restarted. Finished work is not a fault.
+    #
+    # ⚠ **Except a handback rite could not READ, which is a fault and is
+    # counted as one.** Review caught the first version exiting 2 — "nothing
+    # is WRONG" — on a corrupt record, while every other unreadable-state
+    # path in this module is a 1. A file nobody can parse is the one thing
+    # this codebase is most careful never to report as fine.
+    readable = [h for h in result.handed_back if h.done]
+    waiting = len(result.blocked) + len(readable)
+    nothing_wrong = bool(waiting) and len(result.reasons) == waiting
+    raise SystemExit(2 if nothing_wrong else 1)
 
 
 # --- Continuous handover snapshot (SPEC §9.10.1) ---
@@ -7849,15 +8031,29 @@ def sandbox_start(
     # before they said to push would work in a copy that is discarded with
     # the sandbox and never be told its work has to leave it.
     claude_md = worker_dir / "CLAUDE.md"
-    if claude_md.is_file() and "## Your ticket" not in claude_md.read_text(
-        errors="replace"
-    ):
+    written = claude_md.read_text(errors="replace") if claude_md.is_file() else ""
+    if written and "## Your ticket" not in written:
         click.echo(
             f"warning: workers/{worker}/CLAUDE.md was written before sandboxed "
             "Workers were supported: it does not tell the Worker to push, send "
             "heartbeats or read its ticket, so its work may never leave the "
             f"sandbox. Recreate the Worker for current instructions: "
             f"`rite remove worker {worker}`, then `rite add worker {worker}`.",
+            err=True,
+        )
+    elif written and "rite done" not in written:
+        # ⚠ The condition this very change introduced, reported where it is
+        # CAUSED. A Worker created before `rite done` existed has
+        # `## Your ticket`, so the warning above does not fire — and its
+        # instructions still tell it to "tell your Manager", which it cannot
+        # do. It finishes, falls silent, and is reported STALLED: exactly
+        # the dogfood failure, for every Worker that predates the fix.
+        click.echo(
+            f"warning: workers/{worker}/CLAUDE.md predates `rite done`, so this "
+            "Worker has not been told how to hand its work back. It will "
+            "finish, fall silent and be reported as stalled. Recreate it for "
+            f"current instructions: `rite remove worker {worker}`, then "
+            f"`rite add worker {worker}`.",
             err=True,
         )
     if allow_dirty:
@@ -7962,6 +8158,7 @@ def sandbox_start(
         raise SystemExit(1)
     from rite_ai.sandbox.delivery import DELIVERY_FILE, clear_delivery
 
+    began = time.time()
     if ticket is None:
         clear_delivery(worker_dir)
         prompt = None
@@ -7992,11 +8189,15 @@ def sandbox_start(
     )
     click.echo(result.message)
     if not result.ok:
+        # ⚠ The handback is NOT cleared on a refused start. Nothing
+        # started, so the previous task's completion still stands —
+        # dropping it there reported a finished Worker as stalled again.
         # A full slot is not a failure of the request: the same start can
         # succeed when one frees, and the broker queues it on this status.
         from rite_ai.sandbox import EXIT_NO_SLOT
 
         raise SystemExit(EXIT_NO_SLOT if result.full else 1)
+    _clear_previous_handback(root, worker, began)
     if ticket is not None:
         _mark_started(root, config, ticket)
 
@@ -8407,6 +8608,9 @@ def sandbox_status(worker: str) -> None:
     # yoloAI's word describes the agent process, and an agent that asked and
     # is waiting is idle only in that sense. The question is said first.
     asked = seen.question
+    from rite_ai.handback import read as read_handback
+
+    handed = read_handback(root, worker)
     if isinstance(asked, WorkerQuestion):
         from rite_ai.managers.worker_questions import how_to_answer
 
@@ -8418,6 +8622,27 @@ def sandbox_status(worker: str) -> None:
             f"{seen.status}): {asked.headline()}\n"
             f"  read it in full: {where}\n"
             f"  to answer: {answer}"
+        )
+    elif handed is not None and not handed.done:
+        # ⚠ The unreadable case says only what was established, exactly as
+        # `rite watchdog` does. The terminating check found this branch
+        # reproducing, in the same commit that fixed it, the defect of
+        # appending "free", "not hung" and "Integrate the work" to a record
+        # rite had just said it could not read.
+        click.echo(
+            f"{handed.describe()} (sandbox {seen.status}) — so whether it "
+            "finished cannot be told. Do NOT restart it on the assumption "
+            "it is hung; read the file and look at its branch."
+        )
+    elif handed is not None:
+        # ⚠ NOT "idle" for a Worker that has handed back either, for the
+        # same reason as the question above: yoloAI's word is about the
+        # agent process, and an agent that finished and exited is idle only
+        # in that sense.
+        click.echo(
+            f"{handed.describe()} (sandbox {seen.status}) — free, and not "
+            "hung: do NOT restart it. Integrate the work, or give it the "
+            "next ticket."
         )
     else:
         # The sentence `rite status` and `rite loop run` print too (S1).
@@ -8899,25 +9124,51 @@ that took them first."""
 
 
 def _worker_question_watch(root: Path, manager: str):
-    """The Owner's watcher for Workers waiting on a question (dogfood Q1–Q4,
-    part B), or None for a Manager that should not tell the person.
+    """The Owner's watcher for its Workers — a question waiting on a person
+    (dogfood Q1–Q4, part B) and a Worker that has handed back (2026-10-03) —
+    or None for a Manager that should not tell.
 
     The Manager that tells is the one holding 'route', which is the one that
     reads and posts Slack; with no roles declared, the lone Manager. A
     secondary does not: two Managers telling the person the same question is
-    the noise that trains people to ignore both."""
+    the noise that trains people to ignore both.
+
+    ⚠ **The two halves are gated differently, and each difference was
+    found the hard way.**
+
+    A question travels in yoloAI's exchange directory, so there is nothing
+    to look at without a sandbox, and it goes to the PERSON — so exactly one
+    Manager may raise it. A handback is a file in `.rite/` written by `rite
+    done`, which any Worker runs: an unsandboxed Worker finishes and falls
+    silent exactly as a sandboxed one does, and nothing told its Manager
+    either. So the handback watch runs whether or not sandboxing is on,
+    and this no longer returns None for an unsandboxed project —
+    `relay` and `surface` each check `sandbox.enabled` themselves,
+    which is where that check belongs.
+
+    And a handback goes to the Worker's OWN Manager, which is not
+    necessarily the routing owner — so a secondary Manager gets a watcher
+    too, where before it got None. Review measured both halves of getting
+    this wrong: `helper`'s Worker finishing told `lead`, which cannot
+    integrate it, and a project whose `manager_roles` name no single `route`
+    holder told nobody at all while the watchdog went on suppressing the
+    stall.
+    """
     from rite_ai.config.managers import routing_owner
     from rite_ai.config.models import ProjectConfig
     from rite_ai.config.parse import ParseError, parse_config
+    from rite_ai.managers.worker_handbacks import surface as handed_back
     from rite_ai.managers.worker_questions import relay, surface
 
     parsed = parse_config(root / ".rite" / "config.yaml")
     config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
-    if not config.sandbox.enabled:
-        return None
     roles = list(config.coordination.manager_roles)
-    if roles and routing_owner(roles) != manager:
-        return None
+    owner = routing_owner(roles) if roles else manager
+    tells_the_person = not roles or owner == manager
+    # Who tells about a Worker that names no Manager: the routing owner, or
+    # — when nothing identifies one — every Manager. Told twice is
+    # recoverable, told to nobody is the defect this closes.
+    unassigned = tells_the_person or not owner
     last = {"at": None}
 
     def watch(say) -> None:
@@ -8926,12 +9177,25 @@ def _worker_question_watch(root: Path, manager: str):
         # re-raise a question in the same tick that answered it. The other
         # order tells the person about a question rite is about to resolve.
         # 🔴 And the relay runs at EVERY call, not every 30 s (SCRUM-52).
+        #
+        # Ungated, including for a secondary Manager — which now gets a
+        # watcher at all, for the handback half. A secondary never raises a
+        # question (`tells_the_person` below), so its question ledger is
+        # empty and `relay` returns on its own cheap first check rather than
+        # touching yoloAI. One place decides who may answer, and it is not
+        # a second copy of the condition here.
         relay(root, manager, say)
         now = time.monotonic()
         if last["at"] is not None and now - last["at"] < WORKER_QUESTION_EVERY:
             return
         last["at"] = now
-        surface(root, manager, say)
+        if tells_the_person:
+            surface(root, manager, say)
+        # A handback is read from `.rite/`, not from yoloAI, so it costs no
+        # subprocess — but it shares this watcher's cadence because a Manager
+        # learning it one tick later changes nothing, and two watchers on two
+        # timers is two things to reason about.
+        handed_back(root, manager, say, every_worker=unassigned)
 
     def taken(say, messages) -> None:
         """🔴 SCRUM-52: what the cycle boundary has just TAKEN from the inbox.
@@ -10429,7 +10693,23 @@ def reply(text: str, manager: str) -> None:
         )
         raise SystemExit(1)
 
-    send(root, speaking, OUTBOX, text, kind=REPLY)
+    try:
+        send(root, speaking, OUTBOX, text, kind=REPLY)
+    except OSError as e:
+        # ⚠ Said, not raised. `rite message` has caught this since v0.6.0
+        # and this did not, so the one channel a Manager has to the person
+        # answered a refusal with a traceback out of `mailbox.send` — and an
+        # agent handed a traceback routes around it rather than reporting
+        # it. Measured while fixing the handback: with the mail directory
+        # unwritable, `rite message` printed a sentence and `rite reply`
+        # printed a stack.
+        click.echo(
+            f"could not queue this reply from {speaking!r}: {e}. Nothing was "
+            "sent, so the person has NOT heard this — say so rather than "
+            "going on as if it had been delivered.",
+            err=True,
+        )
+        raise SystemExit(1) from None
     from rite_ai.config.managers import routing_owner, shares_one_root
     from rite_ai.config.parse import ParseError, parse_config
 
@@ -11564,6 +11844,7 @@ Coordination surfaces:
   rite schedule set 09:00-18:00 3   Set how many workers run, and when
   rite handover write/show          The continuous "state right now" snapshot
   rite heartbeat --worker alpha     "Still alive" beat — what watchdog reads
+  rite done --worker alpha          Hand finished work back to its Manager
   rite watchdog                     Cheap liveness check (no LLM call)
   rite credential set/rotate        Store or rotate a credential
 

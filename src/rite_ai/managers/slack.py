@@ -98,6 +98,23 @@ THREAD_HOURS = 24.0
 roots a day (V060_CHECKINS), so without a horizon the set grows without
 limit."""
 
+ANSWER_WINDOW_SECONDS = 30 * 60.0
+"""How long after being given the Owner's instruction a Manager's reply is
+posted under it rather than into the day's notes (SCRUM-56).
+
+**Bounded, and generous inside the bound, because the two mistakes do not
+cost the same.** A reply misfiled as notes is an answer the Owner asked for
+and never sees — the defect. A status line misfiled under their question is
+noise in a thread they already opened, and the DM's top-level scan list is
+untouched either way. So the window is wide enough to cover several of a
+Manager's cycles rather than tuned to one.
+
+⚠ **It is not cleared by the first reply**, deliberately: a Manager that
+answers in two `rite reply` calls would otherwise have its second half filed
+as notes, which is half an answer — the same failure in a smaller place. A
+newer Owner instruction supersedes it, so the window never outlives the
+question it belongs to."""
+
 HOLD_MAX_SECONDS = 24 * 3600.0
 """The longest a message for READING is held for the next check-in (RP1 piece
 3). Past it, it goes under the day's notes root instead: a project whose
@@ -306,12 +323,23 @@ NEEDS_YOU = "needs-you"
 STATUS = "status"
 SYSTEM = "system"
 DELIVERY = "delivery"
+ANSWER = "answer"
+"""A Manager's reply to something the Owner asked (SCRUM-56).
+
+⚠ **Its own tag, because "Status" was the wrong word for it.** The point of
+routing an answer into the Owner's DM is that it is not ambient status; a
+post that lands in the right thread and then labels itself `ℹ️ Status`
+unsays that. Muted rather than LOUD all the same: an answer is the end of an
+exchange the Owner started, so it needs reading, not acting on — and putting
+it in the loud set would also put it in the pile `pending` tracks as
+awaiting them, which is the opposite of what it is."""
 TAGS = {
     NEEDS_ANSWER: "❓ *Needs your answer*",
     NEEDS_YOU: "❗ *Needs you*",
     STATUS: "ℹ️ *Status*",
     SYSTEM: "⚙️ *rite*",
     DELIVERY: "⚠️ *Delivery*",
+    ANSWER: "↩️ *Answer*",
 }
 LOUD = frozenset({NEEDS_ANSWER, NEEDS_YOU})
 """The kinds shown as sections. Exactly the ones `pending` tracks as needing
@@ -798,6 +826,18 @@ class Listener:
     _unsaid: list[str] = field(default_factory=list)
     _notes: dict = field(default_factory=dict)
     """Today's notes root (RP1 piece 3): {"day", "channel", "ts"}."""
+    _awaiting: dict = field(default_factory=dict)
+    """The Owner's DM message this Manager has been given and not yet replied
+    to: {"channel", "ts", "at"} (SCRUM-56). `at` is when rite relayed it.
+
+    ⚠ **This is a CORRELATION rite can make mechanically, and it is not the
+    same claim as "this reply answers that question".** rite does not read
+    the reply and does not ask the model what it is answering — the rule this
+    file and `mailbox._needs_action` both hold is that a message is classed
+    by the command that wrote it, never by its text. What rite knows is that
+    the Owner addressed this Manager, and that the Manager then spoke inside
+    the window below. That is the claim, and `ANSWER_WINDOW_SECONDS` says why
+    it is a bounded one."""
     _reactions: str = ""
     """"" until tried; "read" when `reactions.get` works; "missing" once Slack
     said the app lacks `reactions:read`, which is said once and then only a
@@ -840,8 +880,21 @@ class Listener:
 
     def remember(self, channel: str, ts: str, label: str) -> None:
         """Read the thread under a message rite posted. Newest kept; the
-        oldest beyond `THREADS_MAX` are dropped."""
+        oldest beyond `THREADS_MAX` are dropped.
+
+        ⚠ **One `Root` per `(channel, ts)`, the guard `watch` already had.**
+        This appended unconditionally, which was harmless while every caller
+        posted a fresh message — and stopped being harmless when the Owner's
+        own message became a root an ANSWER is remembered under, because a
+        two-part answer remembers the same ts twice. Measured by the
+        terminating check: two roots for one message, the Owner's follow-up
+        relayed into the Manager's inbox TWICE as an INSTRUCTION, and on
+        restart the duplicate's `last` (reset to the message ts) winning the
+        `channel:ts` key in `_save`, rewinding the cursor so every earlier
+        reply in that thread is re-delivered as a fresh instruction."""
         if not channel or not ts:
+            return
+        if any(r.channel == channel and r.ts == ts for r in self.roots):
             return
         self.roots.append(Root(channel, ts, label, last=ts))
         self._bound_roots()
@@ -1413,6 +1466,25 @@ class Listener:
                 head = _header(
                     "Owner's DM", when, *normalised, *thread, "addressed", "INSTRUCTION"
                 )
+                # ⚠ Recorded HERE, in the one branch that decided this is the
+                # Owner addressing this Manager, and from the same facts the
+                # header is built from (SCRUM-56). Not in the branch above:
+                # a DM from somebody who is not the Owner is context, and a
+                # reply is not owed to it. `under` is left out on purpose —
+                # a message rite already read inside one of its own threads
+                # is answered in that thread by the code that watches it.
+                #
+                # ⚠ This is NOT the same thing as the `source` carried on the
+                # relayed text beside it (SCRUM-35, for the reaction). That
+                # travels with one message and is gone once the text is in
+                # the mailbox; this is the relay's own state, persisted, and
+                # it is what the NEXT reply is matched against.
+                self._awaiting = {
+                    "channel": channel,
+                    "ts": str(message.get("ts") or ""),
+                    "at": sent or self.clock(),
+                }
+                self._save()
                 return _relayed(
                     f"{head}\n{_quoted(text)}",
                     sent,
@@ -1509,6 +1581,7 @@ class Listener:
                 "threads": threads,
                 "notes": self._notes,
                 "known": self._known,
+                "awaiting": self._awaiting,
             }
             write_atomic(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
@@ -1525,6 +1598,16 @@ class Listener:
         if isinstance(notes, dict):
             self._notes = {
                 k: str(v) for k, v in notes.items() if k in ("day", "channel", "ts")
+            }
+        # Restored so a supervisor that restarts between the Owner's question
+        # and the Manager's answer still puts the answer under the question.
+        # The window in `_answer_root` is what stops a stale one applying.
+        awaiting = state.get("awaiting")
+        if isinstance(awaiting, dict):
+            self._awaiting = {
+                "channel": str(awaiting.get("channel") or ""),
+                "ts": str(awaiting.get("ts") or ""),
+                "at": awaiting.get("at") or 0.0,
             }
         since = state.get("since")
         if isinstance(since, dict):
@@ -1620,8 +1703,19 @@ class Listener:
             if message.path.name in posted:
                 continue
             reading = not _needs_action(message)
+            # ⚠ AN ANSWER IS NOT AMBIENT STATUS, and this is the distinction
+            # `reading` alone could not make (SCRUM-56). `_needs_action` asks
+            # "does this need the person", and an answer does not — nobody has
+            # to act on it. So every answer the Owner asked for was filed as
+            # reading, which here meant two things, both wrong: HELD until the
+            # next check-in, for up to a day, and then posted into the day's
+            # notes thread, whose own root line says "nothing in this thread
+            # needs you". The Owner asked a question in their DM and the reply
+            # went somewhere they had been told not to read.
+            answering = self._answer_root(message) if reading else None
             if (
                 reading
+                and not answering
                 and holding
                 and self.clock() - message.timestamp < HOLD_MAX_SECONDS
             ):
@@ -1639,6 +1733,26 @@ class Listener:
             # The same for its Claude login and its Cursor key.
             text = self._linked(self._outgoing(message.text), posted, call=call)
             if reading:
+                # Under the Owner's own message when this answers one, else
+                # today's notes. Both are threads, so the DM's top level —
+                # the scan list — is unchanged either way.
+                if answering and self._post_in_thread(
+                    message, text, answering, posted, lines, call, watch_root=True
+                ):
+                    continue
+                # ⚠ **A FAILED ANSWER POST FALLS THROUGH TO NOTES INSTEAD OF
+                # STOPPING.** The answer root is the Owner's own message: a
+                # ts rite never posted and cannot verify, which the Owner can
+                # delete. Review measured the first version breaking the loop
+                # on it — nothing marked read, `_awaiting` still set, so
+                # every tick retried the same dead thread for the rest of the
+                # window and NOTHING else was posted either, questions and
+                # check-ins included. The Owner saw silence, which is the
+                # failure A5 exists to prevent. The reply itself must still
+                # reach them, so it goes to the pile that always can.
+                if answering:
+                    self._awaiting = {}
+                    self._save(posted)
                 root = self._notes_root(target, call=call)
                 if root is None:
                     break
@@ -1846,7 +1960,9 @@ class Listener:
 
         return self.project is not None and windows(self.project).usable
 
-    def _post_in_thread(self, message, text, root, posted, lines, call) -> bool:
+    def _post_in_thread(
+        self, message, text, root, posted, lines, call, *, watch_root=False
+    ) -> bool:
         channel, ts = root
         sent = _post(
             channel,
@@ -1854,7 +1970,11 @@ class Listener:
             f"*{self.manager}*: {text}",
             thread=ts,
             call=call,
-            kind=STATUS,
+            # ⚠ An answer is not tagged as status. `STATUS` renders muted,
+            # under "ℹ️ Status", and the premise of routing an answer to the
+            # DM is that it is not ambient status — saying so in the thread
+            # and then labelling it Status contradicts the move.
+            kind=ANSWER if watch_root else STATUS,
             body=text,
             author=self.manager,
         )
@@ -1868,11 +1988,67 @@ class Listener:
             "posted_at": self.clock(),
             **_carried_question(message.text),
         }
+        if watch_root:
+            # ⚠ **THE THREAD rite JUST ANSWERED IN HAS TO BE READ BACK.**
+            # `_notes_root` watches its own root, so a reply under the notes
+            # thread reaches the Manager. The Owner's own message was never
+            # a `Root`, and `conversations.history` does not return thread
+            # replies — so before this, routing the answer there created the
+            # obvious place for the Owner to say "then deploy it" and made
+            # it the one place nothing was listening. Review measured it:
+            # `roots` held only the two start lines.
+            # Labelled as the OWNER's message, not as one of rite's: the
+            # label is what a relayed reply's header shows the Manager
+            # ("reply in the thread under …"), and this root is theirs.
+            at = time.strftime("%H:%M", time.localtime(_as_ts(ts)))
+            self.remember(sent.channel, ts, f"the Owner's own message at {at}")
         self._save(posted)
         lines.append(
             f"slack: posted {message.path.name} → {sent.channel} in the thread of {ts}"
         )
         return True
+
+    def _answer_root(self, message):
+        """`(channel, ts)` of the Owner's message this reply answers, or None.
+
+        None means "nothing says this is an answer", which is the day's notes
+        — the right place for a Manager that is reporting rather than
+        replying. See `_awaiting` for what this does and does not claim.
+        """
+        if getattr(message, "by_rite", False):
+            # ⚠ rite's own narration, not the Manager answering. `kind`
+            # records the command and `rite reply`'s kind is what
+            # `refinement.protocol._tell_user` writes too — so without this,
+            # rite's line about a refinement round was threaded under
+            # whatever the Owner last asked, and exempted from the check-in
+            # hold along with it. See `mailbox.Message.by_rite`.
+            return None
+        awaiting = self._awaiting
+        channel = str(awaiting.get("channel") or "")
+        ts = str(awaiting.get("ts") or "")
+        if not (channel and ts):
+            return None
+        if channel != self.dm:
+            # The Owner's DM changed (`slack.owner_user` was edited) since
+            # this was recorded. An answer belongs to the person who asked,
+            # and posting it into the former Owner's DM would disclose it to
+            # somebody who is no longer the Owner.
+            return None
+        try:
+            at = float(awaiting.get("at") or 0.0)
+        except (TypeError, ValueError):
+            return None
+        if not at:
+            return None
+        # Written BEFORE the Owner's message reached the Manager: it cannot
+        # be a reply to it. The ordering matters because the relay files an
+        # inbox message by when it was SENT in Slack (`_Relayed.sent_at`),
+        # which can be well behind the moment rite heard it.
+        if message.timestamp < at:
+            return None
+        if self.clock() - at >= ANSWER_WINDOW_SECONDS:
+            return None
+        return (channel, ts)
 
     def _notes_root(self, target: str, *, call=None):
         """Today's top-level notes post, made on first use; (channel, ts), or

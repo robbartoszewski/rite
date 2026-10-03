@@ -149,6 +149,19 @@ def _write_last_worker_count(state_path: Path, count: int) -> None:
 
 
 STALL_KEY_PREFIX = "stall:"
+# ⚠ **THERE IS NO HANDBACK BLOCKER, and the terminating check is why.**
+# A standing outbox record looked right by analogy with `stall:` — and it
+# wrote kind `"blocker"`, which is in `watchdog.ATTENTION_KINDS`, so the next
+# check read it back as a SECOND reason about the same Worker and `rite
+# watchdog` exited 1 ("something may be WRONG") instead of 2. Measured on the
+# real CLI: exit 2 before the first tick, exit 1 after it, which is the steady
+# state at a 5-minute cadence — and exit 1 is the reading the dogfood Manager
+# acted on by restarting a finished Worker.
+#
+# It was also redundant. `.rite/handback/<worker>.json` IS the durable
+# standing record; the outbox held a copy of it whose only effect was to be
+# double-counted. What the tick needed was not a second record but to stop
+# re-saying the first one, which is what the reason filter below does.
 
 # The shape this module wrote before blockers carried a key. Recognised
 # so an upgrade can retract the pile a running scheduler already made.
@@ -349,6 +362,23 @@ def _run_tick_locked(root: Path) -> TickResult:
         # blocker that has since been removed, which would keep a
         # recovered worker "needing attention" for one more tick.
         echoes = {f"blocker in outbox: {detail}" for detail in (*standing, *retracted)}
+        # ⚠ **A handback is reconciled into the outbox above and then kept
+        # OUT of this tick's lines, which is the opposite of how a stall is
+        # treated, deliberately.** A stall is a fault nobody has fixed, so
+        # saying it again every cycle is the point. A fresh handback is
+        # finished work and needs nothing yet: the Manager is told through
+        # its own inbox (`managers.worker_handbacks`), the durable record is
+        # `.rite/handback/<worker>.json`, and it stands until the Worker is
+        # started again — which can be days. Said per tick, at a 5-minute
+        # cadence, that is ~576 identical lines over a weekend (arithmetic,
+        # not an observation) and a project that never reports a quiet cycle
+        # again, which is how a log teaches its reader to skip it.
+        #
+        # ⚠ `handed_back_reasons` holds only the ones needing nothing. A
+        # handback past `NOT_INTEGRATED_AFTER`, and one whose record cannot
+        # be read, are both absent from it on purpose and are carried here
+        # exactly as a stall is.
+        echoes.update(watchdog_result.handed_back_reasons)
         reasons = [r for r in watchdog_result.reasons if r not in echoes]
         messages.extend(f"watchdog: {reason}" for reason in reasons)
         needs_attention = bool(reasons)

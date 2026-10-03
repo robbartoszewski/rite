@@ -339,7 +339,7 @@ def plan_cycle(
         # from the registered Worker list: a claim can be held by a name
         # nobody registered, and the first version asked "are all registered
         # claim-holding Workers dead?", which is wrong in both directions.
-        dead_holders = {s.worker for s in cycle.suspects}
+        dead_holders = dead_holders_among(cycle.suspects)
         # PER TICKET, not a union across tickets. A ticket clears only when
         # EVERY path in its refusal is free again, so one dead holder dooms
         # it whatever the others do — while a union test let one live holder
@@ -450,6 +450,34 @@ def _contention(claims, clock: float) -> list[str]:
         ticket = f" for {claim.ticket}" if claim.ticket else ""
         lines.append(f"{claim.worker} holds {', '.join(claim.paths)}{ticket} ({age})")
     return lines
+
+
+def dead_holders_among(suspects) -> set[str]:
+    """Which of these suspect claims are held by somebody PROVABLY gone.
+
+    ⚠ **A HANDED-BACK HOLDER IS NOT A DEAD ONE.** It finished and is holding
+    the claim until its work lands, which is what its instructions tell it
+    to do — so the wall clears as soon as somebody integrates, and counting
+    it stopped the loop with DEADLOCKED ("the work is blocked by holders
+    that look dead, and that will not clear on its own") on a condition that
+    clears on its own. Measured in review.
+
+    Nor is a holder whose handback rite could not READ: unknown is "not
+    provably gone", which is the rule the comment in `plan_cycle` already
+    states for a ticket whose holders could not be identified.
+
+    ⚠ **A function rather than a set comprehension inside `plan_cycle`,
+    because the terminating check found the test for it asserting the
+    expression instead of the code** — it rebuilt `{s for s in … if not
+    s.handed_back}` in the test body, so deleting the real one left it
+    green. There is now something to call.
+    """
+    return {
+        s.worker
+        for s in suspects
+        if not getattr(s, "handed_back", False)
+        and not getattr(s, "handback_unreadable", False)
+    }
 
 
 def _blocked(

@@ -76,6 +76,13 @@ class ProjectStatus:
     it". Never released automatically — see `claims/suspect.py`."""
     stalled_workers: list[StallReport] = field(default_factory=list)
     not_started_workers: list[str] = field(default_factory=list)
+    handed_back_workers: dict = field(default_factory=dict)
+    """worker -> `Handback`: those that finished and said so (`rite done`).
+
+    Read here as well as in the watchdog, from the one function both call,
+    because the dogfood failure S1 this file already carries scars from was
+    three views each inferring their own answer about the same Worker. A
+    Worker that has handed back is never also in `stalled_workers`."""
     worker_sandboxes: dict = field(default_factory=dict)
     """worker -> `SandboxActivity`: what yoloAI says of its sandbox, and the
     question pending in it (dogfood Q2), in the sentence `rite sandbox
@@ -254,7 +261,17 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
     )
     names = [w.name for w in project.workers]
     if project.workers:
-        status.stalled_workers = detect_stalls(root, names, threshold_seconds=threshold)
+        from rite_ai.handback import read_all as read_handbacks
+
+        status.handed_back_workers = read_handbacks(root, names)
+        # Subtracted here for the reason `watchdog.run_watchdog_check`
+        # subtracts it: a Worker that handed back went quiet because it
+        # finished, and printing STALLED beside it is what got one restarted.
+        status.stalled_workers = [
+            s
+            for s in detect_stalls(root, names, threshold_seconds=threshold)
+            if s.worker not in status.handed_back_workers
+        ]
         status.not_started_workers = not_started(root, names)
         _sandbox_facts(root, names, status, project.config.sandbox.enabled)
 
@@ -601,6 +618,18 @@ def format_status(status: ProjectStatus) -> str:
             said: list[str] = []
             if w.name in stalled_names:
                 said.append("STALLED")
+            handed = status.handed_back_workers.get(w.name)
+            if handed is not None:
+                # Said before the sandbox sentence and instead of a stall: a
+                # Worker that has finished is free, and "idle"/"done" beside
+                # "STALLED" is the pair of readings S1 exists to stop.
+                #
+                # ⚠ Only the LABEL is shouted. `describe().upper()` also
+                # uppercased the branch, so a row about `KAN-7-timeout`
+                # named a branch nobody can check out — and carrying the
+                # branch so somebody checks it out is the whole reason it is
+                # there.
+                said.append(f"HANDED BACK — {handed.describe()}; do NOT restart")
             if isinstance(asked, WorkerQuestion):
                 # A Worker that read its ticket and asked has started, and is
                 # blocked on a person (Q2); the question says the sandbox.
