@@ -1116,6 +1116,8 @@ ALLOWED_ON_TMUX_ARGV = frozenset(
         MANAGER_ENV,
         "GOOSE_MODE",
         "TMPDIR",
+        # Claude Code's temp root, a PATH (`boundaries.temp_environment`).
+        "CLAUDE_CODE_TMPDIR",
         "GOOSE_PROVIDER",
         "GOOSE_MODEL",
         "GOOSE_CONTEXT_LIMIT",

@@ -25,7 +25,10 @@ The list rite prints of what the sandbox does and does not do had been saying
 so; it now says the opposite, because they are no longer granted.
 
 Engines are unaffected: each Manager's engine already gets a temporary
-directory of its own inside the boundary, and `TMPDIR` points at it. What
+directory of its own inside the boundary, and `TMPDIR` points at it. So does
+`CLAUDE_CODE_TMPDIR`, because Claude Code ignores `TMPDIR` and otherwise
+writes under `/tmp/claude-<uid>`; without it every Claude Manager failed to
+start under this change, which was caught before release. What
 breaks is a tool that writes to `/tmp` by name instead of honouring `TMPDIR`
 — it now fails on macOS as it already did on Linux, with a permission error
 rather than silently reaching outside.

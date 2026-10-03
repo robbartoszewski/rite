@@ -597,7 +597,7 @@ def verify(
     `claimant` is the Manager whose reply this is: its own state is where a
     verifier cannot look (`ClaimantState`)."""
     from rite_ai.managers import claude_login
-    from rite_ai.managers.boundaries import boundary_for
+    from rite_ai.managers.boundaries import boundary_for, temp_environment
 
     run = runner if callable(runner) else subprocess.run
     env = dict(os.environ)
@@ -616,8 +616,9 @@ def verify(
         # secondary can write. The Owner's login directory is granted to the
         # Owner's profile alone, on both platforms, so a scratch directory
         # inside it is the verifier's own.
-        env["TMPDIR"] = str(Path(login["CLAUDE_CONFIG_DIR"]) / "verifier-tmp")
-        Path(env["TMPDIR"]).mkdir(mode=0o700, parents=True, exist_ok=True)
+        scratch = Path(login["CLAUDE_CONFIG_DIR"]) / "verifier-tmp"
+        env.update(temp_environment(scratch))
+        scratch.mkdir(mode=0o700, parents=True, exist_ok=True)
         look = (
             probe
             if callable(probe)

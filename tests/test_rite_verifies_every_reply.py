@@ -181,11 +181,14 @@ class TestTheVerifierIsGivenTheClaimAndNothingElse:
 
         def runner(argv, **kw):
             seen["tmp"] = kw["env"]["TMPDIR"]
+            seen["claude_tmp"] = kw["env"].get("CLAUDE_CODE_TMPDIR")
             return subprocess.CompletedProcess(argv, 0, _answer("confirmed"), "")
 
         self._run(tmp_path, monkeypatch, runner)
         login = tmp_path / "owner-login" / "claude"
         assert Path(seen["tmp"]).parent == login, seen
+        # Claude Code ignores TMPDIR (`boundaries.temp_environment`).
+        assert seen["claude_tmp"] == seen["tmp"], seen
         shared = boundary_for().engine_tmp(tmp_path, OWNER)
         assert not Path(seen["tmp"]).is_relative_to(shared.parent), seen
 
