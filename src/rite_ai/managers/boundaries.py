@@ -120,6 +120,23 @@ class Boundary:
     """Why not, when `available()` is False. Printed at launch."""
 
 
+def temp_environment(path: Path) -> dict[str, str]:
+    """The environment that puts an engine's temporary files at `path`, inside
+    the boundary.
+
+    ⚠ **`TMPDIR` alone is not enough: Claude Code ignores it.** Its temp root
+    is `CLAUDE_CODE_TMPDIR`, falling back to a hard-coded `/tmp` (read from
+    the 2.1.261 binary), so once SB8 stopped granting `/tmp` a real Claude
+    Manager died at start with `EPERM: operation not permitted, open
+    '/tmp/claude-<uid>'`. Granting that directory back is not the fix: it
+    holds every Claude session's scratch space on the machine, which is what
+    SB8 closed. Both variables point at the same directory, and every launch
+    that runs an engine under a profile takes them from here, so the next one
+    an engine reads is added once.
+    """
+    return {"TMPDIR": str(path), "CLAUDE_CODE_TMPDIR": str(path)}
+
+
 def _landlock_available() -> bool:
     return landlock.abi() > 0
 

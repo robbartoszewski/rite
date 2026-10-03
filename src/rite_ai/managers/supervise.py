@@ -61,7 +61,11 @@ from rite_ai.managers import (
 # vanishes. `boundary_for()` picks the mechanism for this machine and raises
 # when there is none.
 from rite_ai.managers.board_context import board_now
-from rite_ai.managers.boundaries import UnsupportedPlatform, boundary_for
+from rite_ai.managers.boundaries import (
+    UnsupportedPlatform,
+    boundary_for,
+    temp_environment,
+)
 from rite_ai.managers.broker import take_requests
 from rite_ai.managers.engines import handle_problem, new_handle, spelling_for
 from rite_ai.managers.mailbox import INBOX, delivery_note, how_to_reply, put_back, send
@@ -3701,7 +3705,8 @@ def _default_starter(
                 if placement and placement[0] == "env"
                 else {}
             ),
-            "TMPDIR": str(confinement.engine_tmp(root, manager)),
+            # TMPDIR and Claude Code's own CLAUDE_CODE_TMPDIR (`temp_environment`).
+            **temp_environment(confinement.engine_tmp(root, manager)),
             **model_env,
             # C6/C26: WHERE the GitHub credential is, never the credential.
             # Derived from what `github_access.open_access` left on disk, so

@@ -215,6 +215,7 @@ def test_inside_the_profile_claude_READS_its_own_file(project):
     grants. An earlier version put it under /tmp, which the profile grants
     read+write, so it proved nothing about the grant.
     """
+    from rite_ai.managers.boundaries import temp_environment
     from rite_ai.managers.enclosure import compose, engine_tmp
 
     cl._write_login(project, "lead", FAKE)
@@ -227,7 +228,9 @@ def test_inside_the_profile_claude_READS_its_own_file(project):
         for k, v in os.environ.items()
         if k not in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
     }
-    env.update(cl.pane_environment(project, "lead"), TMPDIR=str(tmp))
+    # The launch's own temp environment, not a hand-written TMPDIR: that
+    # missed CLAUDE_CODE_TMPDIR, which is how SB8 broke every Claude Manager.
+    env.update(cl.pane_environment(project, "lead"), **temp_environment(tmp))
     out = subprocess.run(
         ["sandbox-exec", "-f", str(profile), "claude", "-p", "say hi"],
         stdin=subprocess.DEVNULL,
@@ -287,3 +290,39 @@ def test_the_relay_reads_the_login_from_outside(project, home):
     assert cl.manager_secrets(project, "lead", home) == [FAKE]
     cl.remove_login(project, "lead", home)
     assert cl.manager_secrets(project, "lead", home) == []
+
+
+def test_the_launch_puts_claudes_temp_root_inside_the_boundary(tmp_path, monkeypatch):
+    """🔴 SB8 stopped granting `/tmp`, and Claude Code ignores `TMPDIR`: its
+    temp root is `CLAUDE_CODE_TMPDIR`, else `/tmp`. So with only `TMPDIR`
+    set, every real Claude Manager died at start with `EPERM ... open
+    '/tmp/claude-<uid>'` (caught by the real-`claude` test above, on a
+    machine that has `claude`). What `rite start` hands the pane must carry
+    both, pointing at the engine's own directory inside the boundary."""
+    import rite_ai.managers.supervise as sup
+    from rite_ai.managers.boundaries import boundary_for
+    from rite_ai.managers.session import StartResult
+
+    (tmp_path / ".rite").mkdir()
+    seen = {}
+
+    def fake_start(root, manager, **kwargs):
+        seen.update(kwargs)
+        return StartResult(False, "not starting anything in a test")
+
+    monkeypatch.setattr(sup, "start_session", fake_start)
+    sup._default_starter(
+        tmp_path,
+        "lead",
+        engine="claude",
+        resume_id="",
+        max_sessions=None,
+        window_seconds=None,
+        permission="",
+        prompt="go",
+        agent="",
+    )
+    env = seen["pane_env"]
+    inside = str(boundary_for().engine_tmp(tmp_path, "lead"))
+    assert env["TMPDIR"] == inside, env
+    assert env["CLAUDE_CODE_TMPDIR"] == inside, env
