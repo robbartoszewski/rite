@@ -305,6 +305,20 @@ def _run_tick_locked(root: Path) -> TickResult:
     if rotated:
         messages.append(rotated)
 
+    # The periodic sweep half of SCRUM-37: collect self-test sandboxes whose
+    # creator process died before its `finally` could run (a SIGKILL or a
+    # crash). Best-effort — a yoloai that cannot answer must never fail a tick
+    # whose real job is the watchdog — and it touches nothing but leaked
+    # `rite-selftest-*` with a dead creator and no unapplied work.
+    try:
+        from rite_ai.sandbox import reap_dead_selftest_sandboxes
+
+        reap = reap_dead_selftest_sandboxes()
+        if reap.reaped:
+            messages.append(f"reaped leaked self-test sandboxes: {reap.summary}")
+    except Exception as e:  # noqa: BLE001 - maintenance must not break the tick
+        messages.append(f"self-test sandbox reap skipped: {type(e).__name__}: {e}")
+
     watchdog_result = run_watchdog_check(root)
     needs_attention = watchdog_result.needs_attention
     if watchdog_result.needs_attention:

@@ -1574,6 +1574,7 @@ def _supervise(
     watch: object = None,
     refine: object = None,
     refinement_brief: object = None,
+    recover: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -2556,6 +2557,12 @@ def _supervise(
                 # TR2: the rounds the Owner asked for this turn go out, with
                 # the board, at the same boundary and for the same reason.
                 _refinement_step(refine, say)
+            if callable(recover):
+                # SCRUM-38: recover a stalled Worker at the SAME boundary as the
+                # Worker requests, and for the same reason — it talks to yoloai
+                # and the board, which the two-second poll must not wait on. It
+                # sits beside those steps, replacing none of them.
+                recover(say)
             # AFTER the rounds went out: a round sent this turn is progress.
             _count_misses(root, manager, handed, handed_at, say)
             handed, handed_at = {}, 0.0

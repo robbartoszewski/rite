@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### A Manager recovers a stalled Worker by itself (SCRUM-38)
+
+A Worker whose session runs out or dies used to leave the Manager only able to
+report it STALLED and wait for you. Now the Manager recovers it unattended, at
+its cycle boundary: if the Worker's sandbox is still there, it **restarts the
+session in place** (`yoloai restart --resume`), keeping the Worker's claim and
+its in-progress, unapplied work; if the sandbox is gone, it **re-stages the
+ticket** (releases the claim so the ticket returns to the board). A Worker whose
+heartbeat can't be read, or whose sandbox yoloai can't report on, is left alone
+— recovery never acts on "I couldn't tell". It doesn't loop: a per-Worker budget
+backs off between attempts and, after a few, falls back to leaving it STALLED
+for you, exactly as before. One recovery per cycle, off the two-second poll.
+
+### Leaked self-test sandboxes are collected (SCRUM-37)
+
+A `rite doctor`/`rite init` self-test spins up a throwaway sandbox and tears it
+down in a `finally` — but a SIGKILL, a crash or a power cut bypasses that and
+leaves the sandbox active, counting against the machine's sandbox cap until you
+notice it in `rite doctor`'s litter. One such orphan helped trip a worker-cap
+incident. Now a reconciliation pass collects them: it runs on every scheduler
+tick, and there is a manual lever, `rite sandbox reap` (`--dry-run` to
+preview). It destroys only a
+`rite-selftest-*` sandbox whose creating process is gone AND that holds no
+unapplied work; it never touches a project's Worker, a probe with a live
+creator, or anything holding changes.
 ### An Ollama fleet works end to end
 
 **Workers can run a local model.** A Worker declares `engine`, `endpoint`,

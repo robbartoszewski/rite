@@ -60,7 +60,7 @@ import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -1042,6 +1042,130 @@ def list_rite_sandboxes() -> list[SandboxEntry] | CountUnavailable:
     return found
 
 
+# A self-test sandbox's name carries the pid of the process that made it:
+# `verify_sandbox` builds `rite-selftest-<pid>-<uuid>` (SELFTEST_PREFIX). The
+# pid is the whole reason the GC below can work without rite keeping a
+# registry — it is the one creator identity a leaked probe still carries.
+_SELFTEST_NAME = re.compile(r"^rite-selftest-(\d+)-[0-9a-fA-F]+$")
+
+
+@dataclass(frozen=True)
+class SelftestReap:
+    """What one reconciliation pass did. `kept` pairs each spared sandbox with
+    the reason it was spared, so a `--dry-run` or a log says WHY nothing was
+    collected rather than only that nothing was."""
+
+    reaped: tuple[str, ...] = ()
+    kept: tuple[tuple[str, str], ...] = ()
+    unavailable: str = ""
+
+    @property
+    def summary(self) -> str:
+        if self.unavailable:
+            return f"could not reap self-test sandboxes: {self.unavailable}"
+        if not self.reaped and not self.kept:
+            return "no self-test sandboxes to reap"
+        parts = []
+        if self.reaped:
+            parts.append(f"reaped {len(self.reaped)}: {', '.join(self.reaped)}")
+        if self.kept:
+            parts.append(f"kept {len(self.kept)}")
+        return "; ".join(parts)
+
+
+def _destroy_named(name: str) -> bool:
+    """`yoloai destroy <name>`, best-effort. True only on a clean exit.
+
+    Deliberately NOT `--abandon-unapplied`: the caller has already proved
+    there is no work to lose, so a plain destroy is correct and a sandbox
+    that yoloai refuses to drop stays, named in `kept`, rather than being
+    forced."""
+    binary = _yoloai_binary()
+    if binary is None:
+        return False
+    try:
+        proc = subprocess.run(
+            [binary, "destroy", name],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=120,
+            env=sandbox_environment(),
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def reap_dead_selftest_sandboxes(
+    *,
+    lister: Callable[[], list[SandboxEntry] | CountUnavailable] | None = None,
+    is_alive: Callable[[int], bool] | None = None,
+    destroy: Callable[[str], bool] | None = None,
+    self_pid: int | None = None,
+    dry_run: bool = False,
+) -> SelftestReap:
+    """Destroy leaked `rite-selftest-*` sandboxes whose creator process is gone.
+
+    A self-test sandbox is torn down in a `finally` and on SIGTERM
+    (`verify_sandbox`, `_torn_down_on_sigterm`), but a SIGKILL, a crash or a
+    power cut bypasses both and leaves it `active` — counting against
+    `machine.max_sandboxes` until a human reads `rite doctor`'s litter report.
+    One such orphan helped trip the broker worker-cap incident. This is the
+    crash-safety net the `finally` cannot be: a reconciliation pass the
+    scheduler tick runs periodically, and that `rite sandbox reap` runs on
+    demand.
+
+    The creator pid is in the name (`_SELFTEST_NAME`). A probe whose creator is
+    gone and that holds no unapplied work is one nothing will ever return to.
+
+    It NEVER destroys:
+      * anything that is not a `rite-selftest-*` — a project's Worker is never
+        touched, because only the self-test name is matched at all;
+      * a probe whose creator pid is still alive (a run in progress) — and a
+        recycled pid only makes a dead creator look alive, i.e. a missed reap,
+        never a live one reaped;
+      * a probe this very process created (`self_pid`);
+      * a sandbox yoloai reports as holding changes (`safe_to_destroy`) — a
+        self-test does no work, but the guard is honoured regardless, because
+        "never destroy unapplied work" outranks collecting one stray probe.
+
+    Every dependency is injectable and defaults to production, so a test drives
+    it without a real yoloai. `dry_run` reports what it WOULD reap.
+    """
+    if is_alive is None:
+        from rite_ai.managers import pid_alive as is_alive
+    lister = lister or list_rite_sandboxes
+    destroy = destroy or _destroy_named
+    self_pid = os.getpid() if self_pid is None else self_pid
+
+    listing = lister()
+    if isinstance(listing, CountUnavailable):
+        return SelftestReap(unavailable=listing.reason)
+
+    reaped: list[str] = []
+    kept: list[tuple[str, str]] = []
+    for entry in listing:
+        match = _SELFTEST_NAME.match(entry.name)
+        if not match:
+            continue  # not a self-test sandbox — a Worker is never a candidate
+        pid = int(match.group(1))
+        if pid == self_pid:
+            kept.append((entry.name, "created by this process"))
+        elif is_alive(pid):
+            kept.append((entry.name, f"creator pid {pid} is alive"))
+        elif not entry.safe_to_destroy:
+            kept.append((entry.name, "holds unapplied changes"))
+        elif dry_run:
+            reaped.append(entry.name)
+        elif destroy(entry.name):
+            reaped.append(entry.name)
+        else:
+            kept.append((entry.name, "yoloai would not destroy it"))
+    return SelftestReap(tuple(reaped), tuple(kept))
+
+
 def sandbox_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     """rite's own environment, minus the parts that only make sense
     outside the sandbox.
@@ -1167,6 +1291,78 @@ def start_worker(
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     finally:
         handle.close()
+
+
+def _compose_launch_env(
+    root: Path, env: dict[str, str] | None, clean_home: bool, local: bool = False
+) -> tuple[dict[str, str], list[str], list[str], list[str]] | str:
+    """`(yoloai_env, env_args, login_note, git_notes)`, or a refusal string.
+
+    Shared by `yoloai new` (`start_worker`) and `yoloai restart`
+    (`restart_worker`) so a restarted Worker gets byte-identical credentials,
+    git settings and Claude login to its original start — the one thing that
+    must not drift between the two paths (SCRUM-38). `yoloai restart`'s own help
+    says `--env` is "not persisted; re-supply on each restart", so a restart
+    that rebuilt these differently would hand a recovered Worker a different
+    environment than it started with.
+
+    `local` withholds the Claude login from a local-tier Worker (OL4): its
+    model answers on loopback and needs no login, and a sandbox's environment
+    was measured readable from other sandboxes (SB12). The login note is
+    engine-specific for the same reason (OL5) — a local Worker has no Claude
+    login by design, so the "run claude setup-token" advice is wrong for it.
+    """
+    delivered = dict(env or {})
+    github = sorted(k for k in delivered if k in _GITHUB_TOKEN_ENV)
+    if github:
+        return (
+            f"a GitHub token was about to be passed into its sandbox "
+            f"({', '.join(github)}); Workers hold none, since rite pushes and "
+            "opens the pull request on the host"
+        )
+    # The Claude login goes to yoloAI, not to `--env`. yoloAI treats
+    # CLAUDE_CODE_OAUTH_TOKEN as the claude agent's own credential and reads
+    # it from the environment `yoloai new`/`restart` runs in, which is also
+    # what `yoloai help security` tells a person to export.
+    yoloai_env = sandbox_environment()
+    # Git settings from the host shell must not stack on the sandbox's own:
+    # GIT_CONFIG_PARAMETERS would add to them, and a host GIT_CONFIG_COUNT
+    # would compete with the one passed below. Both start GIT_CONFIG_.
+    for inherited in [k for k in yoloai_env if k.startswith("GIT_CONFIG_")]:
+        del yoloai_env[inherited]
+    if clean_home:
+        yoloai_env["HOME"] = str(worker_home())
+    claude_login = delivered.pop(CLAUDE_TOKEN_ENV_VAR, None)
+    # ⚠ Withheld from a LOCAL Worker (OL4). Popped above either way, so it never
+    # reaches `--env` by another road.
+    if claude_login and not local:
+        yoloai_env[CLAUDE_TOKEN_ENV_VAR] = claude_login
+    if local:
+        login_note = []
+    elif yoloai_env.get(CLAUDE_TOKEN_ENV_VAR) or yoloai_env.get("ANTHROPIC_API_KEY"):
+        login_note = []
+    else:
+        login_note = [
+            "  no Claude login for the sandbox, so the session will start and "
+            "do nothing — run `claude setup-token`, then `rite credential set "
+            "claude`, and start the Worker again"
+        ]
+    # The project root, named rather than found. rite walks up from cwd for
+    # `.rite/`, and inside the sandbox most of that walk is unreadable.
+    delivered.setdefault("RITE_PROJECT_ROOT", str(root))
+    git_notes: list[str] = []
+    for key, value in sandbox_git_environment(shutil.which("gh")).items():
+        delivered.setdefault(key, value)
+    if shutil.which("gh") is None:
+        git_notes.append(
+            "  gh is not installed, so `git push` over HTTPS cannot authenticate "
+            "from inside — destroy this sandbox, install GitHub's `gh` CLI, and "
+            "start the Worker again"
+        )
+    env_args: list[str] = []
+    for key in sorted(delivered):
+        env_args += ["--env", f"{key}={delivered[key]}"]
+    return yoloai_env, env_args, login_note, git_notes
 
 
 def sandbox_state_dir(name: str, binary: str = "") -> Path | None:
@@ -1436,67 +1632,11 @@ def _start_worker_unlocked(
     # Worker push, open a pull request anywhere, or merge, forbidden only by
     # its instructions. Refused here whatever the caller passed, so no
     # future caller can hand one over by accident.
-    delivered = dict(env or {})
-    github = sorted(k for k in delivered if k in _GITHUB_TOKEN_ENV)
-    if github:
-        return SandboxResult(
-            False,
-            f"not starting '{worker}': a GitHub token was about to be passed "
-            f"into its sandbox ({', '.join(github)}); Workers hold none, since "
-            "rite pushes and opens the pull request on the host",
-        )
-    # The Claude login goes to yoloAI, not to `--env`. yoloAI treats
-    # CLAUDE_CODE_OAUTH_TOKEN as the claude agent's own credential and reads
-    # it from the environment `yoloai new` runs in (`yoloai system agents
-    # claude`), which is also what `yoloai help security` tells a person to
-    # export. Putting the stored one there is what makes it reach every
-    # sandbox, whichever terminal started it.
-    yoloai_env = sandbox_environment()
-    # Git settings from the host shell must not stack on the sandbox's own:
-    # GIT_CONFIG_PARAMETERS would add to them, and a host GIT_CONFIG_COUNT
-    # would compete with the one passed below. Both start GIT_CONFIG_.
-    for inherited in [k for k in yoloai_env if k.startswith("GIT_CONFIG_")]:
-        del yoloai_env[inherited]
-    if clean_home:
-        yoloai_env["HOME"] = str(worker_home())
-    claude_login = delivered.pop(CLAUDE_TOKEN_ENV_VAR, None)
-    # ⚠ Withheld from a LOCAL Worker, deliberately (OL4). Its model answers on
-    # this machine's loopback and needs no login, so passing one would put the
-    # operator's Claude credential inside a sandbox that cannot spend it — and
-    # SB12 measured a sandbox's environment readable from other sandboxes here.
-    # Popped above either way, so it never reaches `--env` by another road.
-    if claude_login and not local:
-        yoloai_env[CLAUDE_TOKEN_ENV_VAR] = claude_login
-    # ⚠ The note is engine-specific, because the Claude advice is WRONG for a
-    # local Worker (OL5): it has no Claude login by design, so the old text
-    # would have sent someone to `claude setup-token` to fix a sandbox that
-    # needs no Claude at all. What can be missing for a local Worker is its
-    # endpoint, its model or its agent — which `rite doctor` probes
-    # (`local.engine_probe`) and which the manifest refuses to omit.
-    if local:
-        login_note = []
-    elif yoloai_env.get(CLAUDE_TOKEN_ENV_VAR) or yoloai_env.get("ANTHROPIC_API_KEY"):
-        login_note = []
-    else:
-        login_note = [
-            "  no Claude login for the sandbox, so the session will start and "
-            "do nothing — run `claude setup-token`, then `rite credential set "
-            "claude`, and start the Worker again"
-        ]
-    # The project root, named rather than found. rite walks up from cwd for
-    # `.rite/`, and inside the sandbox most of that walk is unreadable.
-    delivered.setdefault("RITE_PROJECT_ROOT", str(root))
-    git_notes = []
-    for key, value in sandbox_git_environment(shutil.which("gh")).items():
-        delivered.setdefault(key, value)
-    if shutil.which("gh") is None:
-        git_notes.append(
-            "  gh is not installed, so `git push` over HTTPS cannot authenticate "
-            "from inside — destroy this sandbox, install GitHub's `gh` CLI, and "
-            "start the Worker again"
-        )
-    for key in sorted(delivered):
-        args += ["--env", f"{key}={delivered[key]}"]
+    composed = _compose_launch_env(root, env, clean_home, local)
+    if isinstance(composed, str):
+        return SandboxResult(False, f"not starting '{worker}': {composed}")
+    yoloai_env, env_args, login_note, git_notes = composed
+    args += env_args
     # What the sandbox can reach, and why it is exactly this (SPEC §5.3):
     #
     # - the Worker's own `workers/<worker>/`, as yoloAI's isolated copy.
@@ -2217,6 +2357,91 @@ def _work_only_in_sandbox(
     lines += [f"  {item.describe()}" for item in items]
     lines.append(f"  the copy is at {copy}")
     return "\n".join(lines)
+
+
+def restart_worker(
+    worker: str,
+    root: str | os.PathLike[str],
+    config: SandboxConfig,
+    *,
+    env: dict[str, str] | None = None,
+    prompt: str | None = None,
+    resume: bool = True,
+) -> SandboxResult:
+    """Relaunch WORKER's agent in its EXISTING sandbox (`yoloai restart`), for
+    recovering a stalled/dead session without losing its work (SCRUM-38).
+
+    ⚠ **This is restart-IN-PLACE, and that is the whole point.** `yoloai
+    restart` re-runs the agent in the sandbox that is already there, so the
+    copy-on-write workspace — the Worker's in-progress, unapplied edits — is
+    preserved. It is the opposite of `destroy` + `start_worker`, which would
+    throw that copy away. The caller keeps the Worker's claim; nothing here
+    touches it.
+
+    `--env` is re-supplied because yoloai does not persist it across a restart
+    (its own help says so), and it is built through the SAME
+    `_compose_launch_env` as `start_worker`, so a recovered Worker gets the
+    credentials and git settings it started with — never a subset.
+
+    `resume` re-feeds the original prompt with yoloai's continuation preamble
+    ("carry on"); a `prompt` overrides it when the caller has something new to
+    say. The GitHub-token refusal applies here too.
+    """
+    binary = _yoloai_binary()
+    if binary is None:
+        return SandboxResult(
+            False, "yoloai not found — install it from https://yoloai.dev"
+        )
+    name = existing_sandbox_name(worker, root)
+    clean_home = config.backend == "seatbelt"
+    # A local Worker's Claude login is withheld on restart too (OL4), the same
+    # as on start — `_compose_launch_env` does it, given `local`.
+    manifest = worker_manifest(Path(root), worker)
+    local = bool(getattr(manifest, "is_local", False))
+    composed = _compose_launch_env(Path(root), env, clean_home, local)
+    if isinstance(composed, str):
+        return SandboxResult(False, f"not restarting '{worker}': {composed}")
+    yoloai_env, env_args, _login_note, _git_notes = composed
+
+    args = [binary]
+    if clean_home:
+        args += ["--data-dir", str(Path.home() / ".yoloai")]
+    args += ["restart", name, *env_args]
+    prompt_dir: str | None = None
+    if prompt is not None and prompt.strip():
+        prompt_dir = tempfile.mkdtemp(prefix="rite-prompt-")
+        prompt_file = Path(prompt_dir) / "prompt.txt"
+        prompt_file.write_text(prompt if prompt.endswith("\n") else prompt + "\n")
+        args += ["--prompt-file", str(prompt_file)]
+    elif resume:
+        # Re-feed the original prompt with a continuation preamble, so the
+        # Worker carries on its ticket rather than starting from nothing.
+        args.append("--resume")
+
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=300,
+            env=yoloai_env,
+        )
+    except subprocess.TimeoutExpired:
+        return SandboxResult(False, "yoloai restart timed out after 300s")
+    except (OSError, subprocess.SubprocessError) as e:
+        return SandboxResult(False, f"yoloai restart could not run: {e}")
+    finally:
+        if prompt_dir is not None:
+            shutil.rmtree(prompt_dir, ignore_errors=True)
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
+        return SandboxResult(False, f"yoloai restart failed: {detail[:300]}")
+    if root is not None:
+        from rite_ai.reporting import events
+
+        events.record(Path(root), "sandbox-restarted", worker=worker, sandbox=name)
+    return SandboxResult(True, f"sandbox '{name}' restarted in place")
 
 
 def stop_worker(

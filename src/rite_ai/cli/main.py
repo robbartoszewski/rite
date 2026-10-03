@@ -8190,6 +8190,41 @@ def sandbox_status(worker: str) -> None:
         click.echo(seen.describe())
 
 
+@sandbox.command("reap")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Report what WOULD be reaped without destroying anything.",
+)
+def sandbox_reap(dry_run: bool) -> None:
+    """Collect leaked self-test sandboxes whose creator process is gone (SCRUM-37).
+
+    A `rite-selftest-*` sandbox is torn down in a `finally` and on SIGTERM, but
+    a SIGKILL or a crash bypasses both and leaves it active, counting against
+    the machine's sandbox cap. This destroys only such a probe — a dead creator
+    and no unapplied work — and never a project's Worker. The scheduler tick and
+    a supervisor's startup run it on their own; this is the manual lever.
+
+    Examples:
+      rite sandbox reap
+      rite sandbox reap --dry-run
+    """
+    from rite_ai.sandbox import reap_dead_selftest_sandboxes
+
+    result = reap_dead_selftest_sandboxes(dry_run=dry_run)
+    if result.unavailable:
+        click.echo(result.summary, err=True)
+        raise SystemExit(1)
+    verb = "would reap" if dry_run else "reaped"
+    if result.reaped:
+        click.echo(f"{verb} {len(result.reaped)}: {', '.join(result.reaped)}")
+    else:
+        click.echo("no leaked self-test sandboxes with a dead creator")
+    for name, why in result.kept:
+        click.echo(f"  kept {name}: {why}")
+
+
 # --- Multi-project registry (SPEC §8.9, D-34) ---
 
 
@@ -9430,6 +9465,7 @@ def _start_a_manager(
     from rite_ai.managers.broker import for_project
     from rite_ai.managers.chores import create_asked_for
     from rite_ai.managers.chores import instructions as chore_instructions
+    from rite_ai.managers.recovery import recover_stalled_workers
     from rite_ai.refinement.protocol import step as refinement_step
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
@@ -9577,6 +9613,11 @@ def _start_a_manager(
             # TR9: a User's instruction becomes a chore, written by rite
             # outside the boundary, on the same board the broker checks.
             chores=lambda say: create_asked_for(root, role.name, board, say),
+            # SCRUM-38: recover a stalled Worker — restart its session in place
+            # (preserving its unapplied work), or re-stage its ticket when its
+            # sandbox is gone — at the cycle boundary, off the two-second poll.
+            # Sits beside the local tier below, driving neither.
+            recover=lambda say: recover_stalled_workers(root, role.name, say),
             # L-6 (Robert, 2026-10-03): the local tier runs hands-off, driven by
             # this same cycle. LOCAL ENGINES ONLY, like `engine_ready` above —
             # a Claude Manager has no local pipeline, and None means "nothing to
