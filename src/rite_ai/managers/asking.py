@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,6 +75,19 @@ def _who(raiser: str) -> str:
 
 def _first_line(subject: str, qid: str, raiser: str) -> str:
     return f"{subject} · {qid} · {_who(raiser)} is waiting · reply in this thread"
+
+
+_RAISED = re.compile(r" · (q[0-9a-f]{4}) · .+ is waiting · reply in this thread$")
+"""`_first_line`'s shape: how a question rite raised introduces its own id."""
+
+
+def own_question_id(text: str) -> str:
+    """The id a question rite raised introduces in its first line
+    (`_first_line`), or "" for any other message. Only that line introduces an
+    id; an id anywhere else in a message is a reference back to one (SCRUM-47).
+    """
+    found = _RAISED.search(text.split("\n", 1)[0])
+    return found.group(1) if found else ""
 
 
 def _ledger_path(root: Path, owner: str) -> Path:

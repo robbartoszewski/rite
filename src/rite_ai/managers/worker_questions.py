@@ -391,8 +391,8 @@ def _relay(root: Path, manager: str, say) -> int:
                 subject=_ticket_of(root, sandbox),
                 raiser=f"worker:{worker or sandbox}",
                 text=(
-                    f"Your answer did NOT reach Worker {worker or sandbox!r}: "
-                    f"{outcome.reason}.{gone}"
+                    f"Your answer to {qid} did NOT reach Worker "
+                    f"{worker or sandbox!r}: {outcome.reason}.{gone}"
                 ),
             )
             say(
@@ -421,6 +421,21 @@ def _teller(config) -> str:
         return routing_owner(roles)
     managers = list(config.coordination.managers)
     return str(managers[0]) if managers else ""
+
+
+def raised_id(root: Path, sandbox: str) -> str:
+    """The id rite raised this sandbox's question under (`q3f9a`), or "" when
+    it has not been raised or nothing records it. A message that refers back
+    to the question names it by this id, which the Slack relay renders as a
+    link to the post (SCRUM-47)."""
+    from rite_ai.config.parse import load_project
+
+    project = load_project(Path(root))
+    teller = "" if isinstance(project, list) else _teller(project.config)
+    if not teller:
+        return ""
+    qid = _load(_ledger_path(Path(root), teller)).get(sandbox)
+    return qid if isinstance(qid, str) else ""
 
 
 def how_to_answer(root: Path, worker: str, sandbox: str, stopped: bool) -> str:
