@@ -275,9 +275,21 @@ class GooseAgent:
         try:
             completed = self._launch(argv, workspace, environment)
         except Exception as e:  # noqa: BLE001 - a launch failure is a result
+            # ⚠ `infrastructure_fault=True`, and it was missing. A launch that
+            # RAISED is by definition a turn that did not happen — which is
+            # this field's own documented meaning, "a binary that is missing" —
+            # and without it RL-47 broke on every launch failure: the subtask
+            # spent an attempt proving that a tool could not be started.
+            #
+            # Two real cases reach here, both from the sandboxed launcher and
+            # both measured: `SecretOnArgv` (the operator's shell held a token,
+            # so rite's own leak guard refused the argv) and `SandboxGone` (a
+            # delivery stopped the Worker's sandbox between the placement check
+            # and the turn). Neither is evidence about the work.
             return AgentReport(
                 claimed_success=False,
                 summary=f"could not start {self.binary}: {type(e).__name__}: {e}",
+                infrastructure_fault=True,
             )
         finally:
             try:

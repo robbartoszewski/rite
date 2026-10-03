@@ -449,7 +449,17 @@ def _record(state, plan, subtask, outcome: Outcome, version: str, step: Step) ->
         replace(
             subtask,
             status=outcome.status,
-            attempts=subtask.attempts + 1,
+            # ⚠ **RL-47, through the property that decides it.**
+            # `Outcome.counts_as_attempt` says "work counts, and a turn that
+            # never happened does not" — and this incremented
+            # unconditionally, so the property had no reader in `src/` at all
+            # and the rule it states was not in force anywhere. An endpoint
+            # that was down, a sandbox a delivery had just stopped, a launch
+            # rite's own leak guard refused: each spent one of the subtask's
+            # attempts, and its own docstring says why that is wrong — "it is
+            # a machine that was not ready, and counting it would retire a
+            # subtask nobody tried".
+            attempts=subtask.attempts + (1 if outcome.counts_as_attempt else 0),
             branch=outcome.branch,
             last_failure=(
                 "" if outcome.accepted else (outcome.verify_output or "")[:500]

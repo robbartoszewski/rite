@@ -2753,6 +2753,22 @@ def worker_sandbox_status(
     could not check" are opposite answers for anyone deciding what to do
     next, and only one of them is safe to act on.
     """
+    return sandbox_status_named(
+        {sandbox_name(worker, root), legacy_sandbox_name(worker)}
+    )
+
+
+def sandbox_status_named(names: str | set[str]) -> SandboxStatus:
+    """The same answer for a sandbox named directly rather than by Worker.
+
+    ⚠ **Extracted rather than copied.** `worker_sandbox_status` is the only
+    reader of `yoloai ls --json`'s status field, and the one caller that knows a
+    sandbox NAME and not a Worker (`local/in_sandbox.exec_launcher`, deciding
+    whether a failed `yoloai exec` means the turn never ran) would otherwise
+    have been a second parse of the same output — and the four "I could not
+    ask" answers below are exactly the part a second copy gets wrong.
+    """
+    wanted = {names} if isinstance(names, str) else set(names)
     binary = _yoloai_binary()
     if binary is None:
         return SandboxStatus("yoloai not found", known=False)
@@ -2781,9 +2797,8 @@ def worker_sandbox_status(
         )
     # Both forms: a sandbox started before §8.10 still answers `status`
     # rather than reporting "not found" for something plainly running.
-    names = {sandbox_name(worker, root), legacy_sandbox_name(worker)}
     for entry in data.get("sandboxes", []):
-        if entry.get("environment", {}).get("name") in names:
+        if entry.get("environment", {}).get("name") in wanted:
             return SandboxStatus(str(entry.get("status", "unknown")))
     return SandboxStatus("not found")
 

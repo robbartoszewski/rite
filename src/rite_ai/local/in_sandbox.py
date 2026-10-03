@@ -53,6 +53,34 @@ _SECRET_WORDS = (
 )
 
 
+class SandboxGone(Exception):
+    """`yoloai exec` could not run the command, because the sandbox is not
+    there to run it in. **The turn did not happen.**
+
+    ⚠ **A race rite must not tolerate, and the one place it is real.**
+    `worker_step.placement_for` checks the sandbox is active, and the turn
+    starts afterwards — and the thing that stops a Worker's sandbox between
+    those two moments is rite's own `publishing/deliver.py`, which stops it
+    FIRST and by design ("so the Worker cannot commit between the collect and
+    anything that later trusts it"). A supervisor cycle that steps a subtask
+    while a delivery is honoured is therefore the ordinary case, not a freak
+    one.
+
+    Left unraised it was silent and wrong in the worst direction.
+    `GooseAgent` deliberately never reads an exit code — because `goose run`
+    returns 0 for an unreachable provider — so `yoloai exec`'s own refusal
+    arrived as a turn that RAN, with yoloAI's error text as the model's
+    output. The verify then failed on an unchanged tree, and the subtask
+    recorded a failed ATTEMPT. RL-47 says only work counts; nothing ran.
+
+    ⚠ That reasoning does not generalise back to goose: yoloAI's exit code is
+    trustworthy where goose's is not (measured: `yoloai exec` on a stopped
+    sandbox exits 1 having run nothing, and passes an inner command's own code
+    through unchanged — `exit 3` arrives as 3). So this reads the code ONLY to
+    ask yoloAI a second, definite question, and never to judge the turn.
+    """
+
+
 class SecretOnArgv(Exception):
     """A value that must not be placed on a command line was about to be.
 
@@ -201,7 +229,7 @@ def exec_launcher(sandbox: str, binary: str = "", timeout: int = 0, subdir: str 
     def launch(argv, workspace, environment):  # noqa: ARG001 - see docstring
         from rite_ai.local.goose_agent import RUN_TIMEOUT_SECONDS
 
-        return subprocess.run(
+        completed = subprocess.run(
             exec_argv(
                 sandbox, list(argv), dict(environment or {}), resolved, subdir=subdir
             ),
@@ -211,5 +239,24 @@ def exec_launcher(sandbox: str, binary: str = "", timeout: int = 0, subdir: str 
             timeout=timeout or RUN_TIMEOUT_SECONDS,
             stdin=subprocess.DEVNULL,
         )
+        if completed.returncode != 0:
+            # ⚠ **Asked of yoloAI, not read from its prose.** A non-zero code
+            # is only a reason to ask the second question, because the code
+            # alone cannot answer it — yoloAI passes an inner command's exit
+            # through, so `1` is equally "goose exited 1" and "there is no
+            # sandbox". The status is the definite answer, and it is definite
+            # in exactly the direction that matters: if the sandbox is not
+            # running NOW and the exec failed, the command did not run.
+            from rite_ai.sandbox import sandbox_status_named
+
+            status = sandbox_status_named(sandbox)
+            if status.known and str(status) != "active":
+                raise SandboxGone(
+                    f"sandbox {sandbox} is {status}, so the turn did not run "
+                    f"(`yoloai exec` exited {completed.returncode}). A "
+                    "delivery stops a Worker's sandbox, so this is a cycle "
+                    "that stepped a subtask while one was being honoured"
+                )
+        return completed
 
     return launch

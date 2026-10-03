@@ -147,6 +147,60 @@ MODEL's turn. `env` was already being run to place the environment, so this adds
 a flag and not a process. An absolute `subdir` is **refused**: it would be a
 host path, which is the mistake `exec_launcher`'s docstring measured.
 
+## 3.3 The sandbox vanishing mid-turn, and RL-47 not being in force
+
+**The race, and rite is what causes it.** `placement_for` checks the sandbox is
+active and the turn starts afterwards — and the thing that stops a Worker's
+sandbox in between is `publishing/deliver.py`, which stops it FIRST and by
+design ("so the Worker cannot commit between the collect and anything that
+later trusts it"). A supervisor cycle stepping a subtask while a delivery is
+honoured is the ordinary case.
+
+Left alone it was silent and wrong in the worst direction. `GooseAgent` never
+reads an exit code — because `goose run` returns 0 for an unreachable provider
+— so `yoloai exec`'s own refusal arrived as a turn that RAN, with yoloAI's
+error text as the model's output; the verify then failed on an unchanged tree
+and the subtask recorded a failed attempt.
+
+⚠ **yoloAI's exit code is trustworthy where goose's is not, and that is
+measured, not assumed:**
+
+```
+stopped sandbox   yoloai exec s54stopped -- echo hi    → exit 1, nothing ran
+missing sandbox   yoloai exec no-such -- echo hi       → exit 1, "sandbox not found"
+inner command     yoloai exec <live> -- sh -c 'exit 3' → exit 3   (passed through)
+                  yoloai exec <live> -- sh -c 'exit 7' → exit 7
+```
+
+So the code alone cannot answer the question — `1` is equally "goose exited 1"
+and "there is no sandbox". It is only a reason to ask yoloAI a second, definite
+one. `yoloai exec --json` is not available (`"--json is not supported for
+interactive command \"exec\""`), so the accessor is the existing
+`yoloai ls --json` reader, extracted to `sandbox.sandbox_status_named` rather
+than parsed a second time.
+
+Measured against the real binary, with both controls:
+
+```
+sandbox stopped between check and turn → SandboxGone raised; the agent reports
+  infrastructure_fault=True, so the subtask spends NO attempt
+CONTROL live sandbox, inner command exits 3 → returncode 3, stdout "ran-inside",
+  no raise      # a failing turn is a result, not a race
+CONTROL yoloAI unaskable (known=False) → no raise
+  # "I could not check" is not "the sandbox is gone"
+```
+
+**And the rule it depends on was not in force anywhere.**
+`Outcome.counts_as_attempt` states RL-47 — "work counts, and a turn that never
+happened does not" — and had **no reader in `src/`**: `step._record` wrote
+`attempts=subtask.attempts + 1` unconditionally. So an endpoint that was down,
+a sandbox a delivery had just stopped, and a launch rite's own leak guard
+refused each spent one of the subtask's attempts, which its own docstring calls
+out as the thing not to do: "it is a machine that was not ready, and counting it
+would retire a subtask nobody tried". `_record` now asks the property.
+`GooseAgent`'s launch-failure branch was also missing `infrastructure_fault`,
+so even a raised launch counted — both halves are closed.
+
 ## 4. The engine environment, verified from INSIDE a real Worker
 
 Against the real placement for a real `rite sandbox start`ed Worker:

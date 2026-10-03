@@ -132,9 +132,11 @@ def test_a_secret_in_the_operators_shell_killed_the_turn(monkeypatch):
     report = inheriting.run(_context(), "/host/workspace")
     assert report.claimed_success is False
     assert "SecretOnArgv" in report.summary
-    # And the half that made it worse: a turn that never happened was recorded
-    # as an attempt, which RL-47 says it is not.
-    assert report.infrastructure_fault is False
+    # ⚠ And the half that made it worse, now closed: a launch that RAISED is by
+    # definition a turn that did not happen, and `GooseAgent` reported it with
+    # `infrastructure_fault` false — so RL-47 broke too and the subtask spent an
+    # attempt proving that a tool could not be started.
+    assert report.infrastructure_fault is True
 
 
 def test_a_sandboxed_turn_does_not_inherit_the_shell(monkeypatch):
@@ -165,6 +167,76 @@ def test_a_sandboxed_turn_does_not_inherit_the_shell(monkeypatch):
     # ⚠ Nothing is lost by not inheriting: `env KEY=VAL cmd` ADDS to the
     # environment it was handed, so the sandbox's own PATH is still the turn's.
     assert "GITHUB_TOKEN" not in echoed and "JIRA_API_TOKEN" not in echoed
+
+
+# --- the sandbox vanishing mid-turn -----------------------------------------
+#
+# ⚠ A race rite must not tolerate, and the thing that causes it is rite itself:
+# `publishing/deliver.py` stops a Worker's sandbox FIRST, by design, so a
+# supervisor cycle that steps a subtask while a delivery is honoured is the
+# ordinary case. Measured against the real yoloai on a real stopped sandbox,
+# with the control below.
+
+
+def _completed(returncode: int, out: str = "", err: str = ""):
+    from subprocess import CompletedProcess
+
+    return CompletedProcess(
+        args=["yoloai"], returncode=returncode, stdout=out, stderr=err
+    )
+
+
+def test_a_sandbox_stopped_mid_turn_raises_rather_than_looking_like_a_turn(
+    monkeypatch,
+):
+    from rite_ai.local.in_sandbox import SandboxGone, exec_launcher
+
+    monkeypatch.setattr(
+        "rite_ai.local.in_sandbox.subprocess.run",
+        lambda *a, **k: _completed(1, err='sandbox "box": container is not running'),
+    )
+    monkeypatch.setattr(
+        "rite_ai.sandbox.sandbox_status_named",
+        lambda n: type("S", (), {"known": True, "__str__": lambda s: "stopped"})(),
+    )
+    with pytest.raises(SandboxGone, match="did not run"):
+        exec_launcher("box", binary="/bin/yoloai")(["goose"], "/ws", {})
+
+
+def test_a_failing_command_in_a_LIVE_sandbox_is_a_result(monkeypatch):
+    # The control, and it is the one that matters: yoloAI passes an inner
+    # command's exit code through unchanged (measured: `exit 3` arrives as 3),
+    # so a code alone cannot tell "goose exited 1" from "there is no sandbox".
+    # Without this, every failing turn would be misread as a race.
+    from rite_ai.local.in_sandbox import exec_launcher
+
+    monkeypatch.setattr(
+        "rite_ai.local.in_sandbox.subprocess.run",
+        lambda *a, **k: _completed(3, out="ran-inside"),
+    )
+    monkeypatch.setattr(
+        "rite_ai.sandbox.sandbox_status_named",
+        lambda n: type("S", (), {"known": True, "__str__": lambda s: "active"})(),
+    )
+    done = exec_launcher("box", binary="/bin/yoloai")(["goose"], "/ws", {})
+    assert done.returncode == 3
+    assert done.stdout == "ran-inside"
+
+
+def test_a_yoloai_that_cannot_be_asked_does_not_invent_a_race(monkeypatch):
+    # `known=False` is "I could not check", which is not "the sandbox is gone".
+    # Guessing it was would turn an unreadable yoloAI into a turn nobody ran.
+    from rite_ai.local.in_sandbox import exec_launcher
+
+    monkeypatch.setattr(
+        "rite_ai.local.in_sandbox.subprocess.run", lambda *a, **k: _completed(1)
+    )
+    monkeypatch.setattr(
+        "rite_ai.sandbox.sandbox_status_named",
+        lambda n: type("S", (), {"known": False, "__str__": lambda s: "unknown"})(),
+    )
+    done = exec_launcher("box", binary="/bin/yoloai")(["goose"], "/ws", {})
+    assert done.returncode == 1
 
 
 # --- the placement ----------------------------------------------------------
@@ -526,6 +598,62 @@ class TestAPlacedTurnNeverTouchesTheHostTree:
         assert step.worker == WORKER
         assert step.sandbox == "rite-p-gpu1"
         assert any("rite-p-gpu1" in line for line in step.lines)
+
+    def test_a_turn_that_never_RAN_does_not_spend_an_attempt(self, project):
+        """⚠ RL-47, through the property that decides it.
+
+        `Outcome.counts_as_attempt` had NO reader in `src/`: `step._record`
+        incremented unconditionally, so the rule it states — "work counts, and
+        a turn that never happened does not" — was not in force anywhere. The
+        cases that reach it are real and measured: a sandbox a delivery had
+        just stopped, and a launch rite's own leak guard refused.
+        """
+        from rite_ai.local.harness import AgentReport
+
+        class _CouldNotRun:
+            def run(self, context, workspace):
+                return AgentReport(
+                    claimed_success=False,
+                    summary="sandbox rite-p-gpu1 is stopped, so the turn did not run",
+                    infrastructure_fault=True,
+                )
+
+        state = _approved(project)
+        step = st.take_one_step(
+            project,
+            MANAGER,
+            TICKET,
+            state=state,
+            verifier=_Verifier(),
+            committer=_Committer(),
+            claims=_Claims(),
+            placement=Placement(**{**self.PLACED, "agent": _CouldNotRun()}),
+        )
+        assert step.ran is True
+        plan = dec.read(state, TICKET).plan
+        # The subtask is still untried, so a person or a retry gets to it.
+        assert plan.subtasks[0].attempts == 0
+
+    def test_work_that_FAILED_does_spend_one(self, project):
+        # The control: without it, the assertion above passes on a counter that
+        # never increments at all.
+        state = _approved(project)
+
+        class _Failing:
+            def run(self, command, workspace):
+                return VerifyResult(False, "the verify said no")
+
+        st.take_one_step(
+            project,
+            MANAGER,
+            TICKET,
+            state=state,
+            verifier=_Failing(),
+            committer=_Committer(),
+            claims=_Claims(),
+            placement=Placement(**{**self.PLACED, "agent": _Agent()}),
+        )
+        assert dec.read(state, TICKET).plan.subtasks[0].attempts == 1
 
     def test_a_placement_problem_stops_the_subtask(self, project):
         state = _approved(project)
