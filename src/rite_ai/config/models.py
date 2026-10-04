@@ -69,6 +69,25 @@ numbers. `push_to_shared` parses and is refused at start until v0.8.0 (PB2)."""
 
 
 @dataclass
+class ScopeConfig:
+    """The `scope:` block: the diff budget at delivery (SCRUM-65)."""
+
+    lines_per_item: int = 150
+    factor: float = 2.0
+    exclude: list[str] = field(
+        default_factory=lambda: [
+            "*.lock",
+            "*.sum",
+            "uv.lock",
+            "**/vendor/**",
+            "**/node_modules/**",
+            "**/*_generated.*",
+            "**/*.pb.go",
+        ]
+    )
+
+
+@dataclass
 class PublishConfig:
     """The project's `publish:` block (PB1, `V070_RELEASE_PLAN.md` Track PB).
 
@@ -581,6 +600,7 @@ class ProjectConfig:
     credentials: CredentialsConfig = field(default_factory=CredentialsConfig)
     expertise: list[ExpertiseEntry] = field(default_factory=list)
     publish_gate: PublishGateConfig = field(default_factory=PublishGateConfig)
+    scope: ScopeConfig = field(default_factory=ScopeConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
     pool: PoolConfig = field(default_factory=PoolConfig)

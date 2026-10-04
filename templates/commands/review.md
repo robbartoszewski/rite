@@ -70,7 +70,9 @@ For anything crossing a module boundary, also run `reviewer-seam`.
 Fix what round 1 finds. Record each finding in a delta register (one row:
 finding · which agent raised it · the class of defect · what changed ·
 evidence — a failing test, a killed mutant, or "not measurable here,
-because..."). Name the **class** of the defect before writing the fix, not
+because..."). **"what changed" may be a deletion**: `removed` and `not needed
+(no DoD item requires it)` are complete resolutions, and a finding resolved
+that way needs no further evidence than the DoD item it is absent from. Name the **class** of the defect before writing the fix, not
 just the specific instance the reviewer demonstrated — a fix spelled against
 the exact case shown closes that case and nothing else.
 

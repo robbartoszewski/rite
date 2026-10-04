@@ -38,6 +38,7 @@ It stays in the copy, which is never destroyed while it holds it.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -312,6 +313,7 @@ def _publish(
     # passing one path for both either scans a tree git cannot answer about
     # (🔴 SCRUM-60) or drops every suppression the project declared.
     rng = f"{module.branch}..{branch}"
+    _record_scope_budget(root, worker, module, ticket, project, rng, config)
     report = run_gate(project, rev_range=rng, config_root=root)
     if report.exit_code != EXIT_CLEAN:
         return no(
@@ -545,6 +547,78 @@ def _changed_key(then: dict, now: dict) -> tuple[str, str]:
 
             return said(then.get(key)), said(now.get(key))
     return "settings", "settings"
+
+
+def _record_scope_budget(
+    root: Path,
+    worker: str,
+    module: Module,
+    ticket: str,
+    project: Path,
+    rev_range: str,
+    config,
+) -> None:
+    """Measure the delivery's size and record it (SCRUM-65 part 2).
+
+    Shadow mode: nothing reads the verdict, so a HOLD cannot refuse a
+    delivery. A failure records the event with `unmeasured` set rather than
+    nothing, because an absent event is indistinguishable from a PASS and the
+    whole point is counting how often this would have held.
+    """
+    from rite_ai.publishing.scope_budget import Budget
+    from rite_ai.reporting import events
+
+    def record(budget) -> None:
+        events.record(
+            root,
+            "scope-budget",
+            worker=worker,
+            ticket=ticket,
+            module=module.name,
+            **budget.note(),
+        )
+
+    try:
+        from rite_ai.publishing.scope_budget import measure
+
+        scope = config.scope
+        dod_paths, items = _dod_scope(root, config, ticket)
+        if not dod_paths:
+            # No paths to judge against: every file would read as out of
+            # scope, which is a hold invented from an absent board read.
+            record(Budget(unmeasured=f"no definition-of-done paths for {ticket}"))
+            return
+        record(
+            measure(
+                project,
+                rev_range,
+                dod_paths=dod_paths,
+                exclude=list(scope.exclude),
+                items=items,
+                lines_per_item=scope.lines_per_item,
+                factor=scope.factor,
+            )
+        )
+    except Exception as e:  # noqa: BLE001 - a measurement must not fail a delivery
+        try:
+            record(Budget(unmeasured=f"{type(e).__name__}: {e}"))
+        except Exception:  # noqa: BLE001
+            return
+
+
+def _dod_scope(root: Path, config, ticket: str) -> tuple[set[str], int]:
+    """Paths the agreed definition of done names, and how many items it has."""
+    from rite_ai.refinement.status import of
+
+    record = of(root, config, ticket).record
+    if record is None:
+        return set(), 1
+    text = "\n".join(record.items)
+    # A path with a separator. A bare basename is deliberately not a path:
+    # `_in_scope` matches whole segments, so a basename could only ever match
+    # a file at the repository root.
+    found = {p.rstrip(".") for p in re.findall(r"[\w.-]+(?:/[\w.-]+)+", text)}
+    return found, max(1, len(record.items))
 
 
 def _release_claims(root: Path, worker: str) -> str:

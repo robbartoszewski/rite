@@ -44,6 +44,7 @@ from .models import (
     ScanPattern,
     ScheduleConfig,
     ScheduleWindow,
+    ScopeConfig,
     SlackConfig,
     SpecConfig,
     TicketBackendConfig,
@@ -174,6 +175,7 @@ _CONFIG_SECTIONS = {
     "ticket_backend": _fields(TicketBackendConfig),
     "credentials": _fields(CredentialsConfig),
     "publish_gate": _fields(PublishGateConfig),
+    "scope": _fields(ScopeConfig),
     "heartbeat": _fields(HeartbeatConfig),
     "watchdog": _fields(WatchdogConfig),
     "slack": _fields(SlackConfig),
@@ -726,6 +728,7 @@ def parse_config(path: Path) -> ProjectConfig | ParseError:
             if isinstance(pg_raw, dict)
             else DEFAULT_GITLEAKS_CONFIG,
         ),
+        scope=_scope(raw.get("scope")),
         heartbeat=heartbeat,
         watchdog=watchdog,
         slack=slack,
@@ -1090,6 +1093,19 @@ def parse_worker(path: Path) -> WorkerManifest | ParseError:
         agent=str(worker.get("agent", "")),
         context_window=int(worker.get("context_window", 0) or 0),
     )
+
+
+def _scope(raw) -> ScopeConfig:
+    if not isinstance(raw, dict):
+        return ScopeConfig()
+    out = ScopeConfig()
+    for key in ("lines_per_item", "factor"):
+        value = raw.get(key)
+        if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
+            setattr(out, key, type(getattr(out, key))(value))
+    if isinstance(raw.get("exclude"), list):
+        out.exclude = [str(x) for x in raw["exclude"]]
+    return out
 
 
 def load_project(root: Path) -> RiteProject | list[ParseError]:

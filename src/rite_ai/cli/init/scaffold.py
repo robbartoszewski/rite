@@ -204,6 +204,11 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "squash": config.publish.squash,
             "auto_merge": config.publish.auto_merge,
         },
+        "scope": {
+            "lines_per_item": config.scope.lines_per_item,
+            "factor": config.scope.factor,
+            "exclude": list(config.scope.exclude),
+        },
     }
     return yaml.safe_dump(
         data, sort_keys=False, default_flow_style=False, allow_unicode=True
