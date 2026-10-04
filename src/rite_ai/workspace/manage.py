@@ -1354,6 +1354,18 @@ host can see that. So until you run this, somebody is waiting with no sign
 their answer arrived, and after a couple of hours rite tells them it is
 UNREAD and to go and look at you. One command closes that.
 
+## Scope
+
+- The smallest diff that meets the agreed definition of done. A hunk no item
+  of it requires does not belong in this change.
+- A comment only where the reason is not obvious from the code, and one line.
+- Hardening the ticket did not ask for is a question to your Manager, not
+  code you write.
+- A defect you find next to your change is FILED, not fixed here. "It was
+  adjacent" is not a reason.
+- Where a module's own instructions push for more, the definition of done's
+  scope wins — and you say that you found the contradiction.
+
 ## What you must not do
 
 - Push directly to the root branch.

@@ -16,6 +16,10 @@ being right.
 
 - The delta register or fix summary from round 1 (finding → fix → evidence).
 - The diff of the fixes themselves.
+
+Report how much the fixes GREW the diff (files, added and removed lines). A
+fix that grew it must name the DoD item it serves; one that cannot is a
+finding.
 - The checklist(s) used in round 1, for continuity.
 
 Do **not** ask for round 1's transcripts or reasoning — that hands you round
