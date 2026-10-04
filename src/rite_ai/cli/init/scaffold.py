@@ -129,11 +129,6 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "slice_depth": config.spec.slice_depth,
             "refuse_above": config.spec.refuse_above,
         },
-        "scope": {
-            "lines_per_item": config.scope.lines_per_item,
-            "factor": config.scope.factor,
-            "exclude": list(config.scope.exclude),
-        },
         "heartbeat": {
             "interval_minutes": config.heartbeat.interval_minutes,
             "stall_threshold": config.heartbeat.stall_threshold,
@@ -208,6 +203,11 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "strategy": config.publish.strategy,
             "squash": config.publish.squash,
             "auto_merge": config.publish.auto_merge,
+        },
+        "scope": {
+            "lines_per_item": config.scope.lines_per_item,
+            "factor": config.scope.factor,
+            "exclude": list(config.scope.exclude),
         },
     }
     return yaml.safe_dump(

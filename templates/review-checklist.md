@@ -212,7 +212,7 @@ one.
 - [ ] No edits to files the definition of done does not need, including doc
       or help surfaces the change does not touch by name.
 
-### Other correctness
+### Correctness
 - [ ] Edge cases the diff touches are covered by a test that fails without
       the fix.
 - [ ] No behaviour silently reversed or removed without the ticket saying so.
