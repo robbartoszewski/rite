@@ -142,7 +142,11 @@ def test_every_command_added_since_the_last_tag_is_named_in_the_changelog():
 
     added = _commands_added_since(tag)
     if not added:
-        pytest.skip(f"no new commands since {tag} — nothing for this to check")
+        # Nothing added since the tag is a pass, not a skip. A skip in every
+        # job fails every-test-passes-somewhere whenever HEAD sits at or just
+        # past a release tag; reading nothing is guarded by
+        # test_the_check_can_actually_see_commands.
+        return
 
     section = _unreleased_section()
     # `rite loop status` verbatim, OR the group named AND the leaf word
@@ -178,8 +182,8 @@ def test_every_command_added_since_the_last_tag_is_named_in_the_changelog():
 
 def test_the_check_can_actually_see_commands():
     """The premise. If the decorator pattern stops matching how commands are
-    declared, the test above passes for ever while reading nothing — it
-    would skip on an empty `added` set and look like a clean run."""
+    declared, the test above passes for ever while reading nothing — an
+    empty `added` set is a pass there, so this is what notices."""
     tag = _latest_tag()
     if tag is None:
         pytest.skip("no v* tags")
