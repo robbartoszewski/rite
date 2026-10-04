@@ -4,7 +4,7 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static), v0.6.0 (16/29 static), v0.7.0a1 (16/29 static), v0.7.0a2 (16/29 static), v0.7.0a3 (16/29 static), v0.7.0a4 (16/29 static), v0.7.0a5 (16/29 static), v0.7.0a6 (16/29 static), v0.7.0a7 (16/29 static), v0.7.0a8 (16/29 static), v0.7.0a9 (17/32 static).
+From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static), v0.6.0 (16/29 static), v0.7.0a1 (16/29 static), v0.7.0a2 (16/29 static), v0.7.0a3 (16/29 static), v0.7.0a4 (16/29 static), v0.7.0a5 (16/29 static), v0.7.0a6 (16/29 static), v0.7.0a7 (16/29 static), v0.7.0a8 (16/29 static), v0.7.0a9 (18/33 static).
 """
 
 # ruff: noqa: E501 — these lines are the bytes a release wrote.
@@ -74,6 +74,11 @@ SECTIONS: dict[str, frozenset[str]] = {
         {
             "39a91d00d95d328b4347491dad923394a74c32826a47fb0d078658cdc24df91c",
             "d7f64324b9f923e9af3492e39562f04fe5ff8de644f51a5aec8ded9694b57de8",
+        }
+    ),
+    "Scope": frozenset(
+        {
+            "77558e82816e9940da5743f49a7afc4195678ea624fba79f1bf2ba04bdd37e8b",
         }
     ),
     "Ticket workflow": frozenset(
@@ -353,7 +358,7 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "their answer arrived, and after a couple of hours rite tells them it is",
             "UNREAD and to go and look at you. One command closes that.",
             "",
-            "<!-- rite:sha256=5813ef11bba6f6b0 -->",
+            "<!-- rite:sha256=31dca32b244f1331 -->",
         ),
     ),
     "When this ticket is done": (
