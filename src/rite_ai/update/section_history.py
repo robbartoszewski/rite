@@ -4,7 +4,7 @@ SHA-256 of each CLAUDE.md section every tagged release wrote identically
 for every project, so a file written before markers existed can still be
 shown to be rite's own rather than a user's edit.
 
-From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static), v0.6.0 (16/29 static), v0.7.0a1 (16/29 static), v0.7.0a2 (16/29 static), v0.7.0a3 (16/29 static), v0.7.0a4 (16/29 static), v0.7.0a5 (16/29 static), v0.7.0a6 (16/29 static), v0.7.0a7 (16/29 static), v0.7.0a8 (16/29 static).
+From: v0.1.0 (15/23 static), v0.2.0 (16/24 static), v0.3.0 (16/26 static), v0.4.0 (13/26 static), v0.5.0 (16/29 static), v0.5.1 (16/29 static), v0.6.0 (16/29 static), v0.7.0a1 (16/29 static), v0.7.0a2 (16/29 static), v0.7.0a3 (16/29 static), v0.7.0a4 (16/29 static), v0.7.0a5 (16/29 static), v0.7.0a6 (16/29 static), v0.7.0a7 (16/29 static), v0.7.0a8 (16/29 static), v0.7.0a9 (17/32 static).
 """
 
 # ruff: noqa: E501 — these lines are the bytes a release wrote.
@@ -27,9 +27,15 @@ RELEASES: tuple[str, ...] = (
     "v0.7.0a6",
     "v0.7.0a7",
     "v0.7.0a8",
+    "v0.7.0a9",
 )
 
 SECTIONS: dict[str, frozenset[str]] = {
+    "A Worker that has handed back has NOT stalled": frozenset(
+        {
+            "2da796b4b67504afd3ad8a157f5f4f7897962262284361632c9eaf7c23452a8c",
+        }
+    ),
     "Before anything else: read the handover snapshot": frozenset(
         {
             "ff9e0b7a9c92a2ab72b2bbf29e59f89a61a133a8bd5c4deea4efa9c221c36e5d",
@@ -39,6 +45,7 @@ SECTIONS: dict[str, frozenset[str]] = {
         {
             "329b2de6690d6cdc647e258d931a52c0e98b60d8b5d7f7d140b0d6b07c939abf",
             "86cf362d10c2b9f84cf20d3cd690aa781616b642ddffc42624b2fcf88d5f04dc",
+            "b84045e5e9e6dad17a65683c006b5772533e6de7292c9d05c81a23de0a9da74c",
         }
     ),
     "Commands": frozenset(
@@ -326,6 +333,63 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             4,
         ),
     ),
+    "When an answer comes back": (
+        (
+            "## When an answer comes back",
+            "",
+            "If you asked a question and an answer arrives, say that you read it, before",
+            "you act on it:",
+            "",
+            "```",
+            3,
+            "```",
+            "",
+            "The id is in the answer itself, under `question`, and the exact command is",
+            "there too under `acknowledge_with`.",
+            "",
+            "**Why this is not optional.** rite can tell the person it wrote their answer",
+            "where you poll for it. It cannot tell whether you opened it — nothing on the",
+            "host can see that. So until you run this, somebody is waiting with no sign",
+            "their answer arrived, and after a couple of hours rite tells them it is",
+            "UNREAD and to go and look at you. One command closes that.",
+            "",
+            "<!-- rite:sha256=5813ef11bba6f6b0 -->",
+        ),
+    ),
+    "When this ticket is done": (
+        (
+            "## When this ticket is done",
+            "",
+            "Hand it back by RUNNING this as a tool call — writing it in your answer does",
+            "nothing, and it is the only thing that tells your Manager you have finished:",
+            "",
+            "```",
+            3,
+            "  --summary-file <path to a file holding what you did>",
+            "```",
+            "",
+            "⚠ Put the text in a FILE and name it, never in double quotes on the command line: there the shell runs anything in backticks or $( ) before rite sees it, and text you quote from a ticket, an issue or another Manager can contain them. This is the same reason your commit message goes in a file (`git commit -F`).",
+            "",
+            "⚠ **Do not try to message your Manager instead.** A Manager's inbox is",
+            "outside this project and your sandbox cannot write it, so `rite message`",
+            "and `rite reply` are both refused from here — anything in that inbox is",
+            "delivered as the User's own instruction, which is not yours to send.",
+            "Writing a file of your own somewhere and hoping it is read is not a",
+            "handback either: nothing reads it. `rite done` is the channel.",
+            "",
+            "This is also what stops you being reported STALLED. Until you run it, your",
+            "silence is indistinguishable from having died mid-ticket, and the watchdog",
+            "will have somebody woken up and your work restarted. After it, your silence",
+            "is expected and `rite status` says you are free.",
+            "",
+            "Then stop. Do not start another ticket on your own: your Manager holds the",
+            "board and the capacity, and two Workers picking their own next ticket is how",
+            "the same path gets claimed twice. If nothing comes back, say you are stopping",
+            "because you were not given more, rather than going quiet.",
+            "",
+            3,
+        ),
+    ),
     "Where this project is, and what to do next": (
         (
             "## Where this project is, and what to do next",
@@ -410,6 +474,60 @@ PATTERNS: dict[str, tuple[tuple[str | int, ...], ...]] = {
             "   Worker changing the same paths first.",
             "",
             "<!-- rite:sha256=6fb2f4a2a49f2514 -->",
+        ),
+        (
+            "## Workflow",
+            "",
+            3,
+            "   repos, right branches, no residue from a previous task (SPEC §2.1). A",
+            "   dirty tree blocks and is never discarded. In a sandbox, `rite sandbox",
+            "   start` already ran it before your session began, and it cannot run from",
+            "   inside: skip it.",
+            "2. Claim paths before touching them:",
+            3,
+            "   directories, never a whole module. If the claim is refused, another",
+            "   worker holds an overlapping path: do not work on those paths, and do not",
+            "   claim a narrower or wider path to get around the refusal. If `rite claim`",
+            "   fails any other way (an error, not a refusal), you hold nothing: say so",
+            "   and stop rather than working unclaimed.",
+            "3. While you hold a claim, beat every ten minutes or so:",
+            3,
+            "   liveness record `rite status` and the watchdog read — a worker that never",
+            "   beats is reported STALLED.",
+            "4. Work the ticket on its own branch: if a module is on its default branch,",
+            "   create one named for the ticket first (`git checkout -b <ticket-id>`).",
+            "   Commit as you go, not only at the end: a session can stop at any moment,",
+            "   and an uncommitted change is the one thing nothing collects. **Whether you",
+            "   push is not yours to decide**: `TICKET.md`, under **Publishing**, says for",
+            "   each module whether to push the branch or only commit it, as the project",
+            "   was configured when you started. Under `commit` you never push; rite",
+            "   brings your commits out of the sandbox itself.",
+            "5. Run the module's own **test and lint** commands. `rite prepare` prints",
+            "   them every time it runs, resolved at that moment — those are the ones to",
+            "   use. **Module commands** above lists them as `Test:` and `Lint:` as of",
+            "   when this Worker was created, and the module map in the",
+            "   project root's `CLAUDE.md` has them as of `rite init`; a command recorded",
+            "   in `modules.yaml` since then appears only in `rite prepare`'s output. In a",
+            "   sandbox `rite prepare` ran before you started and you cannot see its",
+            "   output, so use **Module commands** above. Run",
+            '   them as written; where an entry says "not detected", ask rather than',
+            "   inventing a command, because one that is wrong in a way that still exits",
+            "   0 looks exactly like a passing suite.",
+            "6. Verify your own fix before review. A green suite says the project still",
+            "   works, not that your change does anything — delete the fix and re-run",
+            "   whatever proves it.",
+            "7. Run `/review` (the review convention from the project root).",
+            "8. Do with your final commits what **Publishing** in `TICKET.md` says:",
+            "   commit them, and push and open a pull request only where it says so.",
+            "   **Never merge a pull request yourself.** Merging after checks is the",
+            "   User's decision, or rite's own step that checks the green is on exactly",
+            "   the commit being merged.",
+            "9. Leave your claim held, and do not release it yourself: it is released",
+            "   when your work lands, which is when it is delivered under `commit`, and",
+            "   after the merge otherwise. Holding it until then is what stops another",
+            "   Worker changing the same paths first.",
+            "",
+            3,
         ),
         (
             "## Workflow",
