@@ -609,12 +609,14 @@ Don't share, record or screenshot a terminal attached with `yoloai attach`.
 
 ### The next ticket
 
-A worker's sandbox is started once per ticket. Its instructions take it
-through the PR, the merge and `rite release`, so it has finished when
-`rite status` no longer lists its claims. Then `rite sandbox destroy alpha`, and
-start it again with the next ticket; starting it while the old sandbox still
-exists is refused. If its session ends before the merge, merge the PR yourself
-and run `rite release --worker alpha`.
+A worker's sandbox is started once per ticket. The worker commits on its
+ticket's branch and never merges. When it reports done, `rite deliver alpha`
+brings the branch out, pushes it under the project's `publish.strategy` (a
+draft pull request on a repository you own, where the strategy says so) and
+removes the sandbox; then start it again with the next ticket. Starting it
+while the old sandbox still exists is refused. Its claim is released when the
+work lands: on delivery under `commit`, after the merge otherwise. If you
+merge by hand and the claim stays, `rite release --worker alpha` drops it.
 `rite sandbox status alpha` reports whether the sandbox is running, not whether
 the ticket is done.
 
@@ -1279,32 +1281,33 @@ otherwise:
 - **Claude-first, with named exceptions.** `CLAUDE.md`, `.claude/agents/`,
   and Claude Code sessions are first-class concepts here, not hidden behind
   a provider abstraction. The exceptions are added one tool at a time: from
-  0.6.0 a Manager can run on a local model through Goose, and a Cursor
-  adapter is planned for 0.7.0. A general abstraction layer is not planned:
+  0.6.0 a Manager can run on a local model through Goose, and from 0.7.0 a
+  Worker can too, with Ollama end to end. Cursor is not supported in 0.7.0:
+  the config refuses `engine: cursor`. A general abstraction layer is not planned:
   it would weaken every integration point to the lowest common denominator.
 - **The loop watches; it does not work the queue yet.** `rite loop` reads the
   board, your workers and the schedule every couple of minutes and tells you
-  what it would do. It starts nothing. Two layers would close that, and
-  neither is wired: dispatching to a local-model tier, whose pieces exist in
-  the code — a decomposition record, a duty router, a verify runner, a
-  committer — with nothing calling them and no command to drive them; and
-  dispatching Claude sessions, which spends quota unattended and is a
-  decision rather than a task. So the
-  loop closes the "nobody noticed the queue stalled" gap and not the "nobody
-  is doing the work" one.
-- **A claim whose holder died is reported, never released.** rite can tell
+  what it would do. It starts nothing, and starting Claude sessions from
+  anything scheduled stays a decision rather than a task, because it spends
+  quota unattended. The work is done by `rite start <manager>`, in your
+  foreground terminal, and on the local tier by `rite local decompose`,
+  `approve` and `step`, which a Manager started that way drives itself. So
+  the loop closes the "nobody noticed the queue stalled" gap, and `rite
+  start` is what does the work.
+- **A claim whose holder died is not released on a guess.** rite can tell
   that a worker has gone quiet; it cannot tell a crashed session from one
   thinking hard, and releasing a path under a live worker is worse than
-  leaving a stale claim. So it names the claim, the holder, and the command —
-  and waits for you. The same applies to leftover sandboxes: `rite doctor`
+  leaving a stale claim. A running Manager recovers a stalled worker: it
+  restarts the session in place while the sandbox is there, or returns the
+  ticket to the board when the sandbox is gone, and never acts on "could not
+  tell". Otherwise rite names the claim, the holder and the command, and
+  waits for you. The same applies to leftover sandboxes: `rite doctor`
   lists them and says which hold unapplied changes, and destroys nothing.
-- **Nothing notices a rejected `git push`.** rite's own code never pushes; a
-  Worker's push is plain `git` inside its sandbox, and rite does not classify,
-  retry, or report the result. If a branch-protection rule starts refusing
-  pushes, the Worker's behaviour is whatever that session decides and rite
-  will not tell you. Scope any such rule to your default branch: blocking
-  feature-branch pushes means work exists only inside a sandbox that is later
-  destroyed.
+- **A rejected push is reported, not retried.** `rite deliver` pushes a
+  Worker's branch from your machine, never with `--force` and never after a
+  rebase, and when the remote refuses it rite says why and what to do, and
+  delivers nothing for that module. If you add branch protection, scope it to
+  your default branch, or deliveries to feature branches are refused.
 - **Burn-rate reporting is account-wide, not per-project.** It reads your
   own `~/.claude/projects/` transcripts across every project on the
   machine — because that's how Anthropic's weekly quota actually works —

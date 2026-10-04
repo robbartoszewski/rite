@@ -2,7 +2,8 @@
 
 > **Set it running in the evening, review it in the morning — the rite way.**
 
-`rite` runs many Claude Code sessions against one codebase without them
+`rite` runs many coding-agent sessions (Claude Code, or a local model through
+Goose and Ollama) against one codebase without them
 colliding: each works as a named *worker* and claims the files it is about to
 touch, and the second worker to claim the same ones is refused.
 
@@ -23,14 +24,20 @@ sessions to claim and who to ask.
   (macOS's `sandbox-exec`) through [yoloAI](https://yoloai.dev), which `rite
   init` offers to install. A session you open yourself is not sandboxed.
   Inside the sandbox, outbound network is not restricted and Claude Code skips
-  permission prompts. Every worker gets the project's GitHub credential and
-  its engine's own login, and nothing else; `rite add worker --scoped-token`
-  gives one its own GitHub token in place of the shared one. How well one
+  permission prompts. A worker gets its engine's own login (a Claude worker
+  its Claude token, a local-model worker none) and nothing else: it holds no
+  GitHub token, because rite pushes and opens the pull request on your
+  machine (`rite deliver`). `rite add worker --scoped-token` gives rite a
+  token for that worker's pushes in place of the project's. ⚠ **A worker can
+  currently escape its sandbox** through a tmux server running outside it: the
+  fix belongs in yoloAI's profile and is not yet released (see the
+  [changelog](CHANGELOG.md)). Until it is, treat every worker as able to act
+  as you. How well one
   sandbox's process environment is kept from other processes running as you
   depends on the sandbox provider, and is being addressed upstream. On other platforms `rite init` leaves sandboxing off. On
   Docker, a dogfood run found file locking does not lock, so two workers can
   be granted the same path: run one worker there.
-- **101 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
+- **115 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
   answers and the reasoning.
 
 **If you run one session at a time you do not need this.** Several machines
@@ -74,7 +81,7 @@ You write the design, or you already have one. `rite init` looks for
 
 On a spec too large to read whole, `rite spec index` turns it into addressable
 units and `rite spec slice 5.3` prints just that section, what it cites and the
-sections everything depends on — about 3% of rite's own 7,100-line spec. It
+sections everything depends on — a small part of rite's own 8,800-line spec. It
 refuses specs a slice cannot help: a short or densely interlinked document is
 cheaper read whole. When a slice was not enough, `rite handover write
 --spec-fallback 5.3` records it, and `rite spec status` reports how often that
@@ -88,7 +95,8 @@ whether the spec still describes what you built. A sandboxed worker cannot read
 files at the project root, so it sees a spec only when the spec lives inside a
 module; keep one it should read in a module's repository.
 
-**2. Plan** — yours; rite has no planning step
+**2. Plan** — yours; on the local tier `rite local decompose` splits one
+ticket into subtasks, but ordering the work is yours
 
 You decide what gets built first and what can run side by side, usually by
 talking it through in your Dispatch session. The tickets you write next, and
@@ -104,6 +112,10 @@ your board (JIRA or GitHub Issues) for a duplicate first, and implements
 nothing. If the ticket is not on your board yet, file it from a terminal. On
 JIRA, record what blocks what as a link; GitHub Issues has no link type rite
 can set.
+
+A Worker starts only on a ticket rite reports REFINED. Agree its definition
+of done with `/refine`, in Slack, or on the host with `rite refine accept
+<ID> --item "…"`, and check it with `rite refine status <ID>`.
 
 ```bash
 rite board create "Export invoices as CSV" --description "<what /refine drafted>"
@@ -123,7 +135,8 @@ Open a worker session in `workers/alpha/` and tell it which ticket to work —
 sync its clones, `rite claim` on the paths before touching them, your
 project's own test and lint commands, `/review` (reviewer agents against a
 checklist), a PR, `rite done` to hand the finished work back to its Manager,
-and `rite release` after the merge.
+and its commits on the ticket's branch. It never merges: you deliver its work
+with `rite deliver`, and its claim is released when the work lands.
 
 `rite done` is how a worker says it has finished. It matters more than it
 sounds: a worker cannot write a Manager's inbox — anything there is delivered
@@ -148,10 +161,9 @@ rite credential set github    # a token with Contents and Pull requests read/wri
 ```
 
 and install GitHub's `gh` CLI: rite pushes and opens the pull request with
-that token on your machine (`rite deliver`), and the worker never holds it. A commit pushed from inside a sandbox this way has been
-measured reaching GitHub. Sandboxed pushes run the repository's own hooks,
-never your global ones, so a global pre-push hook such as a secret scan does
-not run there. `rite doctor`
+that token on your machine (`rite deliver`), and the worker never holds it.
+Pushes happen on your machine, so your own git hooks and rite's publish gate
+run on them. `rite doctor`
 reports a missing Claude login, or a missing GitHub token, as a problem, and
 `rite sandbox start` refuses to start a worker that could not push its work:
 no GitHub token, no `gh`, or a token GitHub says cannot push to the
@@ -190,15 +202,16 @@ left to look delivered. That session's first screen shows the credentials
 passed in, in plain text, so don't share or record it; `rite sandbox pane`
 shows it with them redacted.
 
-The worker edits a copy of its workspace that is discarded with the sandbox,
-so its work survives only as a pushed branch. Its `CLAUDE.md` tells it to push
-after every commit; anything it has not pushed is gone with the sandbox, and
-`rite sandbox destroy` refuses while its copy holds such work. A module whose origin
-is a local directory rather than a URL cannot be pushed from a sandbox. Its
-`CLAUDE.md` takes it through the PR, the merge and `rite release`, so it has
-finished when `rite status` no longer lists its claims; then
-`rite sandbox destroy alpha`. If its session ends before that, merge the PR
-yourself and run `rite release --worker alpha`.
+The worker edits a copy of its workspace that is discarded with the sandbox.
+It commits on its ticket's branch, pushes only where the ticket's
+**Publishing** section says so, and never merges. When it reports done, run
+`rite deliver alpha`: rite brings the branch out of the sandbox, pushes it
+under the project's `publish.strategy`, opens a draft pull request on a
+repository you own where the strategy says so, and removes the sandbox.
+Uncommitted work is refused, never committed for the worker, and `rite
+sandbox destroy` refuses while the copy holds work nothing has collected.
+Merging is yours (or rite's gated `auto_merge`, if you turned it on), and the
+worker's claim is released when the work lands.
 [Starting a sandboxed worker](docs/guide.md#starting-a-sandboxed-worker) has
 the rest.
 
@@ -276,7 +289,7 @@ coordination:
 ```bash
 claude setup-token                 # a Claude Manager needs a token of its own
 rite credential set claude         # paste it
-rite start lead --sessions 3 --minutes 90
+rite start lead                    # runs until Ctrl-C; --sessions N --minutes M together bound it
 ```
 
 A Manager's git uses your global config, from inside its sandbox. If you
@@ -284,7 +297,7 @@ sign commits, rite turns signing off for the Manager's commits and says so.
 A global `core.hooksPath` is not bypassed: the Manager's commits and pushes
 fail on its hooks until you opt in, and `rite doctor` gives the one-line fix and what it costs.
 
-A Claude Owner with a local secondary, the setup this release is for (one
+A Claude Owner with a local secondary (Workers can run a local model too; one
 machine, one project root):
 
 ```yaml
@@ -315,7 +328,7 @@ to check too. The checker is also a model and can be wrong. The
 ## Install
 
 **Not on PyPI yet.** Needs `uv` or `pipx`, `git`, Python 3.11+, and a
-signed-in Claude Code. rite hands sessions your environment, so an exported
+signed-in Claude Code unless every Manager and Worker runs a local model. rite hands sessions your environment, so an exported
 `ANTHROPIC_API_KEY` is inherited — which Claude Code [bills per token rather
 than to your subscription](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan).
 Unset it to run on your plan. Sandboxed workers need a little more: a Claude
@@ -326,7 +339,7 @@ installed anywhere else in your home directory, such as a project virtualenv,
 cannot run inside a sandbox.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh | sh
 ```
 
 *That is a `curl | sh` for a tool that scans your repo for secrets, so two
@@ -352,9 +365,17 @@ worker receives a newer one — so notes of your own belong in
 `.rite/spec-notes.md`, which rite never generates and never rewrites.
 `rite doctor` says whether a project is behind.
 
-From 0.5.1, also run `rite credential import-keychain` once: 0.6.0 keeps
-credentials in a 0600 file and no longer reads the keychain. The
-[changelog](CHANGELOG.md) lists every step.
+**From 0.6.0:** re-run the installer from the v0.7.0 URL above (`rite
+update` upgrades from the tag you installed, so it will not move you to a new
+release), then in each project run `rite update --files-only`. Before the
+first `rite start`, stop any running Manager: that start moves each Manager's
+state out of `.rite/managers/` once, and refuses while one runs (the journal
+leaves the project too; `rite journal export` copies entries in to commit).
+Workers no longer start on unrefined tickets, so refine the ones you want
+worked (`rite refine accept`). A Manager's text for `rite reply`, `rite ask`
+and `rite route` now comes on stdin (`-`). From 0.5.1, also run `rite
+credential import-keychain` once: credentials live in a 0600 file and the
+keychain is no longer read. The [changelog](CHANGELOG.md) lists every step.
 
 ## Planned — not built
 
@@ -362,22 +383,15 @@ What follows is what is genuinely not built, checked against the code.
 
 - **The loop works the queue.** `rite loop` watches it and says why it is
   stopped — it prints the Worker it would start and does not start one.
-  Two ways to close that. Dispatching mechanical subtasks to local models is
-  wired as of 0.7.0: `rite local decompose`, `rite local approve` and `rite
-  local step` run one, assignment routes duties through the local duty
-  router, and `rite doctor` probes a configured `local:<class>` endpoint
-  rather than assuming it. A plan has to be approved before anything runs
-  from it, and rite does not write plans — you write the decomposition and
-  approve it.
-  Dispatching Claude sessions
-  **unattended** remains forbidden by SPEC §9.12, on purpose, because it
-  spends your quota while nobody is watching. *Attended* dispatch arrived in
-  0.5.1 as `rite start <manager>`, which keeps a Manager session going in
-  your own foreground terminal under two ceilings you typed — so the gap is
-  now narrower than this section used to claim, and it is the loop that
-  still starts nothing. So the loop closes
-  *"nobody noticed the queue had stalled"* and not *"nobody is doing the
-  work"*.
+  Dispatching Claude sessions from anything **scheduled** remains forbidden by
+  SPEC §9.12, on purpose, because it spends your quota while nobody is
+  watching. The work itself is dispatched by `rite start <manager>`, in your
+  own foreground terminal until Ctrl-C (or within `--sessions` and
+  `--minutes` if you give both), and on the local tier by `rite local
+  decompose`, `approve` and `step`, which a Manager started with `rite start`
+  drives itself. It is the loop that still starts nothing: it closes
+  *"nobody noticed the queue had stalled"*, and `rite start` is what does
+  the work.
 - **Questions routed to whoever owns the area.** What is built: you list
   people and their areas in the project config, and that table is printed
   into the Owner's instructions — a heading and a list of names against
@@ -387,17 +401,17 @@ What follows is what is genuinely not built, checked against the code.
   the present tense and describes that mechanism. So today the table is
   reference material a session may or may not act on, which is less than
   either "built" or "not built" suggests.
-- **Nothing notices a rejected push of a Worker's work.** (`rite doctor` does
-  probe whether the coordination remote accepts a push, by pushing and
-  deleting a throwaway branch — a different thing.) Practical consequence,
-  since this
-  is the moment people turn on branch protection: scope the rule to your
-  default branch. Blocking pushes to feature branches means a Worker's work
-  exists only inside a sandbox that is later destroyed.
+- **A rejected push is reported, not retried.** `rite deliver` pushes a
+  Worker's branch from your machine, never with `--force`, and when the
+  remote refuses it rite says why and delivers nothing for that module. If
+  you turn on branch protection, scope the rule to your default branch, or
+  deliveries to feature branches are refused.
 
 **Built since this list last claimed otherwise:** several machines on one
 project, with Owner election and failover (0.4.0 — see [the
-guide](docs/guide.md)); watching the queue (0.5.0, above).
+guide](docs/guide.md)); watching the queue (0.5.0, above); a Manager that runs
+until you stop it, ticket refinement, `rite deliver`, and the local tier
+running subtasks (0.7.0).
 
 ## Why you might not want it
 
@@ -437,10 +451,11 @@ So treat a Manager as having your own file and network access, because a
 determined one does. `git` runs hooks, `python -c` runs anything, and the
 network is not confined at all — seatbelt has no network isolation. **What
 the profile buys is that a mistake stays inside the project**, which is
-worth having and is not the same as containment. On macOS, Workers are
-bounded more tightly: they run in their own sandbox with no tmux server
-outside it to reach through. **On Linux, Workers are not sandboxed by
-default.**
+worth having and is not the same as containment. ⚠ **On macOS a Worker's
+sandbox is escapable today:** a command handed to a tmux server outside it
+runs as you. The fix is yoloAI's and has not been released; until it is,
+treat every Worker as able to act as you (see the changelog). **On Linux,
+Workers are not sandboxed by default.**
 
 To change the list, edit your own `.claude/settings.json` — add to
 `permissions.allow` to widen it, or `permissions.deny` to narrow it. rite
@@ -451,32 +466,37 @@ that is not a trade you want on a given machine, do not run
 `rite start <manager>` there — Workers, the loop and everything else are
 unaffected.
 
-**It runs on Pro; what it is *for* may not.** Starting a worker needs no more
+**It runs on Pro; what it is *for* may not.** Starting a Claude worker needs no more
 than a signed-in Claude Code, plus a token from `claude setup-token` if it
 runs sandboxed. But rite neither meters nor throttles — workers
 spend your Claude Code quota in parallel, so N of them burn it at roughly N
 times one session's rate, against a quota [shared with Claude on a rolling
 window](https://support.claude.com/en/articles/14552983-models-usage-and-limits-in-claude-code).
 The plan you need scales with how many workers you run and for how long; Pro
-exhausts sooner than Max. Nor does it end gracefully: rite does not read a
-worker session's exit status, so a worker that runs out stops where it stands, claim
-still held until you `rite release` it.
+exhausts sooner than Max. Nor does it end gracefully: a worker that runs out
+stops where it stands. A running Manager restarts it in place, or returns its
+ticket to the board if its sandbox is gone, and after a few tries falls back
+to reporting it STALLED; with no Manager running, its claim stays held until
+you `rite release` it.
 
-**Nothing opens a session unless you are there.** rite sets up the workspace
-and the config; starting Claude is your explicit action — opening a session,
-typing `rite sandbox start`, or `rite start <manager>`. This is still true
-with `rite loop` running: the loop watches the queue and reports, and the
-Worker it says it would start is one you start. Nothing rite runs
-*unattended* opens a Claude session, because anything scheduled that could
-would be spending your quota with nobody watching.
+**Nothing scheduled starts a session.** rite sets up the workspace and the
+config; starting Claude is your explicit action — opening a session, typing
+`rite sandbox start`, or `rite start <manager>`. `rite loop` watches the queue
+and reports, and the Worker it says it would start is one you start. Cron or
+launchd runs only `rite scheduler-tick`, which checks liveness and hands over
+at a window boundary, and starts no session.
 
-`rite start <manager>` starts a Manager session and starts the next one when the last finishes cleanly — so it opens
-sessions you did not individually type. What keeps the promise above true is
-that it runs in the **foreground**, in your own terminal: it is your process,
-you can attach to the session and watch it, and Ctrl-C ends the run. With no
-flags it runs until you stop it; give `--sessions` (how many) and `--minutes`
-(how long) together to bound the whole run instead. Nothing about it is
-scheduled and nothing survives your shell.
+`rite start <manager>` is different, and says so: it is your foreground
+process, in your own terminal, but **it keeps starting sessions while you are
+away until you press Ctrl-C**. With no flags it runs until you stop it,
+waiting while there is nothing to do, spending nothing, with no Manager
+session running. It starts one for an event: your message, a Slack message, a
+Worker's or another Manager's mail, new ready work, a freed Worker slot, the
+schedule opening. It also starts one as an hourly heartbeat, except in a closed
+schedule window. It starts the Workers its Manager asks for, queued until a
+slot frees, and restarts a stalled one. Give `--sessions` (how many) and
+`--minutes` (how long) together to bound the whole run instead. You can attach
+to any session and watch it. Workers it started keep running after it stops.
 
 **A lone Manager needs a ticket backend to run more than once.** With no board configured, `rite start` runs one session to help you set one
 up. A lone Manager does not start another, whatever `--sessions` says. Where
@@ -491,9 +511,10 @@ working from the old board. Nothing to continue is not an error: a first run, or
 provider has forgotten, starts fresh and says which.
 
 **No gates on your code.** Your sessions run your tests and linters — that is
-what rite tells them to do — but rite does not read the results, so there is
-no coverage threshold, no accessibility pass, and no opinion on your test
-strategy.
+what rite tells them to do — but rite does not read their results, except on
+the local tier, where `rite local step` runs a subtask's Verify itself and
+accepts the subtask only on that result. So there is no coverage threshold,
+no accessibility pass, and no opinion on your test strategy.
 
 **A local Manager must declare its context window.** Ollama serves every
 model at 4096 tokens by default, which is smaller than an agent's own system
@@ -504,26 +525,24 @@ than like a setting. So rite refuses a local Manager with no
 window into the model it runs; `rite doctor` says which window each Manager
 gets. See the guide.
 
-**A Manager runs on Claude Code, or on Goose for a local model.**
-`CLAUDE.md` and `.claude/agents/` are first-class here rather than behind a
-provider abstraction. The local model tier for Workers (`local:<class>`) runs
-a subtask on your own GPU as of 0.7.0: `rite local step` gives a Worker one
-subtask and the slice of the spec it cites, runs the subtask's verify itself,
-and commits the result itself — a model's claim that it finished is kept as a
-note and never decides anything.
+**Managers and Workers run on Claude Code, or on a local model through Goose
+and Ollama** (`engine: local:<class>`). `CLAUDE.md` and `.claude/agents/` are
+first-class here rather than behind a provider abstraction. A Claude Worker
+can run beside a local one, and an all-local fleet can deliver its own work.
 
-⚠ **What is deferred to 0.7.1:** that turn taken *inside a sandbox*. It runs
-from a Worker's workspace today. The sandboxed version is gated on a yoloAI
-profile fix (a Worker sandbox is escapable through a tmux server started
-outside it; the fix is upstream, and a written patch is not a fix).
+⚠ **What is deferred to 0.7.1:** a GPU Worker's turn taken *inside a
+sandbox*. `rite local step` runs a subtask from a Worker's workspace today;
+the sandboxed version is gated on a yoloAI profile fix (a Worker sandbox is
+escapable through a tmux server started outside it — see the warning in
+CHANGELOG 0.7.0 — and a written patch is not a fix).
 
 Other tools are added one at a time rather than behind a general
-abstraction. A Cursor adapter is **not** in 0.7.0: `engine: cursor` is
-refused by the config, which names the three it does know.
+abstraction. Cursor is not supported in 0.7.0: the config refuses `engine:
+cursor`.
 
-**Workers are interchangeable, so there is no capability routing.** Every
-worker holds the same project-scoped credentials, so assignment picks
-whichever is free rather than whichever *can*.
+**Workers on the same engine are interchangeable, so there is no capability
+routing.** Assignment picks whichever is free rather than whichever is best
+suited.
 
 **Platforms.** Built and tested on **macOS 26.2**. One step there has not
 yet run end to end: a sandboxed worker taking a ticket all the way through

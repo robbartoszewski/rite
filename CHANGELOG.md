@@ -1,28 +1,93 @@
 # Changelog
 
-## 0.7.0 (2026-10-04)
+## 0.7.0 (2026-10-03) — a single machine, feature-complete
 
-**0.7.0 in one paragraph.** A Manager runs until you stop it, recovers a
-stalled Worker by itself, and can give a ticket to a Worker running a local
-model on your own GPU alongside Claude Workers. A Worker can now tell its
-Manager it has finished — there was no command for that before, and a Worker
-that finished fell silent and was reported as stalled. Your answer to a
-Worker's question reaches the Worker, and you can see it did: rite puts 👀 on
-your message when it picks it up, and a ✅ when the Worker says it read the
-answer. A Manager's answer to you arrives in your DM, under the message you
-asked in, rather than in the day's notes. The publish gate runs from a
-project whose root is not a repository, and says what it scanned.
+The first release since 0.6.0. It gathers everything from 0.7.0a1 to 0.7.0a6,
+which each have their own section below with the detail, plus what was tagged
+as 0.7.0a7 and 0.7.0a8 (plain tags with no section of their own), described in
+the sections directly under this one.
 
-**Platforms.** Everything here runs on macOS. The Linux suite runs in Docker
-against a matched baseline; the sandboxed Worker paths are exercised on macOS
-seatbelt.
+**What is new since 0.6.0, in one place:**
 
-⚠ **What is NOT in it.** A GPU Worker's turn inside a sandbox is gated on a
-yoloAI profile fix (DF16) and is deferred to 0.7.1: the local tier runs a
-subtask from a Worker's workspace, and the live sandboxed turn is not claimed
-here. The dogfood that produced these fixes has not been re-run against this
-build.
+- **A Manager runs until you stop it.** `rite start lead` needs no
+  `--sessions` and `--minutes`. It waits, spending nothing, and starts a
+  session only for an event (your message, Slack, a Worker's or another
+  Manager's mail, new work, a freed Worker slot, the schedule opening), plus a
+  heartbeat once an hour, never in a closed window.
+- **Ticket refinement.** A Worker starts only on a ticket whose definition of
+  done you agreed, refined with you in Slack or at the terminal.
+- **Publishing.** `rite deliver` brings a finished ticket home: a commit, a
+  push, a pull request opened only as a draft on your own repository, an
+  optional squash, and an opt-in `auto_merge` gated on a green check.
+- **Local models.** Managers and Workers can run on a local model through
+  Goose and Ollama. A local Manager decomposes a ticket into subtasks that a
+  different model reviews, and works them one step at a time (`rite local
+  decompose`, `approve`, `step`). An all-Ollama fleet works end to end.
+- **Worker safety.** No GitHub token and none of your own Claude settings in a
+  Worker's sandbox, no Manager text run as shell, every Worker commit credited,
+  a stalled Worker recovered by itself, and leaked self-test sandboxes cleaned
+  up.
+- **A Worker can say it has finished, and is not restarted for it.** There
+  was no command for that: a Worker cannot write a Manager's inbox, so one
+  that finished went quiet, and going quiet is indistinguishable from having
+  died mid-ticket. `rite done` hands the work back, and a Worker that has
+  handed back is reported as free rather than stalled (SCRUM-57, SCRUM-58).
+- **You can see your answer arrived.** rite puts 👀 on your message when it
+  picks it up (SCRUM-35), and a ✅ when the Worker says it read the answer
+  (`rite ack`, SCRUM-61) — which means the Worker said so, not that rite
+  watched it read it. An answer nobody acknowledges is reported back to you
+  as unread rather than left looking delivered.
+- **A Manager's answer arrives where you asked.** A reply to your own message
+  lands in your DM, under it, instead of in the day's notes thread whose own
+  first line says nothing there needs you (SCRUM-56).
+- **Your answer reaches the Worker that asked.** A reply in a Worker's
+  question thread is carried into the Worker, even when it wakes the Manager
+  first, and a reply to an earlier question is delivered too (SCRUM-52).
+- **A tighter Manager sandbox.** It reaches one named macOS system service
+  instead of all of them (so not your clipboard), no longer gets `/tmp`
+  whole, and can no longer rewrite its own permission allowlist (SB5, SB8,
+  SB10).
+- **Local units get standing instructions.** Goose reads `AGENTS.md`, not
+  `CLAUDE.md`, so a local Manager or Worker now gets both, from the same
+  generated text (SCRUM-49).
+- **Setup and diagnosis.** `rite init` finishes what it starts and offers a
+  Manager, `rite credential set` guides each credential, and `rite doctor
+  --network` checks what only a live call can, while plain `rite doctor` no
+  longer posts in your Slack DM to check it (RS3). Credentials, the publish
+  gate and the status channel all say what is true.
 
+**What changes for you coming from 0.6.0** (each is explained in its section):
+
+- Workers no longer merge: `rite deliver` does it.
+- A Manager's text goes on stdin: `rite reply`, `rite ask` and `rite route`
+  take `-`.
+- Workers start only on a ticket with an agreed definition of done.
+- A Manager's own state has left the project. The first `rite start` moves it,
+  once, and refuses while another Manager is running.
+- `rite reply` refuses a question, and `rite ask` is for anything that needs
+  you.
+- Starts and stops go to a status channel, not your DM.
+
+**Upgrading does not update a project's files.** `rite update --files-only
+--dry-run` shows what would change in an existing project, and `rite update
+--files-only` applies it.
+
+**What is NOT in 0.7.0:**
+
+- Several Managers sharing a project correctly (MM1, MM2, MM3, MM6). This is
+  planned for 0.9.0.
+- The scenario gate.
+- Cursor: the config refuses `engine: cursor`.
+- Confining a Manager's outbound network. SB5, SB8 and SB10 narrowed the
+  Manager sandbox's files and system services, but the network is not
+  confined (the egress track, later).
+
+⚠ **The dogfood that produced these fixes has not been re-run against this build.** The v0.6.0 dogfood's findings are fixed here; a fresh run against this release is a separate step.
+
+⚠ **A Worker's sandbox is escapable in the yoloAI that ships today** (dogfood
+#35, under 0.7.0a1 below). The fix belongs in yoloAI and has been measured
+only in a locally patched build. Until yoloAI releases it, run Workers with
+that build first on `PATH`, or treat every Worker as able to act as you.
 
 ### A check mark means the Worker read your answer: `rite ack`
 
@@ -270,6 +335,16 @@ rite rewrites the file before every run, so this was not a setting that could
 be planted and left; it was a window between rite writing the file and the
 engine reading it. The same window was measured on the sandbox profile itself
 and closed the same way.
+
+### A local Manager or Worker now gets its standing instructions (SCRUM-49)
+
+Goose does not read `CLAUDE.md`, and rite wrote nothing else. So every local
+Manager and Worker ran with no standing project instructions at all: none of
+the modules' own docs and none of the duty and claim conventions, only each
+cycle's prompt. rite now also writes `AGENTS.md`, which Goose reads, beside
+`CLAUDE.md` for local units, from the same generated text. Claude units are
+unchanged. An existing project receives it through `rite update
+--files-only`.
 
 ### `rite doctor` no longer posts in your Slack DM (RS3)
 
