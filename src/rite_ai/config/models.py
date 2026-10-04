@@ -70,13 +70,8 @@ numbers. `push_to_shared` parses and is refused at start until v0.8.0 (PB2)."""
 
 @dataclass
 class ScopeConfig:
-    """The `scope:` block: the diff budget at delivery (SCRUM-65).
+    """The `scope:` block: the diff budget at delivery (SCRUM-65)."""
 
-    `enforce` false is shadow mode — the verdict is recorded and delivery
-    proceeds — so the false-hold rate can be measured before anything is
-    held on it."""
-
-    enforce: bool = False
     lines_per_item: int = 150
     factor: float = 2.0
     exclude: list[str] = field(

@@ -1,14 +1,7 @@
 """How much a delivery changed, measured from git (SCRUM-65 part 2).
 
-A Worker delivered a fix as 27 files and +1505/-112 and called it done; the
-same fix held to its definition of done is 18 files and +621/-72. The review
-that ran produced the growth, because every finding was resolved by adding.
-The checklist's Scope section is the rule; this is the measurement that
-notices when the rule was not followed.
-
-**Shadow mode.** `verdict` is recorded in the delivery event and delivery
-proceeds regardless while `ScopeConfig.enforce` is false, so the false-hold
-rate can be measured before anything is held on it.
+Nothing reads the verdict yet: it is recorded so the false-hold rate can be
+measured before anything is held on it.
 """
 
 from __future__ import annotations
@@ -20,17 +13,7 @@ from pathlib import Path
 PASS = "pass"
 HOLD = "hold"
 
-_COMMENT_PREFIXES = {
-    ".py": ("#",),
-    ".sh": ("#",),
-    ".toml": ("#",),
-    ".yaml": ("#",),
-    ".yml": ("#",),
-    ".go": ("//",),
-    ".js": ("//",),
-    ".ts": ("//",),
-    ".rs": ("//",),
-}
+_COMMENT_PREFIXES = {".py": ("#",), ".go": ("//",)}
 
 
 @dataclass
@@ -47,13 +30,16 @@ class Budget:
     verdict: str = PASS
     reasons: list[str] = field(default_factory=list)
     unmeasured: str = ""
-    """Why nothing could be measured, when nothing could be. A git that
-    cannot be asked is not a pass: `verdict` stays PASS so shadow mode does
-    not invent a hold, and this says the number is absent."""
+    """Why nothing could be measured. `verdict` stays PASS so a failed
+    measurement cannot invent a hold."""
 
     @property
-    def comment_ratio(self) -> float:
-        return self.comment_lines / self.code_lines if self.code_lines else 0.0
+    def comment_ratio(self) -> float | None:
+        """None when no line could be classified — 0.0 would read as "no
+        comments" for a language the table does not know."""
+        if not (self.comment_lines or self.code_lines):
+            return None
+        return self.comment_lines / max(1, self.code_lines)
 
     def note(self) -> dict:
         """What goes in the delivery event."""
@@ -63,11 +49,30 @@ class Budget:
             "added": self.added,
             "removed": self.removed,
             "out_of_scope": sorted(self.out_of_scope),
-            "comment_ratio": round(self.comment_ratio, 3),
+            "comment_ratio": None
+            if self.comment_ratio is None
+            else round(self.comment_ratio, 3),
             "allowance": self.allowance,
             "reasons": self.reasons,
             "unmeasured": self.unmeasured,
         }
+
+
+def _destination(path: str) -> str:
+    """A rename's destination, counted once.
+
+    `git diff --numstat -M` emits three shapes and only the first is a plain
+    path: `old => new`, `dir/{old => new}`, and `a/{b => c}/d`. Parsing only
+    the first made a rename inside the definition of done's own directory
+    read as out of scope.
+    """
+    if " => " not in path:
+        return path
+    if "{" not in path:
+        return path.split(" => ")[-1]
+    before, rest = path.split("{", 1)
+    middle, after = rest.split("}", 1)
+    return before + middle.split(" => ")[-1] + after
 
 
 def _excluded(path: str, patterns: list[str]) -> bool:
@@ -76,12 +81,8 @@ def _excluded(path: str, patterns: list[str]) -> bool:
     return any(fnmatch(path, p) for p in patterns)
 
 
-def _in_scope(path: str, dod_paths: set[str], claimed_files: set[str]) -> bool:
-    if path in claimed_files:
-        return True
-    # A path the definition of done names, or anything beneath it when it
-    # names a directory. A directory CLAIM is deliberately not enough: a
-    # claim on all of `docs` made every doc edit look in scope.
+def _in_scope(path: str, dod_paths: set[str]) -> bool:
+    """A path the definition of done names, or anything beneath it."""
     return any(path == d or path.startswith(d.rstrip("/") + "/") for d in dod_paths)
 
 
@@ -90,7 +91,6 @@ def measure(
     rev_range: str,
     *,
     dod_paths: set[str],
-    claimed_files: set[str],
     exclude: list[str],
     items: int,
     lines_per_item: int,
@@ -119,15 +119,13 @@ def measure(
         if len(parts) != 3:
             continue
         added, removed, path = parts
-        # A rename arrives as `old => new`; count the destination once.
-        if " => " in path:
-            path = path.split(" => ")[-1].strip("}")
+        path = _destination(path)
         if _excluded(path, exclude):
             continue
         budget.files += 1
         budget.added += int(added) if added.isdigit() else 0
         budget.removed += int(removed) if removed.isdigit() else 0
-        if not _in_scope(path, dod_paths, claimed_files):
+        if not _in_scope(path, dod_paths):
             budget.out_of_scope.append(path)
 
     budget.comment_lines, budget.code_lines = _added_comment_ratio(
@@ -153,7 +151,10 @@ def measure(
 def _added_comment_ratio(
     project: Path, rev_range: str, exclude: list[str]
 ) -> tuple[int, int]:
-    """Added comment lines and added code lines, for extensions rite knows."""
+    """Added comment lines and added code lines, for extensions rite knows.
+
+    A second `git diff` because `--numstat` carries no content.
+    """
     try:
         proc = subprocess.run(
             ["git", "diff", "--unified=0", rev_range],

@@ -38,6 +38,7 @@ It stays in the copy, which is never destroyed while it holds it.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -559,81 +560,65 @@ def _record_scope_budget(
 ) -> None:
     """Measure the delivery's size and record it (SCRUM-65 part 2).
 
-    Shadow mode: the verdict is recorded and delivery proceeds, so the
-    false-hold rate can be measured before anything is held on it. Never
-    raises — a delivery must not fail because a measurement could not be
-    taken.
+    Shadow mode: nothing reads the verdict, so a HOLD cannot refuse a
+    delivery. A failure records the event with `unmeasured` set rather than
+    nothing, because an absent event is indistinguishable from a PASS and the
+    whole point is counting how often this would have held.
     """
-    from rite_ai.publishing.scope_budget import measure
+    from rite_ai.publishing.scope_budget import Budget
     from rite_ai.reporting import events
 
-    try:
-        scope = getattr(config, "scope", None)
-        dod_paths, items = _dod_scope(root, config, ticket)
-        budget = measure(
-            project,
-            rev_range,
-            dod_paths=dod_paths,
-            claimed_files=_claimed_files(root, worker, module),
-            exclude=list(getattr(scope, "exclude", []) or []),
-            items=items,
-            lines_per_item=int(getattr(scope, "lines_per_item", 150)),
-            factor=float(getattr(scope, "factor", 2.0)),
-        )
+    def record(budget) -> None:
         events.record(
             root,
             "scope-budget",
             worker=worker,
             ticket=ticket,
             module=module.name,
-            enforced=bool(getattr(scope, "enforce", False)),
             **budget.note(),
         )
-    except Exception:  # noqa: BLE001 - a measurement must not fail a delivery
-        return
+
+    try:
+        from rite_ai.publishing.scope_budget import measure
+
+        scope = config.scope
+        dod_paths, items = _dod_scope(root, config, ticket)
+        if not dod_paths:
+            # No paths to judge against: every file would read as out of
+            # scope, which is a hold invented from an absent board read.
+            record(Budget(unmeasured=f"no definition-of-done paths for {ticket}"))
+            return
+        record(
+            measure(
+                project,
+                rev_range,
+                dod_paths=dod_paths,
+                exclude=list(scope.exclude),
+                items=items,
+                lines_per_item=scope.lines_per_item,
+                factor=scope.factor,
+            )
+        )
+    except Exception as e:  # noqa: BLE001 - a measurement must not fail a delivery
+        try:
+            record(Budget(unmeasured=f"{type(e).__name__}: {e}"))
+        except Exception:  # noqa: BLE001
+            return
 
 
 def _dod_scope(root: Path, config, ticket: str) -> tuple[set[str], int]:
     """Paths the agreed definition of done names, and how many items it has."""
-    import re
-
     from rite_ai.refinement.status import of
 
-    checked = of(root, config, ticket)
-    record = getattr(checked, "record", None)
+    record = of(root, config, ticket).record
     if record is None:
         return set(), 1
-    items = [str(i) for i in (getattr(record, "items", None) or [])]
-    text = "\n".join(items)
-    # A path-looking token: `a/b`, `a/b.py`, or a bare file with a suffix.
-    found = set(re.findall(r"[\w.-]+(?:/[\w.*-]+)+|\b[\w-]+\.[a-z]{1,4}\b", text))
-    return found, max(1, len(items))
-
-
-def _claimed_files(root: Path, worker: str, module: Module) -> set[str]:
-    """`worker`'s FILE-level claims, module-relative.
-
-    A directory claim is deliberately excluded: a claim on a whole docs tree
-    made every doc edit look in scope.
-    """
-    from rite_ai.claims.ledger import ClaimsLedger
-
-    path = root / ".rite" / "claims.json"
-    if not path.is_file():
-        return set()
-    try:
-        claims = ClaimsLedger(path).list_claims()
-    except Exception:  # noqa: BLE001 - an unreadable ledger is no evidence
-        return set()
-    files = set()
-    prefix = module.path.rstrip("/") + "/"
-    for claim in claims:
-        if claim.worker != worker:
-            continue
-        for p in claim.paths:
-            if (root / p).is_file():
-                files.add(p[len(prefix) :] if p.startswith(prefix) else p)
-    return files
+    text = "\n".join(record.items)
+    # A path with a separator. A bare basename is deliberately not a path:
+    # `_in_scope` matches whole segments, so a basename could only ever match
+    # a file at the repository root.
+    found = {p.rstrip(".") for p in re.findall(r"[\w.-]+(?:/[\w.-]+)+", text)}
+    return found, max(1, len(record.items))
 
 
 def _release_claims(root: Path, worker: str) -> str:

@@ -188,17 +188,37 @@ one.
 
 ## Correctness
 
-- [ ] The change does what the ticket asked, not more and not less. Where
-      there is no ticket, the commit message is the ask — hold it to the same
-      standard, and a change that does more than its own message claims is
-      the finding. (Three reviewers marked this line unevaluable on the same
-      diff for the same reason: no ticket existed and the line named no
-      fallback.)
+### Scope
+
+- [ ] Every hunk is required by an item of the ticket's agreed definition of
+      done. Name the item. A hunk no item requires is removed, not justified.
+      ⚠ **Where another line of this checklist pulls toward MORE — a sweep, a
+      citation, a convention, a hardening — these Scope lines win.** Where
+      there is no ticket, the commit message is the ask, held to the same
+      standard: a change that does more than its own message claims is the
+      finding.
+- [ ] Prefer deleting. A finding that can be resolved by removing code or
+      text is resolved that way. "Removed" and "not needed" are complete
+      resolutions.
+- [ ] A pre-existing defect found next to the change is filed as a ticket,
+      not fixed in this diff, unless the definition of done cannot be met
+      without it. "It was adjacent" is not a reason.
+- [ ] No hardening or behaviour the ticket did not ask for. If it seems
+      needed, it is a question to the Manager, not code.
+- [ ] A comment states a reason that is not obvious from the code, in one or
+      two lines. No essays, no restating the code, no rationale for decisions
+      the code does not make. Watch the ratio of added comment lines to added
+      code lines.
+- [ ] No edits to files the definition of done does not need, including doc
+      or help surfaces the change does not touch by name.
+
+### Other correctness
+
 - [ ] Edge cases the diff touches are covered by a test that fails without
       the fix.
 - [ ] No behaviour silently reversed or removed without the ticket saying so.
-- [ ] Anything this change found and did not do is a ticket, not a sentence
-      in the PR or the handover. The test is not "was it in scope" — it is
+- [ ] Anything this change found and did not do is a ticket, **not a fix in
+      this diff** and not a sentence in the PR or the handover. The test is not "was it in scope" — it is
       **would this ticket's definition of done still be met without it?**
       Yes, file it unlinked; no, file it and link this ticket as blocked by
       it (`rite board link <this> <new>`). Filed for something observed,
@@ -211,7 +231,9 @@ one.
       preference — meaning the code next to it and the vocabulary already in
       use, not a rule you would have chosen. Where a declared convention and
       the practised baseline disagree, say so and stop: that disagreement is
-      the finding, and resolving it is not the reviewer's call. (Three
+      the finding, and resolving it is not the reviewer's call. Conventions
+      govern **how** you write what is needed; they never justify adding
+      more. (Three
       reviewers returned three different verdicts on this line — one read it
       as the enforced formatter, one as the surrounding code, one as the
       repo's shared vocabulary, and the third found a real divergence the

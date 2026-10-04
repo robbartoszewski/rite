@@ -1099,8 +1099,6 @@ def _scope(raw) -> ScopeConfig:
     if not isinstance(raw, dict):
         return ScopeConfig()
     out = ScopeConfig()
-    if isinstance(raw.get("enforce"), bool):
-        out.enforce = raw["enforce"]
     for key in ("lines_per_item", "factor"):
         value = raw.get(key)
         if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:

@@ -130,7 +130,6 @@ def config_to_yaml(config: ProjectConfig) -> str:
             "refuse_above": config.spec.refuse_above,
         },
         "scope": {
-            "enforce": config.scope.enforce,
             "lines_per_item": config.scope.lines_per_item,
             "factor": config.scope.factor,
             "exclude": list(config.scope.exclude),
