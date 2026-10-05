@@ -159,9 +159,51 @@ two-level decomposer and RL-6/7/8, applied end to end.
 **Tests:** one per guard (a step before approval, an approach that changes
 scope/verify/cites, a delivery before recomposition verify, each refused
 without advancing the state). The end-to-end run's record must show every stage
-in order. Which of these stages exist and are enforced today, which exist but
-can be skipped, and which are missing is being mapped against the code. The
-size is XL until that mapping lands.
+in order.
+
+**Mapped against the code (2026-10-05).**
+
+The Claude path enforces less than "the same rigor" assumes. Code enforces only
+refinement (`_deliver_ticket` refuses anything not REFINED) and the delivery
+gates. The spec session and the review rounds are CLAUDE.md instructions, and
+there is no Level 2. The local tier will enforce more than the Claude path does.
+
+| Stage | Local tier today |
+|---|---|
+| decompose → approve → step ordering | **Enforced.** Persisted plan state; APPROVED is written only by `approve_plan`; a step is refused without it in three places. |
+| RL-6 plan review | **Hollow.** It checks the different-engine rule and stamps a reviewer, but no reviewer reads the plan and nothing writes REJECTED. |
+| RL-7 mechanical verify | **Enforced.** rite runs the verify; an empty commit is not acceptance. |
+| Spec/definition session | **Missing.** `advance_ticket` calls `author_plan` without `ticket_text`, so the decomposer sees "(no ticket text was supplied)". The refinement record (definition of done, verify, scope) gates the start but is never an input to the work. |
+| Level 2 approach | **Optional.** Fail-open by DD-2.4 and never persisted. The §2.4 boundary check compares the plan with itself, so it cannot catch drift. |
+| Step review | **Missing.** `STEP_REVIEW` has no executor; a FAILED subtask dead-ends the ticket. |
+| RL-8 recomposition verify | **Missing.** Delivery is requested once every subtask is accepted. |
+| RL-70 `cannot_fail` | **Open.** A bare `true`, `:` or `exit 0` passes. |
+
+**To build:**
+- one persisted `stage` key with a transition table, a single guard and an
+  append-only transition log; `advance_ticket` dispatches from it (M);
+- DEFINED: a snapshot of the refinement record, fed to the decomposer and the
+  slice; halt if it goes STALE (M);
+- Level 2 mandatory and persisted, with the boundary check against an
+  approval-time hash (M; overrides DD-2.4, §5);
+- RL-8: the record's `verify` on the ticket branch before delivery is requested,
+  and a failure returns the plan to review (M);
+- a delivery guard on honouring the request file as well (S);
+- the RL-70 fix (S);
+- RL-6 as a real reviewer turn and an executor for step review (M–L each, only
+  if §5 asks for real reviews).
+
+**Guard tests, each asserting the stage did not advance and the persisted state
+is byte-unchanged:**
+1. a step before approval;
+2. a decompose with no DEFINED snapshot, or after the record went STALE;
+3. a subtask edited after approval;
+4. a step with no persisted approach;
+5. a delivery before RECOMPOSED, through both the loop and a hand-written
+   request file;
+6. a failed RL-8 verify returns the plan to PENDING, with no delivery request;
+7. an illegal stage write;
+8. end to end with stub agents: the log lists every stage once, in order.
 
 ### 3.4 Relay transport (SCRUM-69, absorbing 45 and 22)
 The Manager writes its text to a file with its own Write tool and runs
@@ -253,6 +295,12 @@ This gate is the last step before the RC is re-cut. It is not a test in CI.
    follow-up PR we needed for a9.
 3. **Is SCRUM-22 closed** once SCRUM-69 lands? #179 and #189 fixed its
    reporting, and its transport residual is §3.4.
+4. **Must RL-6 and step review be real reviewer turns** (§3.3a)? **Recommended:
+   not in v0.7.1.** Enforce the order now: RL-6 stays a rule check, step review
+   is RL-7, and RL-8 is built. Real reviewer turns get their own ticket. This
+   choice sets the SCRUM-72 range in §6.
+5. **Override DD-2.4**, so Level 2 is a required, persisted stage rather than
+   fail-open? Recommended yes. "Cannot skip a stage" requires it.
 
 ## 6. Estimate (revised 2026-10-05)
 **The compressed 2–3 days (one PR) does not hold.** That figure assumed SCRUM-72
@@ -265,7 +313,7 @@ and 64 has the highest risk of the set.
 | SCRUM-69 transport | 0.5 day |
 | SCRUM-59 lifecycle requests | 1 day |
 | SCRUM-64 reconciliation | 1–1.5 days |
-| SCRUM-72 local Workers under any Manager, as a deterministic staged pipeline (§3.3a; after §5) | 3–4.5 days (was 1.5–2.5), much of it live Ollama turns measured in minutes |
+| SCRUM-72 local Workers under any Manager, as a deterministic staged pipeline (§3.3a; after §5) | 3.5–5 days (was 1.5–2.5) with the order enforced; 6–8 with real reviewer turns (§5.4). Much of it is live Ollama turns measured in minutes |
 | SCRUM-70, 71, 73 | 1 day |
 | SCRUM-21, 39, 62 (parallelisable) | 1 day |
 | SCRUM-68 (if in) | 0.5 day |
@@ -273,10 +321,11 @@ and 64 has the highest risk of the set.
 | Throwaway-app end-to-end gate, plus fixing what it finds | 1–1.5 days |
 | Re-cut and install the RC | 0.25 day |
 
-**Range: 9–12 working days with one integrator, or about 7–9 if SCRUM-21, 39
-and 62 (and 70, 71, 73 once 64 lands) run in parallel worktrees.** The
-deterministic-pipeline definition of done (§3.3a) added about 1.5–2 days, all
-of it on the serial path. The core
+**Range: 9.5–12.5 working days with one integrator, or about 7.5–9.5 if SCRUM-21,
+39 and 62 (and 70, 71, 73 once 64 lands) run in parallel worktrees.** With
+real reviewer turns (§5.4) it is 12–15.5, or 10–12.5 in parallel. The
+deterministic-pipeline definition of done (§3.3a) added about 2–2.5 days, or
+4.5–5.5 with real reviewer turns, all of it on the serial path. The core
 chain 69 → 59 → 64 → 72 is serial and sets the floor.
 
 **Drivers, most uncertain first:**
