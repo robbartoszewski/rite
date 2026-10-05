@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.86 · **Date:** 2026-10-05
+**Version:** 0.24.87 · **Date:** 2026-10-05
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6692,12 +6692,25 @@ Planned in `docs/design/V071_DOGFOOD_FIXES.md`. The decided directions:
     delivered, merged or handed back.
   - It tells the Manager what it found.
 - **Local Workers under any Manager (SCRUM-72).** The local tier is driven per
-  local **Worker**, not per local Manager. The plan gates are unchanged, and
-  plan authorship in a mixed fleet is an open decision.
+  local **Worker**, not per local Manager.
+  - The plan gates are unchanged, and each stage (definition, plan, plan
+    review, approach, step, verify, recomposition verify) is a persisted state
+    that code will not let the model skip or reorder.
+  - **A local `planner` Manager writes the plan, and a Manager approves it,
+    whatever its engine** (Robert, 2026-10-05). Approval is the `plan-review`
+    duty plus independence: not the author (DD-3.5), a different model (RL-6),
+    and a known author (RL-67). No condition on the approval path admits or
+    excludes a Manager by its engine kind.
+  - The reviewer is asked through its inbox and answers with
+    `rite plan approve|reject`, honoured by the supervisor. Its identity comes
+    from where the answer was found, and the harness never approves on its own.
+  - Plan state moves out of the project tree, beyond every Manager's write
+    access. Today any Manager can edit a plan's approval or run
+    `rite local approve` in any reviewer's name from inside its boundary.
 - **The relay reads a file, not a heredoc (SCRUM-69).** The Manager's text
   travels as `--from-file <path>`, written with its own Write tool.
 
-The Manager's process journal — a diagnostic mode, off by default
+### 9.15. The Manager's process journal — a diagnostic mode, off by default
 
 **Feedback about how rite is WORKING currently only exists where a human is
 watching.** This week's most valuable findings came from a session noticing
@@ -8473,6 +8486,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.87 — SCRUM-72's approval decided (design only).** A local `planner` Manager writes a GPU Worker's plan, and a Manager approves it whatever its engine (Robert, 2026-10-05): no engine-kind condition on the approval path, and the harness's automatic approval is withdrawn in favour of a real review through the reviewer's inbox, and plan state moves out of every Manager's write access (§9.14.14; `V071_DOGFOOD_FIXES.md` §3.3b). The local tier's stages become persisted, code-enforced states (§3.3a there). The §9.15 heading, dropped by 0.24.86, is restored.
 
 **Changes in 0.24.86 — v0.7.1 dogfood fixes, designed (SCRUM-59, 64, 72, 69).** New §9.14.14, design only, nothing built. Lifecycle requests through the supervisor; reconciliation at start and per cycle; the local tier driven per local Worker under any Manager; the relay reads a file instead of a heredoc. Plan, order, acceptance gate and open decisions: `docs/design/V071_DOGFOOD_FIXES.md`. `V070_RELEASE_PLAN.md` corrected: DF16 deferred to v0.7.1 (Robert, 2026-10-03), and the Claude-Manager-plus-GPU-Worker fleet does not run in a9 (SCRUM-72).
 
