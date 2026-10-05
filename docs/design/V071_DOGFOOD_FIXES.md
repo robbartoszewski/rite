@@ -15,7 +15,7 @@ human running host commands.
 |---|---|---|
 | SCRUM-59 | Manager can't run Worker lifecycle or gate diagnosis from its sandbox | M |
 | SCRUM-64 | A restarted Manager doesn't reconcile with ground truth | M–L |
-| SCRUM-72 | A local/GPU Worker is never driven under a Claude Manager | L |
+| SCRUM-72 | A local/GPU Worker is never driven under a Claude Manager; deterministic staged pipeline (§3.3a) | XL |
 | SCRUM-69 (+45, 22) | Relay text depends on a shell heredoc (temp-file EPERM, doubled end line) | S–M |
 | SCRUM-21 | `rite reply`/`ask` can't thread under the Owner's message | S |
 | SCRUM-39 | CI publish-gate scans every fetched branch, not the PR's range | S |
@@ -141,6 +141,28 @@ At start it also:
 - **The Manager waits on the plan and its steps, not on `rite done`.** Its
   prompt says so (inferred from the scoping; to confirm while building).
 
+### 3.3a The staged pipeline is enforced by code (Robert, 2026-10-05)
+The definition of done for SCRUM-72: rite's **deterministic harness code**, not
+the model or the Manager, drives a local Worker's ticket through every stage, in
+order, with the same rigor as the Claude path:
+1. a spec/definition session at session start;
+2. the refinement prompts;
+3. the APPROACH step (Level 2);
+4. the review rounds, i.e. the RL gates: RL-6 plan review, RL-7 mechanical
+   verify, RL-8 recomposition verify.
+
+The model fills each stage and cannot skip or reorder one. Each stage is a
+persisted state with a guard, and none is reachable before its predecessor's
+artifact exists and has passed its gate. It is the determinism principle of the
+two-level decomposer and RL-6/7/8, applied end to end.
+
+**Tests:** one per guard (a step before approval, an approach that changes
+scope/verify/cites, a delivery before recomposition verify, each refused
+without advancing the state). The end-to-end run's record must show every stage
+in order. Which of these stages exist and are enforced today, which exist but
+can be skipped, and which are missing is being mapped against the code. The
+size is XL until that mapping lands.
+
 ### 3.4 Relay transport (SCRUM-69, absorbing 45 and 22)
 The Manager writes its text to a file with its own Write tool and runs
 `rite reply|ask|route --manager <m> --from-file <path>`. There is no heredoc,
@@ -243,7 +265,7 @@ and 64 has the highest risk of the set.
 | SCRUM-69 transport | 0.5 day |
 | SCRUM-59 lifecycle requests | 1 day |
 | SCRUM-64 reconciliation | 1–1.5 days |
-| SCRUM-72 local Workers under any Manager (after §5) | 1.5–2.5 days, much of it live Ollama turns measured in minutes |
+| SCRUM-72 local Workers under any Manager, as a deterministic staged pipeline (§3.3a; after §5) | 3–4.5 days (was 1.5–2.5), much of it live Ollama turns measured in minutes |
 | SCRUM-70, 71, 73 | 1 day |
 | SCRUM-21, 39, 62 (parallelisable) | 1 day |
 | SCRUM-68 (if in) | 0.5 day |
@@ -251,8 +273,10 @@ and 64 has the highest risk of the set.
 | Throwaway-app end-to-end gate, plus fixing what it finds | 1–1.5 days |
 | Re-cut and install the RC | 0.25 day |
 
-**Range: 7–10 working days with one integrator, or about 5–7 if SCRUM-21, 39
-and 62 (and 70, 71, 73 once 64 lands) run in parallel worktrees.** The core
+**Range: 9–12 working days with one integrator, or about 7–9 if SCRUM-21, 39
+and 62 (and 70, 71, 73 once 64 lands) run in parallel worktrees.** The
+deterministic-pipeline definition of done (§3.3a) added about 1.5–2 days, all
+of it on the serial path. The core
 chain 69 → 59 → 64 → 72 is serial and sets the floor.
 
 **Drivers, most uncertain first:**
