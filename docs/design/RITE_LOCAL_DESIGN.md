@@ -348,6 +348,23 @@ cheapest mitigation.
 
 ---
 
+### 5.7. Driven by the Worker's engine, not the Manager's (v0.7.1, SCRUM-72)
+
+*Design, not built.* In v0.7.0a9 the supervise loop drives the local tier only
+when the **Manager** is local (`cli/main.py`, `local_tier=… if role.is_local`).
+So a Claude Manager's GPU Worker gets a sandbox and a board move and is then
+never run.
+
+From v0.7.1, the loop drives the local tier for every ticket held by a **local
+Worker** of the Manager, whatever the Manager's engine:
+- the ticket filter keeps only those tickets;
+- a local Worker's sandbox gets no prompt;
+- an idle local sandbox with a plan step pending is not a stall.
+
+The gates do not change. A plan is still authored by a `decompose` Manager and
+approved by a `plan-review` Manager on a different engine. Who those are in a
+Claude-plus-GPU fleet is `V071_DOGFOOD_FIXES.md` §3.3 and §5.
+
 ## 6. The harness
 
 ### 6.1. Scope — local engines only

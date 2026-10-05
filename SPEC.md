@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.85 · **Date:** 2026-10-03
+**Version:** 0.24.86 · **Date:** 2026-10-05
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6673,7 +6673,31 @@ Whether it is the right answer for a command that also releases claims is an
 because guessing at it is how the `start` collision became three meanings
 for one positional.
 
-### 9.15. The Manager's process journal — a diagnostic mode, off by default
+#### 9.14.14. v0.7.1: lifecycle requests, reconciliation, local Workers under any Manager (DESIGN, not built)
+
+Planned in `docs/design/V071_DOGFOOD_FIXES.md`. The decided directions:
+
+- **Lifecycle requests (SCRUM-59).** A Manager never runs `rite sandbox …` or
+  `rite publish check` itself; its boundary cannot, and it is not widened.
+  - It runs `rite request {stop|destroy|restart|status|gate} <worker>`, which
+    writes the request in Python (no shell substitution).
+  - The supervisor carries the request out at the cycle boundary and tells the
+    Manager the outcome.
+  - `destroy` can never be forced from a request.
+- **Reconciliation (SCRUM-64).** At `rite start` and throttled per cycle, the
+  supervisor compares each Worker's claims with its live sandbox, handback,
+  publish record, PR, branch and board.
+  - It acts only on known facts: "cannot tell" is no action.
+  - It releases a claim only when the sandbox is known gone **and** the work is
+    delivered, merged or handed back.
+  - It tells the Manager what it found.
+- **Local Workers under any Manager (SCRUM-72).** The local tier is driven per
+  local **Worker**, not per local Manager. The plan gates are unchanged, and
+  plan authorship in a mixed fleet is an open decision.
+- **The relay reads a file, not a heredoc (SCRUM-69).** The Manager's text
+  travels as `--from-file <path>`, written with its own Write tool.
+
+The Manager's process journal — a diagnostic mode, off by default
 
 **Feedback about how rite is WORKING currently only exists where a human is
 watching.** This week's most valuable findings came from a session noticing
@@ -8449,6 +8473,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.86 — v0.7.1 dogfood fixes, designed (SCRUM-59, 64, 72, 69).** New §9.14.14, design only, nothing built. Lifecycle requests through the supervisor; reconciliation at start and per cycle; the local tier driven per local Worker under any Manager; the relay reads a file instead of a heredoc. Plan, order, acceptance gate and open decisions: `docs/design/V071_DOGFOOD_FIXES.md`. `V070_RELEASE_PLAN.md` corrected: DF16 deferred to v0.7.1 (Robert, 2026-10-03), and the Claude-Manager-plus-GPU-Worker fleet does not run in a9 (SCRUM-72).
 
 **Changes in 0.24.85 — a GPU Worker runs a subtask, and is declared through the CLI (v0.7.0, SCRUM-54/SCRUM-55).** §9.6 gains the engine flags. **SCRUM-54:** the local tier ran at MANAGER tier — `local/step.py` passed `worker=manager` and `workspace=<project root>`, the operator's own tree — while `local/in_sandbox.exec_launcher`, `local/in_sandbox.instruction_dir_for` and `sandbox.goose_path_root` had no caller in `src/` at all, the defect class `tests/test_no_dead_wiring.py` exists for. So a mixed Claude+GPU fleet was configurable (OL3's five keys on `WorkerManifest`) and not runnable. `local/worker_step.placement_for` is the join, asked by `take_one_step`, which keeps every gate: the agent runs inside the Worker's sandbox and the verify and commit run on the HOST against that sandbox's copy. Measured against a fixture under an ungranted root, with controls: a turn writing inside left the original host file untouched (so a verify in the project root would test a tree the model never touched), and a host `git commit` into the copy succeeded with the sandbox still active — so `SubprocessVerifier` and `GitCommitter` are reused unchanged, and the branch lands where `publishing/deliver.py` already collects it. The branch is the TICKET, not `rite-local/<ticket>/<subtask>`: `deliver` collects `refs/heads/<ticket>` and nothing else, so subtasks compose by being committed in sequence onto it, which is why this path does not need RL-T30 and the Manager path still does. Two defects found by wiring it: `GooseAgent.run` built `dict(os.environ)` — right on the host — and `exec_argv` refuses a secret-shaped name on argv (SB12), so with `GITHUB_TOKEN` merely PRESENT a sandboxed turn returned `could not start goose: SecretOnArgv` and was recorded as a failed ATTEMPT, breaking RL-47 too; `inherit_environment` closes it, and nothing is lost because `env KEY=VAL cmd` adds to the sandbox's own environment rather than replacing it. And `yoloai exec` has no `--cwd` and starts in the copy's ROOT while a Worker's modules are clones one level down, so `exec_argv` gained `subdir`, placed with `env -C` (measured: macOS's own `env` honours it inside a sandbox) rather than a shell, which keeps `local/runners.py`'s "no shell" property true of the half that runs a model. A multi-module local Worker is REFUSED rather than guessed at: a `Subtask` names paths and no module, and a wrong guess commits to the wrong module's branch where `deliver` collects it into the wrong checkout, both halves succeeding. **SCRUM-55:** `rite add worker` gains `--engine`, `--endpoint`, `--model`, `--agent` and `--context-window`; `_write_worker_manifest` had written those keys since OL3 and nothing could set them. Validated with `engine_shape_problem` and `window_problem` — the parser's own rules — before the Worker directory is created, plus two refusals of this command's own (no window; an agent other than `goose`), each of which would otherwise create a Worker that passes `rite doctor` and refuses every turn. Two local Workers on different models are allowed and REPORTED, not refused: sharing is the schedule's lever and rite gains no budget concept. ⚠ **Not measured: a real sandboxed GPU turn.** DF16 (the Worker sandbox escape) is open on this machine — re-measured with controls against yoloAI 0.11.0 `95a6b8e`, the commit DF16 names: a direct write to an ungranted path was refused and `tmux -S <host socket> new-window "touch <same path>"` created it — and Robert's gate holds the live Worker run while it is. What IS measured is the whole path with the model replaced by a scripted command inside a real sandbox, and the engine environment rite builds, verified from inside. **Four rules that were stated and not in force, found by review and fixed on the same branch.** `SandboxStatus.container_is_down` replaces `== "active"`: `yoloai ls --json`'s `status` is mostly about the AGENT ("active=working, idle=waiting at prompt, done=finished, failed=error", plus `stopped`), so three of five words describe a container that is UP, and every other reader in `src/` already tested the negative. Measured: a local Worker's sandbox runs the `idle` NO-OP agent and reports `active`, so nothing was refused in the field — but the same literal in `exec_launcher` would have read every genuine `goose` failure on an idle sandbox as "the sandbox is gone", discarding the model's output as a turn that never happened and inverting the RL-47 fix it was added for. `Outcome.counts_as_attempt` states RL-47 and had NO reader in `src/` — `step._record` incremented unconditionally — so an endpoint that was down, a sandbox a delivery had stopped, a launch refused by rite's own leak guard, a claim held by a neighbour and an unapproved plan each spent one of the subtask's attempts; `_record` now asks the property and `run_subtask`'s own two "nothing ran" returns set the fault (the claim-conflict path said so in its note already). `GooseAgent`'s launch-failure branch was missing `infrastructure_fault` and a `TimeoutExpired` must NOT have it — a turn stopped at twenty minutes ran, and may have edited files. And Level 2 was not placed: `step._approach_for` resolved the MANAGER's role and ran its Goose on the HOST with `workspace=<project root>`, which is a write-capable auto-mode model turn in the operator's real tree, planning against a tree where the subtask's module-relative scope paths do not exist and the earlier subtasks' commits are absent, with OL3's model split ignored so a CLAUDE Manager driving a GPU Worker produced no approach at all and `worker_decomposition_model` had no caller. `Placement.approach` now runs Level 2 inside the sandbox with the Worker's own model against the module clone, still advisory and fail-open, and a placed turn never falls back to the host one; `GooseProposer` needed the same `inherit_environment` fix for the same measured reason. Re-proven end to end on the fixed code: Level 2's prompt file is created in the sandbox's own exchange directory, so OL5's leak fix covers the planning half too. Tests: `tests/test_a_gpu_worker_runs_a_subtask.py`, `tests/test_a_gpu_worker_is_added_through_the_cli.py`.
 

@@ -221,6 +221,22 @@ branch" — but it is a different product from the one design §5 argues for, an
 it should be chosen deliberately. **My recommendation is the two-level model in
 §1.2**, which takes Robert's per-worker capability whole and keeps the gates.
 
+### 1.6a. Mixed fleets: who authors Level 1 under a Claude Manager (v0.7.1)
+
+*Open for Robert; see `V071_DOGFOOD_FIXES.md` §5.* A Claude `lead` plus one GPU
+Worker has no Manager that can author a plan:
+- `lead` lacks `decompose`;
+- the Claude proposer is not wired;
+- the Worker is not a Manager (RL-67).
+
+**Recommended:** declare a local `planner` Manager (the `planner` preset, the
+same Ollama model as the Worker). It authors the plan, and `lead` (holding
+`plan-review`) approves it. Level 1 stays at Manager tier (§1.3), and RL-6 and
+RL-67 are unchanged.
+
+**Not recommended:** letting the GPU Worker author its own plan. That is §1.6's
+trade, made by accident.
+
 ### 1.7. Config, now that placement is settled
 
 **Level 1 needs no new keys.** A decomposer is a Manager holding the
