@@ -34,6 +34,7 @@ from rite_ai.cli.main import cli
 from rite_ai.managers import MANAGER_ENV, lifecycle
 from rite_ai.managers.mailbox import INBOX, delivery_note
 from rite_ai.managers.mailbox import take as take_mail
+from rite_ai.tickets import Ticket
 
 CONFIG = (
     "ticket_backend:\n  type: none\ncoordination:\n  managers:\n    - lead\n"
@@ -105,7 +106,16 @@ class TestTheCommand:
         assert _ask("start", "alpha", "--ticket", "RT-12").exit_code == 0
         assert _ask("deliver", "alpha", "--ticket", "RT-12").exit_code == 0
         (start,) = broker.take_requests(project, "lead")
-        decided = broker.decide(start[1], lambda w: True, lambda t: True)
+        # ⚠ `read_ticket` is not optional: SCRUM-73 made `decide` refuse a
+        # request whose ticket STATUS it cannot read, because a Worker
+        # started on finished work is how KAN-28 was worked twice. A live
+        # ticket here, since this test is about where the request is written.
+        decided = broker.decide(
+            start[1],
+            lambda w: True,
+            lambda t: True,
+            read_ticket=lambda t: Ticket(id=t, title="a ticket", status="To Do"),
+        )
         assert decided.ok and decided.request.worker == "alpha", decided
         (deliver,) = deliveries.take(project, "lead")
         assert deliveries.decide(deliver) == deliveries.Request("alpha", "RT-12")
@@ -511,12 +521,12 @@ def test_the_supervisor_honours_requests_between_deliveries_and_starts():
     from rite_ai.managers import supervise
 
     source = inspect.getsource(supervise)
-    deliveries = source.index("honour_deliveries(root, manager, say)")
+    deliveries = source.index("honour_deliveries(root, manager, say, recorder)")
     lifecycles = source.index(
         "lifecycle.honour_requests(root, manager, say)", deliveries
     )
     starts = source.index(
-        "_honour_worker_requests(root, manager, broker, say)", lifecycles
+        "_honour_worker_requests(root, manager, broker, say, recorder)", lifecycles
     )
     assert deliveries < lifecycles < starts
 

@@ -309,14 +309,25 @@ def test_the_module_entrypoint_makes_the_same_split(tmp_path, monkeypatch):
     assert config_root.resolve() == project.resolve()
 
 
-def test_a_clone_with_its_own_rite_dir_keeps_its_own_rules(tmp_path, monkeypatch):
-    """The nearest marker beats `RITE_PROJECT_ROOT`, which is the opposite
-    order from `_find_project_root` and deliberately so. That function asks
-    which project a session BELONGS to; this asks whose rules govern the
-    tree in front of us, and a clone carrying its own `.rite/` answers for
-    itself. Taking the override first applied an outer project's
-    suppressions — whose fingerprints cannot match an inner repository
-    anyway — while ignoring the ones that could.
+def test_a_clone_with_its_own_rite_dir_answers_for_itself_when_nobody_said(
+    tmp_path, monkeypatch
+):
+    """The nearest marker beats a WALK, which is the opposite order from
+    `_find_project_root` and deliberately so. That function asks which
+    project a session BELONGS to; this asks whose rules govern the tree in
+    front of us, and a clone carrying its own `.rite/` answers for itself —
+    an outer project's suppressions have fingerprints that cannot match an
+    inner repository anyway, so preferring them loses the ones that could.
+
+    ⚠ **Narrowed by SCRUM-76, and this test with it.** It used to set
+    `RITE_PROJECT_ROOT` and assert the module won anyway. That is the
+    config-root hijack: `PROJECT_MARKERS` are two ordinary files, so
+    anything able to commit to the scanned repository could plant one and
+    move the gate's trusted suppression list onto its own branch. The
+    marker still answers when rite has named NO project, which is a person
+    at their own checkout — nobody has been overruled, because nobody said
+    anything. `test_the_gate_config_root_cannot_be_hijacked.py` holds the
+    other half.
     """
     project, module = _prepare_layout(tmp_path)
     (module / ".rite").mkdir()
@@ -325,8 +336,9 @@ def test_a_clone_with_its_own_rite_dir_keeps_its_own_rules(tmp_path, monkeypatch
     )
 
     monkeypatch.chdir(module)
-    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
     assert _gate_config_root().resolve() == module.resolve()
+    assert project != module, "the layout must actually nest, or this is vacuous"
 
 
 def test_the_override_still_answers_when_there_is_no_marker(tmp_path, monkeypatch):

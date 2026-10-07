@@ -308,29 +308,85 @@ def _gate_config_root() -> Path:
     own repository: it tracks `.rite/gitleaksignore` and
     `.rite/review-checklist.md` for the gate and is not a rite project.
 
-    The NEAREST marker wins over `RITE_PROJECT_ROOT`, which is deliberately
-    the opposite order from `_find_project_root`, and the difference is the
-    difference between the two questions. `_find_project_root` is asking
-    which project a session BELONGS to, and the override exists there
-    because walking up from a module that is itself a rite project found the
-    inner one and gave every Worker a private claims ledger. This is asking
-    whose rules govern the tree in front of us — and for a clone that
-    carries its own `.rite/`, those are its own. Taking the override first
-    applied an outer project's suppressions to an inner repository, where
-    the fingerprints cannot match anyway, while ignoring the ones that
-    could; with commit-message findings now unconditionally blocking, that
-    is a block the Worker has no file to clear it in. The override still
-    answers when there is no marker to find, which is the sandboxed case it
-    was added for.
+    The NEAREST marker wins over `RITE_PROJECT_ROOT` **only outside the
+    scanned repository.** That ordering is deliberately the opposite of
+    `_find_project_root`'s, and the difference is the difference between the
+    two questions. `_find_project_root` is asking which project a session
+    BELONGS to, and the override exists there because walking up from a
+    module that is itself a rite project found the inner one and gave every
+    Worker a private claims ledger. This is asking whose rules govern the
+    tree in front of us, and for a clone that carries its own `.rite/` those
+    are its own: taking the override first applied an outer project's
+    suppressions to an inner repository, where the fingerprints cannot match
+    anyway, while ignoring the ones that could.
+
+    🔴 **SCRUM-76. A MARKER INSIDE THE SCANNED REPOSITORY NO LONGER
+    REDIRECTS A PROJECT RITE WAS TOLD.** `PROJECT_MARKERS` are
+    `.rite/brief.yaml` and `.rite/modules.yaml` — two ordinary files, which
+    anything able to commit to the scanned repository can create. So a
+    Worker could commit one into its own module repository, and the nearest
+    marker became that repository: the gate then read its suppression list
+    and its ruleset from `<module>/.rite/`, two files on the Worker's own
+    branch. The party the gate constrains got to choose the file that says
+    what the gate ignores. It reaches `rite publish check` and the pre-push
+    hook, which is where a Worker runs the gate against itself; delivery's
+    own run is on the host and SCRUM-62 refuses a branch that touches those
+    files at all.
+
+    So when rite has NAMED the project — `RITE_PROJECT_ROOT`, which the host
+    sets when it starts a Manager or a Worker and which no commit can change
+    — that answer wins over any marker found inside the tree being scanned.
+    A marker in an ancestor ABOVE the repository still wins, because it is
+    not on the branch being pushed and is not the Worker's to write: that is
+    SCRUM-60's `rite prepare` layout, where the project's `.rite/` sits above
+    the module repositories, and it is untouched.
+
+    ⚠ **What this costs, stated rather than discovered.** A module that is
+    genuinely its own rite project, cloned under a project rite named, now
+    reads the OUTER project's rules — the case the paragraph above defends.
+    An Owner who wants the inner project's rules says so by pointing
+    `RITE_PROJECT_ROOT` at the inner project, which is a statement by the
+    Owner rather than by whoever committed a file. That is the trade: the
+    inner repository loses a convenience it cannot be trusted to assert, and
+    the Owner keeps a way to grant it.
+
+    The override still answers when there is no marker to find, which is the
+    sandboxed case it was added for.
     """
     cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        if _is_project(parent):
-            return parent
     override = os.environ.get(PROJECT_ROOT_ENV)
-    if override:
-        return Path(override).expanduser().resolve()
+    named = Path(override).expanduser().resolve() if override else None
+    scanned = _gate_root() if named is not None else None
+    for parent in [cwd, *cwd.parents]:
+        if not _is_project(parent):
+            continue
+        if named is not None and _inside(parent, scanned):
+            # SCRUM-76: this marker is in the tree being scanned, so whoever
+            # can commit here wrote it. rite was told which project governs;
+            # that stands.
+            return named
+        return parent
+    if named is not None:
+        return named
     return _gate_root()
+
+
+def _inside(path: Path, outer: Path | None) -> bool:
+    """Whether `path` is `outer` or sits beneath it.
+
+    Resolved before comparing, so a symlinked or `..`-laden path cannot read
+    as outside a tree it is actually in — the check decides whose rules the
+    publish gate trusts (SCRUM-76), and `is_relative_to` on unresolved paths
+    is a string comparison wearing a path's clothes.
+    """
+    if outer is None:
+        return False
+    try:
+        return path.resolve().is_relative_to(outer.resolve())
+    except OSError:
+        # Cannot tell. Treated as INSIDE, which keeps the named project:
+        # refusing to answer must not hand the choice back to the tree.
+        return True
 
 
 def _gate_root_note(root: Path, config_root: Path) -> str:

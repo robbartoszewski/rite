@@ -122,10 +122,27 @@ def test_generated_workflow_does_not_install_from_pypi(tmp_path):
 
 def test_generated_workflow_has_no_unsubstituted_placeholders(tmp_path):
     """Generated content states only what was actually filled in. A stray
-    `{{...}}` reaching the user's repo is a template leak, not a workflow."""
+    `{{...}}` reaching the user's repo is a template leak, not a workflow.
+
+    ⚠ **rite's placeholders are BARE braces (`{{RITE_INSTALL_SPEC}}`); a
+    GitHub Actions expression is `${{ … }}`**, and this used to reject both.
+    SCRUM-39 put `RITE_GATE_DEFAULT_BRANCH: ${{ github.event.repository.
+    default_branch }}` in the template — the default branch is only in the
+    event payload, so the workflow has to read it from there — and a bare
+    `"{{" not in text` turned that legitimate expression into a template
+    leak. The leak this guards against is still caught: a `{{` with no `$`
+    in front of it is rite's own, unsubstituted.
+    """
     root = _git_repo(tmp_path)
     run_init(root, yes=True)
-    assert "{{" not in (root / CI_WORKFLOW_REL_PATH).read_text()
+    text = (root / CI_WORKFLOW_REL_PATH).read_text()
+
+    assert not re.findall(r"(?<!\$)\{\{", text), (
+        "an unsubstituted rite placeholder reached the generated workflow"
+    )
+    # And the check still has teeth: it is not passing because nothing in
+    # the file has braces at all.
+    assert "${{" in text
 
 
 # --- the install target -----------------------------------------------------
