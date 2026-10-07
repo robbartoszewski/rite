@@ -879,10 +879,19 @@ def deliver(
     # both still apply. Never `force`. A divergence keeps it too, so the
     # User's `rite deliver` has the sandbox to deliver from.
     released = ""
-    if outcomes and all(o.ok for o in outcomes) and applied == {"commit"}:
-        # D-41 holds a claim until the work lands where it goes. Under
-        # `commit` that is now: it is on the project's own branch. Under a
-        # push strategy it is the merge, so the claim stays held.
+    # D-41 holds a claim until the work lands where it goes. Under `commit`
+    # that is now: it is on the project's own branch. Under a push strategy it
+    # is the merge, so the claim stays held.
+    #
+    # ⚠ Named, because `reconcile` reads it. This condition — and NOT "a
+    # delivery happened" — is the one under which a delivery has put the work
+    # where it goes with nothing still pending, which is why it is both the
+    # test for releasing the claims here and the `landed` field of the event
+    # below. A reconciler that re-derived it would be a second answer to the
+    # same question, and the first version of `reconcile` got that answer
+    # wrong (SCRUM-64 follow-up).
+    landed = bool(outcomes) and all(o.ok for o in outcomes) and applied == {"commit"}
+    if landed:
         released = _release_claims(root, worker)
     if outcomes and all(o.ok for o in outcomes):
         gone = destroy_worker(worker, root)
@@ -944,6 +953,15 @@ def deliver(
         worker=worker,
         ticket=ticket,
         by_user=by_user,
+        # ⚠ **This event is recorded for a FAILED delivery too** — a gate
+        # refusal, a held host measurement, a module that could not be
+        # pushed all reach this one return. So "a delivered event exists" is
+        # not "the work was delivered", and these two fields are what a
+        # reader must go by. `ok`: every module succeeded. `landed`: the work
+        # is where it goes and nothing is still pending, the same condition
+        # on which the claims were released above.
+        ok=bool(outcomes) and all(o.ok for o in outcomes),
+        landed=landed,
         outcomes=[o.note() for o in outcomes],
         sandbox=sandbox,
     )

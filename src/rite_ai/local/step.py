@@ -123,13 +123,26 @@ class _LedgerClaims:
     claims ledger exists for, and a local tier with its own would be a second
     answer to "who holds this path". `manager=` is passed so a force-release
     cannot reach across Managers (MM3).
+
+    ⚠ `ticket=` is passed for the same reason every other claim carries one:
+    a claim that names no ticket cannot be matched to the work it was taken
+    for, so nothing can ever tell whether it went stale. `reconcile` releases
+    only on an exact ticket match, and a whole tier claiming `""` would have
+    been a tier whose claims no reconciliation could ever reason about
+    (SCRUM-64 follow-up). `harness.Claims.take` carries no ticket — a subtask
+    claim is for the ticket the plan is for, which is fixed for the life of
+    this adapter, so it is held here rather than threaded through the
+    protocol.
     """
 
     ledger: object
     manager: str = ""
+    ticket: str = ""
 
     def take(self, paths: tuple[str, ...], worker: str) -> bool:
-        return bool(self.ledger.claim(list(paths), worker, manager=self.manager).ok)
+        return bool(
+            self.ledger.claim(list(paths), worker, self.ticket, manager=self.manager).ok
+        )
 
     def release(self, paths: tuple[str, ...], worker: str) -> None:
         self.ledger.release(worker, list(paths))
@@ -273,7 +286,9 @@ def take_one_step(
         from rite_ai.claims.ledger import ClaimsLedger
 
         claims = _LedgerClaims(
-            ClaimsLedger(root / ".rite" / "claims.json"), manager=manager
+            ClaimsLedger(root / ".rite" / "claims.json"),
+            manager=manager,
+            ticket=ticket,
         )
 
     # Level 2 (DD-2.4, OL6): the unit's own steps, with its DECOMPOSITION model,

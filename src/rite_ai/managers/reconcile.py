@@ -11,20 +11,69 @@ running host commands is not unattended.
 
 So at `rite start`, and throttled per cycle, the supervisor compares each of
 this Manager's Workers against ground truth and acts only on what it can
-read for certain:
-
-**It releases a claim only when the sandbox is known GONE and the work is
-delivered, merged or handed back.** "Cannot tell" is never an action: an
-unknown sandbox, an unreadable claim, a Worker still running — all leave the
-claim exactly as it is. A sandbox that is gone while its work has NOT landed
-keeps its claim too, and is reported, not released: releasing there would
-hand the ticket to the next Worker while the first Worker's commits sit
-undelivered. Every outcome is told to the Manager, so a restart converges to
-a true, actionable state with no human in the loop.
+read for certain. "Cannot tell" is never an action: an unknown sandbox, an
+unreadable claim, a Worker still running — all leave the claim exactly as it
+is. Every outcome is told to the Manager, so a restart converges to a true,
+actionable state with no human in the loop.
 
 Shaped like `recovery`: a pure planner (`plan`) decided entirely from facts,
 and an applier (`reconcile`) whose every dependency is injectable, so the
 policy is tested without a sandbox, a board or a claim ledger.
+
+🔴 **What the first version of this module got wrong** (the `/code-review` of
+the SCRUM-64 commit, re-run 2026-10-08; this file is its follow-up). "The
+work landed" was matched **by worker name alone** against three signals, and
+none of the three means what it was read to mean:
+
+- **A watched pull request was read as landed, and it means the opposite.**
+  `merging._tick` DROPS an entry the moment GitHub says the PR merged, so an
+  entry that is still there is a PR still **open** — which is exactly the
+  claim D-41 holds *until* the merge (`deliver`: "Under a push strategy it is
+  the merge, so the claim stays held"). Under `pull_request` that fired on
+  the **first** delivery: `deliver` opens the PR and destroys the sandbox in
+  the same call, so the next pass saw "sandbox gone + a watched PR", called
+  it landed, and handed the paths to the next Worker with the PR open and
+  the first Worker's work unmerged. The dangerous reconciliation case, in
+  the one branch written to prevent it.
+- **A `delivered` event was read as a successful delivery.** `deliver`
+  records that event on its single return — gate refusal, held host
+  measurement, unpushable module and all. A refused delivery wrote one too.
+- **Neither was scoped to a ticket**, and the event log is never pruned, so
+  a delivery six tickets ago satisfied the claim of the ticket in flight.
+- **An UNREADABLE handback counted as landed**, though `handback.read`
+  returns that record precisely to say "cannot tell" — its own `done` is
+  False for it.
+
+**The rule now.** A claim is released only when **all** of these hold:
+
+- the sandbox is known **gone** (`not found`, never merely `stopped`: a
+  stopped sandbox still holds its copy);
+- the claim **names a ticket**. A claim with no ticket cannot be matched to
+  any work, so it is reported, never released;
+- **every** ticket this Worker's claims name has landed — `_release_claims`
+  releases the Worker's claims together, so one unlanded ticket holds them
+  all;
+- each matched **exactly**: `==` on the worker *and* on the ticket. Never a
+  prefix, never a substring, never "any event this Worker ever wrote";
+- and **no pull request for that ticket is still watched**. An open PR is a
+  **veto** over every other signal, because that claim is being held for it
+  on purpose.
+
+**What counts as landed, and nothing else does:**
+
+- a **readable** handback naming exactly that ticket;
+- a **`merged`** event, which `merging._tick` writes from GitHub's own
+  answer at the one point rite observes a merge;
+- a **`delivered`** event carrying `landed: true` — the field `deliver`
+  writes under exactly the condition on which it released the claims itself
+  (every module ok, and nothing pushed anywhere a merge still has to
+  happen).
+
+⚠ **A `delivered` event on its own is not evidence, by construction.** Had
+that delivery put the work where it goes, `deliver` would have released the
+claim in the same call. So a claim still held after a delivery is held **on
+purpose** — awaiting a merge, or awaiting a person's decision about a PR
+that was closed without one. Releasing it is the harm, not the fix.
 """
 
 from __future__ import annotations
@@ -32,8 +81,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-RELEASE = "release"  # sandbox gone AND work landed -> release the stale claim
-REPORT = "report"  # sandbox gone AND work NOT landed -> hold, tell the Manager
+RELEASE = "release"  # sandbox gone AND the work genuinely landed -> release
+REPORT = "report"  # nothing to act on, but the Manager must hear it
 HELD = "held"  # a live/unknown sandbox, or no claim -> leave it, say nothing
 
 THROTTLE_SECONDS = 300.0
@@ -45,9 +94,13 @@ class Facts:
     """What rite can read about one Worker right now. Each `None` is an
     explicit "cannot tell", distinct from True/False."""
 
-    has_claim: bool
+    has_claim: bool | None  # None: the claim ledger could not be read
     sandbox_gone: bool | None  # None: yoloAI could not be asked
-    work_landed: bool  # delivered, merged, or handed back — all mean "left the sandbox"
+    work_landed: bool | None  # None: cannot tell whether it landed
+    detail: str = ""
+    """What the Manager is told besides the verdict: which signal decided
+    it, or which one could not be read. Carried rather than re-derived in
+    `plan`, which sees no files."""
 
 
 @dataclass(frozen=True)
@@ -59,42 +112,58 @@ class Action:
 
 def plan(worker: str, facts: Facts) -> Action:
     """What to do about one Worker, from facts alone. Every branch that is
-    not a certain release holds."""
+    not a certain release holds the claim."""
+    tail = f" ({facts.detail})" if facts.detail else ""
+    if facts.has_claim is None:
+        return Action(
+            worker,
+            REPORT,
+            "rite could not read the claim ledger, so nothing about this "
+            f"Worker was reconciled{tail}",
+        )
     if not facts.has_claim:
         return Action(worker, HELD, "no claim to reconcile")
     if facts.sandbox_gone is None:
         return Action(worker, HELD, "could not tell whether the sandbox is gone")
     if not facts.sandbox_gone:
         return Action(worker, HELD, "the sandbox is still there")
+    if facts.work_landed is None:
+        return Action(
+            worker,
+            REPORT,
+            "its sandbox is gone, but rite cannot tell whether its work "
+            f"landed, so the claim is kept rather than guessed away{tail}",
+        )
     if facts.work_landed:
         return Action(
             worker,
             RELEASE,
             "its sandbox is gone and its work was delivered, merged or handed "
-            "back, so the claim it still holds is stale",
+            f"back, so the claim it still holds is stale{tail}",
         )
     return Action(
         worker,
         REPORT,
         "its sandbox is gone but its work has NOT been delivered, merged or "
         "handed back; the claim is kept rather than handing the ticket on with "
-        "the work undelivered",
+        f"the work undelivered{tail}",
     )
 
 
 # --- gathering the facts, on the host --------------------------------------------
 
 
-def _claim_paths(root: Path, worker: str) -> list[str] | None:
-    """The paths `worker` claims, or None if the ledger cannot be read (which
+def _claims_of(root: Path, worker: str) -> list | None:
+    """The claims `worker` holds, or None if the ledger cannot be read (which
     is "cannot tell", never "no claim")."""
     from rite_ai.claims.ledger import ClaimsLedger
 
     try:
-        claims = ClaimsLedger(Path(root) / ".rite" / "claims.json").claims_for(worker)
+        return list(
+            ClaimsLedger(Path(root) / ".rite" / "claims.json").claims_for(worker)
+        )
     except Exception:  # noqa: BLE001 - unreadable ledger: cannot tell
         return None
-    return sorted({p for c in claims for p in c.paths})
 
 
 def _sandbox_gone(root: Path, worker: str) -> bool | None:
@@ -109,57 +178,152 @@ def _sandbox_gone(root: Path, worker: str) -> bool | None:
     return status.value == "not found"
 
 
-def _work_landed(root: Path, worker: str) -> bool:
-    """Whether `worker`'s work left its sandbox: a handback, a delivered
-    event, or a pull request still watched (a PR means it was pushed)."""
-    from rite_ai import handback
+def _landed(root: Path, worker: str, ticket: str) -> tuple[bool | None, str]:
+    """Whether `worker`'s work on exactly `ticket` has landed, and the
+    sentence that says which signal decided it.
 
-    hb = handback.read(Path(root), worker)
-    if hb is not None:  # a handback, readable or not, means it handed off
-        return True
-    from rite_ai.reporting import events
+    `None` is "cannot tell". Every comparison here is `==` on both the worker
+    and the ticket: see the module docstring for what each signal does and
+    does not establish, and what the loose version of this function released.
+    """
+    root = Path(root)
+    if not ticket:
+        return False, (
+            "the claim names no ticket, so rite cannot match it to any "
+            "delivered, merged or handed-back work; release it by hand if "
+            "it is stale"
+        )
 
-    for event in events.since(Path(root), 0.0):
-        if event.get("event") == "delivered" and event.get("worker") == worker:
-            return True
+    # 1. An open pull request VETOES every other signal, and an unreadable
+    #    watch record vetoes just as hard: a PR for this ticket may be open in
+    #    it, and the claim is held for exactly that.
     from rite_ai.publishing import merging
 
-    watched = merging._load(Path(root))  # noqa: SLF001
-    if isinstance(watched, list):
-        return any(getattr(w, "worker", "") == worker for w in watched)
-    return False
+    watched = merging._load(root)  # noqa: SLF001
+    if isinstance(watched, str):
+        return None, f"the watched-pull-request record cannot be read ({watched})"
+    for entry in watched:
+        if getattr(entry, "worker", "") == worker and (
+            getattr(entry, "ticket", "") == ticket
+        ):
+            return False, (
+                f"pull request #{getattr(entry, 'number', '?')} for {ticket} is "
+                "still being watched, so it is open and unmerged and D-41 holds "
+                "the claim until it merges"
+            )
+
+    # 2. A merge rite saw, or a delivery that put the work where it goes.
+    #    Both carry the ticket, and both are matched on it.
+    from rite_ai.reporting import events
+
+    for event in events.since(root, 0.0):
+        if event.get("worker") != worker or event.get("ticket") != ticket:
+            continue
+        kind = event.get("event")
+        if kind == "merged":
+            return True, f"{ticket}'s pull request merged"
+        # `is True` and not truthiness: an event written before this field
+        # existed has no answer, and "no answer" is not "landed".
+        if kind == "delivered" and event.get("landed") is True:
+            return True, f"{ticket} was delivered and the work is where it goes"
+
+    # 3. A handback, which must be READABLE and must name this ticket.
+    from rite_ai import handback
+
+    hb = handback.read(root, worker)
+    if hb is not None and hb.unreadable:
+        return None, f"its handback record cannot be read ({hb.unreadable})"
+    if hb is not None and hb.done and hb.ticket == ticket:
+        return True, f"it handed {ticket} back"
+
+    return False, ""
 
 
 def facts_for(root: Path, worker: str) -> Facts:
-    paths = _claim_paths(root, worker)
+    claims = _claims_of(root, worker)
+    if claims is None:
+        # No point asking yoloAI: `plan` cannot act without knowing the claim.
+        return Facts(
+            has_claim=None,
+            sandbox_gone=None,
+            work_landed=None,
+            detail=f"{Path(root) / '.rite' / 'claims.json'} could not be read",
+        )
+    if not claims:
+        # The common case, and it costs no `yoloai ls`: a Worker holding
+        # nothing has nothing to reconcile whatever its sandbox is doing.
+        return Facts(has_claim=False, sandbox_gone=None, work_landed=None)
+
+    verdicts = [
+        _landed(root, worker, ticket)
+        for ticket in sorted({getattr(c, "ticket", "") for c in claims})
+    ]
+    if any(v is None for v, _ in verdicts):
+        landed: bool | None = None
+    elif all(v for v, _ in verdicts):
+        landed = True
+    else:
+        landed = False
     return Facts(
-        has_claim=bool(paths),
+        has_claim=True,
         sandbox_gone=_sandbox_gone(root, worker),
-        work_landed=_work_landed(root, worker),
+        work_landed=landed,
+        detail="; ".join(d for _, d in verdicts if d),
     )
 
 
-def _mine(root: Path, manager: str) -> list[str]:
-    """This Manager's Workers: the ones it owns (SCRUM-59 owner record) or
-    whose `worker.yml` names it, plus — so a project that nominates nobody
-    still reconciles — those that name no Manager. `worker_handbacks._mine`'s
-    rule, which is the Manager that would integrate the work."""
+def _mine(root: Path, manager: str, say=None) -> list[str]:
+    """This Manager's Workers.
+
+    🔴 **The owner record decides whenever it exists, and `worker.yml` only
+    when it does not.** The record is `lifecycle._may_act`'s authority and it
+    lives outside every Manager's grant; `worker.yml` is inside the project
+    tree, which every Manager's profile grants WRITABLE (seatbelt's
+    `enclosure.compose`, Landlock's `_fenced_project_paths`, which cannot
+    deny). The first version read the record only for Workers `worker.yml`
+    assigned to nobody, so one edited config line let Manager B reconcile —
+    release the claims of, and `forget_owner` — a Worker rite had started for
+    Manager A. Reading it for every Worker closes that both ways: it also
+    gives a Worker back to the Manager it was genuinely started for when the
+    config says otherwise.
+
+    With no record, `worker_handbacks._mine`'s rule stands: the Manager
+    `worker.yml` names, plus — so a project that nominates nobody still
+    reconciles — those that name none. That is the dogfood case, where a
+    Worker a person or an older rite started has no record at all.
+
+    A record that exists and cannot be read is "cannot tell", so the Worker
+    is not this Manager's to touch, and that is SAID: it is a fault. A Worker
+    that is plainly another Manager's is not said, because in a fleet that is
+    the ordinary steady state and a line per peer per pass is noise.
+    """
     from rite_ai.config.parse import load_project
     from rite_ai.managers import lifecycle
 
     project = load_project(Path(root))
     workers = list(getattr(project, "workers", []) or [])
-    named = [w.name for w in workers if getattr(w, "manager", "") == manager]
-    unassigned = [w.name for w in workers if not getattr(w, "manager", "")]
-    mine = set(named)
-    for name in unassigned:
+    mine: list[str] = []
+    for worker in sorted(workers, key=lambda w: w.name):
+        name = worker.name
         try:
             owner = lifecycle._owner_of(Path(root), name)  # noqa: SLF001
-        except OSError:
-            owner = ""  # cannot tell: fall back to the generous rule
-        if not owner or owner == manager:
-            mine.add(name)
-    return sorted(mine)
+        except (OSError, ValueError) as e:
+            # ⚠ ValueError too: `_owner_of` raises it for a record that names
+            # no Manager, and the first version caught only OSError — one
+            # malformed record aborted every later Worker in the pass.
+            if say is not None:
+                say(
+                    f"{manager!r}: not reconciling {name!r} — rite cannot tell "
+                    f"which Manager it belongs to ({e})"
+                )
+            continue
+        if owner:
+            if owner == manager:
+                mine.append(name)
+            continue
+        if getattr(worker, "manager", "") in (manager, ""):
+            mine.append(name)
+    return mine
 
 
 # --- the applier, run at the Manager's cycle boundary and at start ---------------
@@ -169,6 +333,20 @@ _LAST_AT: dict[tuple[str, str], float] = {}
 """When this process last ran a reconcile pass, per (project, Manager), for
 the per-cycle throttle. A fresh process (a restart) has none, so the start
 pass always runs."""
+
+_SAID: dict[tuple[str, str, str], str] = {}
+"""The last REPORT this process made about one Worker, per (project, Manager,
+worker).
+
+⚠ **Told once per reason, `merging`'s rule and for its reason.** A REPORT is
+by definition something rite cannot resolve — an open PR, a ticket that never
+landed, a ledger it cannot read — so it is still true on the next pass, and
+the next, every 300 seconds. Saying it each time is the per-cycle escalation
+loop this module exists to stop, and the stricter `_landed` above makes
+REPORT the common outcome rather than the rare one. So it is said when the
+reason CHANGES. A restart has an empty table and says everything once, which
+is correct: a Manager that has just come up has not heard any of it.
+"""
 
 
 def reconcile(
@@ -199,7 +377,7 @@ def reconcile(
         return []
     _LAST_AT[key] = now
 
-    workers_of = workers_of or (lambda: _mine(root, manager))
+    workers_of = workers_of or (lambda: _mine(root, manager, say))
     facts_of = facts_of or (lambda worker: facts_for(root, worker))
     release = release or (lambda worker: _release(root, worker))
 
@@ -214,22 +392,33 @@ def reconcile(
     actions: list[Action] = []
     try:
         for worker in workers_of():
+            said_key = (str(root), manager, worker)
             try:
                 action = plan(worker, facts_of(worker))
+                if action.kind == RELEASE:
+                    result = release(worker)
+                    told = f"{worker}: {action.reason} — {result}"
+                    say(f"{manager!r}: reconciled {told}")
+                    tell(told)
+                    # A released claim is gone, so whatever was last reported
+                    # about this Worker no longer holds: let the next REPORT
+                    # through.
+                    _SAID.pop(said_key, None)
+                    actions.append(action)
+                elif action.kind == REPORT:
+                    told = f"{worker}: {action.reason}"
+                    if _SAID.get(said_key) == told:
+                        continue  # unchanged since the last pass: already told
+                    _SAID[said_key] = told
+                    say(f"{manager!r}: {told}")
+                    tell(told)
+                    actions.append(action)
             except Exception as e:  # noqa: BLE001 - one Worker must not stop the rest
+                # ⚠ The release and the telling are INSIDE this, not after it:
+                # a failure in either used to abort every remaining Worker and
+                # lose the record of a claim already released.
                 say(f"{manager!r}: could not reconcile {worker!r}: {e}")
                 continue
-            if action.kind == RELEASE:
-                result = release(worker)
-                said = f"{worker}: {action.reason} — {result}"
-                say(f"{manager!r}: reconciled {said}")
-                tell(said)
-                actions.append(action)
-            elif action.kind == REPORT:
-                said = f"{worker}: {action.reason}"
-                say(f"{manager!r}: {said}")
-                tell(said)
-                actions.append(action)
     except Exception as e:  # noqa: BLE001 - reconcile must never break the cycle
         try:
             say(f"reconcile skipped this cycle: {type(e).__name__}: {e}")
