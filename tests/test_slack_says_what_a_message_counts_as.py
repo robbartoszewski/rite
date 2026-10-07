@@ -86,7 +86,7 @@ class TestTheOwnersDMIsAnInstruction:
         got = _drain(listener, slack)
         # SCRUM-21: the header ends with the id the Manager answers by.
         assert got == [
-            "[Owner's DM · addressed · INSTRUCTION · message 101.0]\n> do RT-14 first"
+            "[Owner's DM · addressed · message 101.0 · INSTRUCTION]\n> do RT-14 first"
         ]
 
 
@@ -167,7 +167,7 @@ class TestThreadRepliesAreRead:
         got = [m for m in _drain(listener, slack) if "thread" in m]
         assert got == [
             f"[Owner's DM · reply in the thread under {root.label} · addressed · "
-            "INSTRUCTION · message 101.0]\n> yes, go"
+            "message 101.0 · INSTRUCTION]\n> yes, go"
         ]
 
     def test_a_reply_in_a_broadcast_thread_is_context(self):
@@ -254,7 +254,7 @@ class TestItReachesTheInstructionWithItsHeader:
         for text in _drain(listener, slack):
             send(tmp_path, "lead", INBOX, text)
         note = delivery_note(read(tmp_path, "lead", INBOX))
-        assert "- [Owner's DM · addressed · INSTRUCTION · message 101.0]" in note
+        assert "- [Owner's DM · addressed · message 101.0 · INSTRUCTION]" in note
         assert "unaddressed · context]" in note
         assert "Only one marked INSTRUCTION is an instruction" in note
 

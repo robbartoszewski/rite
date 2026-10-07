@@ -1589,16 +1589,32 @@ class Listener:
                 # `ts` was captured here, used for the 👀, and dropped. So
                 # every answer surfaced as `Status · lead` in the flat feed —
                 # you ask in one place and the answer appears in another.
-                # Outside the `> ` quote, like the chore id below it, so
-                # typed text cannot forge one.
+                # Outside the `> ` quote, like the chore id, so typed text
+                # cannot forge one.
+                #
+                # ⚠ **BEFORE `INSTRUCTION`, WHICH MUST STAY LAST.**
+                # `delivered.classify` gates the User's own words on
+                # `parts[-1] != INSTRUCTION`, and that one word decides
+                # whether a DM becomes a chore (`rite chore`), whether a
+                # refinement answer is attributed to the Owner, and whether
+                # the Owner's answer reaches a Worker that asked. Appending
+                # the id after it turned every Owner instruction into "not
+                # the User's words" — measured, and silently: the relay still
+                # delivered the text, and everything that acts on it refused.
+                # A test now runs this exact header back through `classify`.
+                #
+                # Omitted entirely when Slack sent no `ts`: a message with no
+                # id has none to hand back, and `message None` in the header
+                # is a value the instruction would tell the Manager to pass.
+                sent_ts = str(message.get("ts") or "")
                 head = _header(
                     "Owner's DM",
                     when,
                     *normalised,
                     *thread,
                     "addressed",
+                    *((f"message {sent_ts}",) if sent_ts else ()),
                     "INSTRUCTION",
-                    f"message {message.get('ts')}",
                 )
                 # ⚠ Recorded HERE, in the one branch that decided this is the
                 # Owner addressing this Manager, and from the same facts the
@@ -1890,7 +1906,14 @@ class Listener:
                 # check-ins included. The Owner saw silence, which is the
                 # failure A5 exists to prevent. The reply itself must still
                 # reach them, so it goes to the pile that always can.
-                if answering:
+                if answering and not str(getattr(message, "answers", "") or ""):
+                    # ⚠ Only the GUESS is cleared, and only when the guess is
+                    # what just failed (SCRUM-21). `_awaiting` is rite's
+                    # correlation; a stated id is the Manager's claim and does
+                    # not come from here. Clearing it for a failed stated post
+                    # threw away a still-valid correlation, so the NEXT plain
+                    # reply inside the window went to notes as well — one dead
+                    # thread costing two answers their place.
                     self._awaiting = {}
                     self._save(posted)
                 root = self._notes_root(target, call=call)

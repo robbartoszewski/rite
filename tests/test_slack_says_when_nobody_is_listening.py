@@ -105,7 +105,7 @@ class TestAMessageSentWhileStoppedIsDeliveredAtTheNextStart:
         again = _run(tmp_path, slack)
         got = _heard(again, slack)
         assert got == [
-            "[Owner's DM · addressed · INSTRUCTION · message 504.5]\n"
+            "[Owner's DM · addressed · message 504.5 · INSTRUCTION]\n"
             "> while you were stopped"
         ]
         news = again.news()

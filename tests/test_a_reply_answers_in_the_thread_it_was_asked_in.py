@@ -49,6 +49,7 @@ from pathlib import Path
 from rite_ai.managers.mailbox import OUTBOX, QUESTION, REPLY, send
 from rite_ai.managers.slack import MESSAGE_ID
 from tests.test_an_answer_to_the_owner_goes_to_the_dm import (
+    OWNER,
     Clock,
     Slack,
     _heard,
@@ -90,6 +91,63 @@ class TestTheManagerCanSeeTheId:
         head, *rest = heard[0].splitlines()
         assert "message 1.000000" not in head
         assert all(line.startswith(">") for line in rest if line.strip())
+
+    def test_the_header_is_still_the_users_own_instruction(self, tmp_path):
+        """⚠ **The defect the first version of this shipped**, caught by
+        review and now pinned. `delivered.classify` gates the User's own
+        words on `parts[-1] != INSTRUCTION`, so appending the id AFTER it
+        turned every Owner instruction into "not the User's words" — and
+        silently: the text was still delivered, while `rite chore`,
+        refinement attribution and the Owner's answer to a Worker's question
+        all refused it.
+
+        Asserted through the REAL header, not a literal: every other test of
+        classification builds the string by hand, which is exactly why none
+        of them caught it."""
+        from rite_ai.managers.delivered import classify
+
+        root, slack, clock, listener = _setup(tmp_path)
+        _owner_asks(slack, clock, "do RT-14 first")
+
+        heard = [m for m in _heard(listener, slack, clock) if "RT-14" in m]
+
+        assert heard
+        got = classify(heard[0])
+        assert got.users, got.why
+        assert got.words == "do RT-14 first"
+
+    def test_the_chore_line_still_appears_for_it(self, tmp_path):
+        """What `classify` gates, end to end: the id `rite chore` is asked
+        for is only shown for a message classed as the User's."""
+        from rite_ai.managers.mailbox import INBOX, delivery_note, read, send
+
+        root, slack, clock, listener = _setup(tmp_path)
+        _owner_asks(slack, clock, "add a CSV export")
+        for text in _heard(listener, slack, clock):
+            send(root, "lead", INBOX, text)
+
+        note = delivery_note(read(root, "lead", INBOX))
+
+        assert "message id" in note
+
+    def test_a_message_with_no_ts_carries_no_id(self, tmp_path):
+        """`message None` in the header is a value the instruction would
+        tell the Manager to hand back, and `MESSAGE_ID` would then refuse
+        it. A message with no id has none to offer.
+
+        Driven straight at `_relay`: live Slack always sends a `ts`, and the
+        fake's own history filter compares it as a float, so this branch is
+        defensive and cannot be reached through a poll. Said rather than
+        left as an untested `if`."""
+        from rite_ai.managers.delivered import classify
+
+        root, slack, clock, listener = _setup(tmp_path)
+
+        got = listener._relay("D1", {"user": OWNER, "text": "no ts here"})
+
+        head = got.splitlines()[0]
+        assert "message" not in head, head
+        assert classify(got).users, "and it is still the User's words"
 
     def test_the_shape_is_the_one_slack_uses(self):
         assert MESSAGE_ID.match("1759000000.123456")

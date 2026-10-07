@@ -175,7 +175,7 @@ class TestAPostedReplyCanBeAnsweredInItsThread:
         assert got == [
             "[Owner's DM · reply in the thread under rite's reply "
             f'"shall I merge RT-14?" at {root.label.split(" at ")[-1]} · '
-            "addressed · INSTRUCTION · message 104.0]\n> yes"
+            "addressed · message 104.0 · INSTRUCTION]\n> yes"
         ]
 
     def test_a_restart_keeps_reading_the_thread_without_redelivering(self, tmp_path):
