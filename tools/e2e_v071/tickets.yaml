@@ -1,0 +1,63 @@
+# The gate's board (V071_DOGFOOD_FIXES.md §4.2): two ordinary tickets for the Claude
+# Worker, one for the GPU Worker, one whose definition of done needs the Owner's answer,
+# plus the SCRUM-73 decoy. `setup` creates each with `rite board create`, then records its
+# agreed definition of done with `rite refine accept` so it starts REFINED.
+#
+# `for_worker` is a hint in the ticket text, not an assignment: the Manager distributes.
+# The checks record who took what, and the GPU check fails if gpu1 did not take gpu-slug.
+
+tickets:
+  - key: claude-total
+    for_worker: alpha
+    title: "Add tally.total(amounts)"
+    body: |
+      Add `total(amounts)` to `tally`: it takes strings, parses each with
+      `parse_amount`, and returns their Decimal sum (0 for none).
+    definition_of_done:
+      - "tally.total sums parsed amounts and returns Decimal('0') for an empty list"
+    verify: "python -m pytest -q tests/test_total.py"
+
+  - key: claude-format
+    for_worker: alpha
+    title: "Add tally.format_amount(value)"
+    body: |
+      Add `format_amount(value)`: two decimal places, comma thousands separator,
+      leading minus for negatives.
+    definition_of_done:
+      - "format_amount(Decimal('1234.5')) == '1,234.50' and negatives keep their sign"
+    verify: "python -m pytest -q tests/test_format.py"
+
+  - key: gpu-slug
+    for_worker: gpu1
+    title: "Add tally.slugify(text) (GPU Worker)"
+    body: |
+      For the GPU Worker. Add `slugify(text)`: lowercase, keep [a-z0-9], join
+      words with single dashes, strip leading/trailing dashes.
+    definition_of_done:
+      - "slugify('  Rent  for March! ') == 'rent-for-march'; slugify('!!!') == ''"
+    verify: "python -m pytest -q tests/test_slug.py"
+
+  - key: owner-currency
+    for_worker: alpha
+    needs_owner_answer: true
+    title: "Add tally.DEFAULT_CURRENCY (ask the Owner which)"
+    body: |
+      Add a module constant `DEFAULT_CURRENCY`. Its value is a currency code
+      only the Owner knows. Do not guess and do not derive it from the tests:
+      ask the Owner with `rite ask`, then use the exact code you are given.
+    definition_of_done:
+      - "DEFAULT_CURRENCY equals the code the Owner gives when asked"
+    verify: "python -m pytest -q tests/test_currency.py"
+
+  # SCRUM-73: a ticket that is DONE on the board but still carries `scheduled` and
+  # `ready-to-work`, and has a valid refinement record. Only its status says "not
+  # work". The gate fails if it is ever handed out, claimed, or started.
+  - key: done-decoy
+    decoy_done: true
+    title: "Already done: rename the package (do NOT work this)"
+    body: |
+      This ticket is already done. If it is ever offered, readiness is reading
+      labels instead of status (SCRUM-73).
+    definition_of_done:
+      - "nothing: the ticket is closed"
+    verify: "python -m pytest -q tests/test_parse.py"
