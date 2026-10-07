@@ -97,12 +97,12 @@ def instructions(root: Path, manager: str, config) -> str:
             "asking and parks it. Nothing is ever worked on a guess.",
             "",
             "To send a round about a ticket:",
-            stdin_text.heredoc(f"{rite} refine ask <ID> -", "<your round>"),
-            "and about an instruction he gave in chat:",
-            stdin_text.heredoc(
-                f"{rite} refine ask --message <message-id> -", "<your round>"
+            stdin_text.file_form(
+                root, manager, f"{rite} refine ask <ID>", "round.md", "your round"
             ),
-            stdin_text.RULE,
+            "and about an instruction he gave in chat, the same, with:",
+            f"   {rite} refine ask --message <message-id> --from-file <the same path>",
+            stdin_text.FILE_RULE,
             "",
         ]
     )

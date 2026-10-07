@@ -137,7 +137,7 @@ def test_some_statements_are_refused_on_purpose(text):
 def test_rite_reply_refuses_it_writes_nothing_and_names_ask(project, text):
     result = CliRunner().invoke(cli, ["reply", "--manager", "lead", "-"], input=text)
     assert result.exit_code == 1, result.output
-    assert "rite ask --manager lead - <<'RITE_TEXT_" in result.output
+    assert "rite ask --manager lead --from-file " in result.output
     assert read(project, "lead", OUTBOX) == []
 
 
@@ -216,8 +216,8 @@ def test_rite_replies_marks_a_question_and_not_a_reply(project):
 
 def test_the_manager_is_told_to_ask_with_ask(project):
     said = how_to_reply(project, "lead") + checkins.instructions(project, "lead")
-    assert " ask --manager lead - <<'RITE_TEXT_" in said
-    assert "<your question>" in said
-    assert "To ask now:\n" in said and "\n<question>\n" in said
+    assert " ask --manager lead --from-file " in said
+    assert "Write your question to" in said
+    assert "To ask now:\n1. Write the question to" in said
     assert "To ask the User something or tell them something" not in said
     assert ' reply --manager lead "<question>"' not in said

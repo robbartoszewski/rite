@@ -583,7 +583,7 @@ def _count_drop(root: Path, owner: str, sender: str, scope: str) -> None:
     _store(path, data)
 
 
-def briefing(manager: str, owner: str, roles) -> str:
+def briefing(manager: str, owner: str, roles, *, root: Path) -> str:
     """What a Manager is told about the other Managers in its root, or "".
 
     "" for a lone Manager: there is nobody to route to, and every existing
@@ -632,12 +632,15 @@ def briefing(manager: str, owner: str, roles) -> str:
             f"{head}You are the OWNER: the only Manager here that reads Slack "
             "and the only one that hands work to the others.\n\n"
             f"{listed}\n\n"
-            "To give one of them work, run:\n"
-            + stdin_text.heredoc(
-                f"{rite} route --ticket <ID> <manager> -",
-                "<what to do, and what to report back>",
+            "To give one of them work:\n"
+            + stdin_text.file_form(
+                root,
+                manager,
+                f"{rite} route --ticket <ID> <manager>",
+                "route.md",
+                "what to do, and what to report back",
             )
-            + f"\n{stdin_text.RULE}\n"
+            + f"\n{stdin_text.FILE_RULE}\n"
             "Every route names the ticket the work is for; rite checks it is on "
             "the board and refuses the route otherwise. If the User asked for "
             "the work in a message and it is not a ticket yet, make it one "
@@ -663,7 +666,7 @@ def briefing(manager: str, owner: str, roles) -> str:
             "Route only what a person gave you authority for. If it is missing "
             "something you would otherwise have to guess — which file, what "
             "counts as done, what must not change — ask the User before you "
-            f"route, with `{rite} ask -`, as above. Never route a guess, and "
+            "route, with `rite ask`, as above. Never route a guess, and "
             "never leave the other Manager to ask: it cannot reach the User. "
             "Once routed, the other Manager should need nothing more from you.\n"
         )
@@ -678,8 +681,10 @@ def briefing(manager: str, owner: str, roles) -> str:
         "When you have finished a routed instruction, report back by RUNNING "
         "this shell command as a tool call (writing it in your answer does "
         "nothing):\n"
-        + stdin_text.heredoc(f"{rite} reply --manager {manager} -", "<result>")
-        + f"\n{stdin_text.RULE}\n"
+        + stdin_text.file_form(
+            root, manager, f"{rite} reply --manager {manager}", "reply.md", "the result"
+        )
+        + f"\n{stdin_text.FILE_RULE}\n"
         "⚠ BEFORE you run it, CHECK every part you are about to claim, with a "
         "tool, now: read the file you say you wrote, run the command you say "
         "passed, look at the commit you say you made. Report what the check "

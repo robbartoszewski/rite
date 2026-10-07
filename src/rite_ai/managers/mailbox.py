@@ -1003,14 +1003,25 @@ def how_to_reply(root: Path, manager: str) -> str:
     rite = own_command()
     return (
         "\n\n## Talking to the User\n\n"
-        "To TELL the User something (progress, results, what you found), "
-        "run:\n"
-        + stdin_text.heredoc(f"{rite} reply --manager {manager} -", "<your message>")
+        "To TELL the User something (progress, results, what you found):\n"
+        + stdin_text.file_form(
+            root,
+            manager,
+            f"{rite} reply --manager {manager}",
+            "reply.md",
+            "your message",
+        )
         + "\n"
         "That is filed for them to read, not to act on. To ASK them anything, "
-        "or to say you are blocked or need a decision, run:\n"
-        + stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<your question>")
-        + f"\n{stdin_text.RULE}\n"
+        "or to say you are blocked or need a decision:\n"
+        + stdin_text.file_form(
+            root,
+            manager,
+            f"{rite} ask --manager {manager}",
+            "ask.md",
+            "your question",
+        )
+        + f"\n{stdin_text.FILE_RULE}\n"
         "A reply that reads like a question is refused, and you are told to "
         "ask it instead. When unsure, ask.\n"
         f"Do not write files into the mailbox yourself. They read your replies "

@@ -1118,6 +1118,8 @@ ALLOWED_ON_TMUX_ARGV = frozenset(
         "TMPDIR",
         # Claude Code's temp root, a PATH (`boundaries.temp_environment`).
         "CLAUDE_CODE_TMPDIR",
+        # zsh's here-document temp files, a PATH prefix (SCRUM-69).
+        "TMPPREFIX",
         "GOOSE_PROVIDER",
         "GOOSE_MODEL",
         "GOOSE_CONTEXT_LIMIT",

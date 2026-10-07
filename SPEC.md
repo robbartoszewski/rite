@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.87 · **Date:** 2026-10-05
+**Version:** 0.24.88 · **Date:** 2026-10-07
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6707,8 +6707,10 @@ Planned in `docs/design/V071_DOGFOOD_FIXES.md`. The decided directions:
   - Plan state moves out of the project tree, beyond every Manager's write
     access. Today any Manager can edit a plan's approval or run
     `rite local approve` in any reviewer's name from inside its boundary.
-- **The relay reads a file, not a heredoc (SCRUM-69).** The Manager's text
-  travels as `--from-file <path>`, written with its own Write tool.
+- **The relay reads a file, not a heredoc (SCRUM-69). BUILT (0.24.88).** The
+  Manager's text travels as `--from-file <draft>`, written with its own Write
+  tool into its own drafts directory (`manager_dir/drafts`, granted to its own
+  profile alone). See §9.16's F14 paragraph.
 
 ### 9.15. The Manager's process journal — a diagnostic mode, off by default
 
@@ -7219,6 +7221,21 @@ command injection, observed: in the v0.6.0 dogfood a Claude Owner's
 allows a substitution whose inner command is on the allowlist — and the
 output reached the person. A Manager's text often quotes a ticket, an issue or
 another Manager, so double quotes let whoever wrote that text run commands.
+**Since 0.24.88 (SCRUM-69) the taught form is a file, not a heredoc.** The
+Manager writes its text with its own Write tool into its drafts directory
+(`stdin_text.drafts_dir`, under its own `manager_dir`, which no other Manager's
+profile grants) and runs `rite reply|ask|route|refine ask --from-file <draft>`.
+`read_draft` accepts only a regular file directly in that directory, opened
+without following a link, so what goes out in a Manager's name is only what
+that Manager wrote. A draft is removed once its message is queued, so the same
+command cannot send it twice; a send that failed keeps it. The heredoc on stdin
+is still accepted and no longer taught. Why: zsh writes every here-document to
+a file under `TMPPREFIX` (default `/tmp/zsh`), which the Manager profile stopped
+granting with SB8, so mid-session heredocs failed ("can't create temp file for
+here document: operation not permitted", measured inside the profile); and a
+doubled end line made the engine refuse the whole call (SCRUM-45).
+`boundaries.temp_environment` now also puts `TMPPREFIX` inside the boundary,
+for the heredocs a Manager writes for itself.
 **Not covered:** rite cannot stop a model putting a substitution into some
 other command (`gh issue comment --body "…"`); and the refusal cannot un-run a
 substitution the shell already ran, only keep its output from being sent.
@@ -8486,6 +8503,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.88 — the relay reads a file, not a heredoc (SCRUM-69, absorbing SCRUM-45 and SCRUM-22's transport residual).** `rite reply`, `ask`, `route` and `refine ask` take `--from-file <draft>`; every Manager instruction teaches only that form (`stdin_text.file_form`, `FILE_RULE`), and the heredoc on stdin stays accepted. `stdin_text.drafts_dir`, `read_draft` (regular file directly in the Manager's own drafts directory, `O_NOFOLLOW`, at most `DRAFT_LIMIT`), `consume_draft` (after the message is queued: deliver exactly once, a failed send keeps the draft). `routing.briefing` takes `root`. `boundaries.temp_environment` adds `TMPPREFIX`, because zsh's here-document temp file under `/tmp` is what SB8's profile refused, and `TMPPREFIX` joins `ALLOWED_ON_TMUX_ARGV`. The command-line refusal for a person at the host is unchanged. Tests: `tests/test_the_relay_reads_a_file.py` (the EPERM reproduced inside the real Manager profile and its carve-out; the file form delivering where no heredoc can be made; every refusal of a path that is not this Manager's draft; exactly-once), and F14's shell tests rewritten on the file form. Six mutations, each red on its own tests.
 
 **Changes in 0.24.87 — SCRUM-72's approval decided (design only).** A local `planner` Manager writes a GPU Worker's plan, and a Manager approves it whatever its engine (Robert, 2026-10-05): no engine-kind condition on the approval path, and the harness's automatic approval is withdrawn in favour of a real review through the reviewer's inbox, and plan state moves out of every Manager's write access (§9.14.14; `V071_DOGFOOD_FIXES.md` §3.3b). The local tier's stages become persisted, code-enforced states (§3.3a there). The §9.15 heading, dropped by 0.24.86, is restored.
 

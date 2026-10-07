@@ -133,8 +133,21 @@ def temp_environment(path: Path) -> dict[str, str]:
     SB8 closed. Both variables point at the same directory, and every launch
     that runs an engine under a profile takes them from here, so the next one
     an engine reads is added once.
+
+    ⚠ **And zsh's here-document temp files (SCRUM-69).** zsh writes every
+    here-document to a file named by `TMPPREFIX` (default `/tmp/zsh`), not
+    `TMPDIR`. With `/tmp` no longer granted, a Manager's heredoc failed inside
+    its own profile with exactly the dogfood's words, "can't create temp file
+    for here document: operation not permitted" (measured; outside, and with
+    `TMPPREFIX` inside the boundary, it ran). The relay no longer needs a
+    heredoc at all, but a Manager writes others (a commit message), so the
+    prefix is put inside the boundary too.
     """
-    return {"TMPDIR": str(path), "CLAUDE_CODE_TMPDIR": str(path)}
+    return {
+        "TMPDIR": str(path),
+        "CLAUDE_CODE_TMPDIR": str(path),
+        "TMPPREFIX": str(path / "zsh"),
+    }
 
 
 def _landlock_available() -> bool:

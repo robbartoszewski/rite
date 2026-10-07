@@ -724,17 +724,22 @@ def instructions(root: Path, manager: str) -> str:
         "default, and every doubt is resolved by asking now.",
         "",
         "To ask now:",
-        stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<question>"),
-        stdin_text.RULE,
+        stdin_text.file_form(
+            root, manager, f"{rite} ask --manager {manager}", "ask.md", "the question"
+        ),
+        stdin_text.FILE_RULE,
         "",
         "Only when a question is CLEARLY deferrable, meaning you have real "
         "work to do meanwhile that does not depend on the answer, you may "
         "defer it to the User's next check-in:",
-        # SCRUM-33: the meanwhile is the heredoc's first line, never a
+        # SCRUM-33: the meanwhile is the file's first line, never a
         # double-quoted argument; it names tickets other people wrote.
-        stdin_text.heredoc(
-            f"{rite} ask --manager {manager} --defer --while - -",
-            "<what you will do meanwhile, on this one line>\n<question>",
+        stdin_text.file_form(
+            root,
+            manager,
+            f"{rite} ask --manager {manager} --defer --while -",
+            "ask.md",
+            "what you will do meanwhile on the first line, then the question",
         ),
         "The first line is what you will do meanwhile, the rest is the "
         "question. If you cannot name that work, the question blocks you: ask "

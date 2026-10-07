@@ -97,28 +97,23 @@ def _written_allow(root: Path) -> tuple[str, ...]:
     return tuple(document["permissions"]["allow"])
 
 
-def _taught_heredocs(root: Path) -> list[str]:
-    """Every heredoc rite teaches a Manager, from the instructions as composed:
-    opening line through end line."""
+def _taught_commands(root: Path) -> list[str]:
+    """Every command rite teaches a Manager for sending its text, from the
+    instructions as composed: since SCRUM-69, the `2. Run:` line of each file
+    form, and nothing after it."""
     roles, _ = _manager_roles(root)
     texts = [
         how_to_reply(root, "lead"),
-        routing.briefing("lead", "lead", roles),
-        routing.briefing("helper", "lead", roles),
+        routing.briefing("lead", "lead", roles, root=root),
+        routing.briefing("helper", "lead", roles, root=root),
         checkins.instructions(root, "lead"),
     ]
-    found = []
-    for text in texts:
-        lines = text.splitlines()
-        for i, line in enumerate(lines):
-            if "<<'RITE_TEXT_" not in line:
-                continue
-            end = line.rsplit("<<'", 1)[1].rstrip("'")
-            j = lines.index(end, i + 1)
-            # The line AFTER the end is kept: a doubled end line sits there,
-            # outside the heredoc, which is exactly where the engine saw it.
-            found.append("\n".join(lines[i : j + 2]))
-    return found
+    return [
+        line.strip().removeprefix("2. Run: ")
+        for text in texts
+        for line in text.splitlines()
+        if line.strip().startswith("2. Run: ")
+    ]
 
 
 class TestWhatRiteTeachesIsWhatRiteAllows:
@@ -126,29 +121,32 @@ class TestWhatRiteTeachesIsWhatRiteAllows:
         self, project
     ):
         allow = _written_allow(project)
-        taught = _taught_heredocs(project)
-        verbs = {v for h in taught for v in ("reply", "ask", "route") if f" {v} " in h}
+        taught = _taught_commands(project)
+        verbs = {v for c in taught for v in ("reply", "ask", "route") if f" {v} " in c}
         assert verbs == {"reply", "ask", "route"}, verbs
-        for heredoc in taught:
-            assert allowed(heredoc, allow), heredoc
+        for command in taught:
+            assert allowed(command, allow), command
             # ⚠ `allowed` reduces the executable to its basename, so
             # `Bash(rite:*)` alone would pass it. The engine matches the
             # command as written, by absolute path, and a run once lost a
             # Manager's only reply to exactly that (`_running_rite_rules`).
-            executable = heredoc.split(" ", 1)[0]
-            assert executable.startswith("/"), heredoc
+            executable = command.split(" ", 1)[0]
+            assert executable.startswith("/"), command
             assert f"Bash({executable}:*)" in allow, (executable, allow)
 
-    def test_each_taught_heredoc_ends_once_with_nothing_after(self, project):
-        """The shape the engine permitted in every recorded case. A doubled
-        end line is what it refused."""
-        for heredoc in _taught_heredocs(project):
-            lines = heredoc.splitlines()
-            end = lines[0].rsplit("<<'", 1)[1].rstrip("'")
-            assert lines.count(end) == 1, heredoc
-            assert stdin_text.stray_end(lines[-1]) == "", heredoc
+    def test_no_taught_command_has_an_end_line_to_double(self, project):
+        """🔴 SCRUM-45: the engine refused a whole call when the end line was
+        written twice. The taught form is one command line naming a file, so
+        there is no end line to double, and nothing after it on the line."""
+        taught = _taught_commands(project)
+        assert taught
+        for command in taught:
+            assert "<<" not in command and "\n" not in command, command
+            assert stdin_text.stray_end(command.split()[-1]) == "", command
+            assert " --from-file " in command, command
 
     def test_the_rule_says_once_and_nothing_after(self):
+        """Still said where a heredoc is still taught (a person at the host)."""
         assert "ONCE, with nothing after it" in stdin_text.RULE
 
 

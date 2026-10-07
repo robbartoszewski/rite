@@ -130,13 +130,21 @@ class TestAManagerWithAnOlderRiteOnPathStillSucceeds:
         assert bare.returncode != 0
         assert "Usage: rite" in (bare.stdout or "") + (bare.stderr or "")
 
-        # What rite writes now, against the SAME PATH.
-        # F14: a heredoc, three lines, the text on stdin.
+        # What rite writes now, against the SAME PATH. SCRUM-69: the text
+        # in a draft file, written as the Manager's Write tool would, and the
+        # command the instructions print, which names it.
         said = how_to_reply(root, "lead").splitlines()
-        at = next(i for i, line in enumerate(said) if "reply --manager" in line)
-        line = "\n".join(said[at : at + 3])
+        at = next(
+            i
+            for i, line in enumerate(said)
+            if line.startswith("2. Run: ") and "reply --manager" in line
+        )
+        draft = Path(said[at - 1].split("`")[1])
+        draft.parent.mkdir(parents=True, exist_ok=True)
+        draft.write_text(message)
+        line = said[at].removeprefix("2. Run: ")
         run = subprocess.run(
-            ["sh", "-c", line.replace("<your message>", message)],
+            ["sh", "-c", line],
             capture_output=True,
             text=True,
             env=env,

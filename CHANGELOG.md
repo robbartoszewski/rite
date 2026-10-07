@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### A Manager's messages no longer depend on a heredoc (SCRUM-69)
+
+A Manager reached you with `rite reply` and `rite ask` through a shell
+heredoc, and partway through a session that could stop working: "can't create
+temp file for here document: operation not permitted". Its instructions taught
+no other way, so it went silent. It now writes its text to a file in its own
+drafts directory and runs `rite reply --from-file <file>` (the same for
+`ask`, `route` and `refine ask`). Nothing in the file is expanded, and there
+is no end line it can write twice. rite reads only a file in that Manager's
+own drafts directory, and removes it once the message is sent, so a retry
+cannot send it twice. From your own shell, `-` with the text on stdin still
+works.
+
 ### A check mark means the Worker read your answer: `rite ack`
 
 When you answered a Worker's question, rite settled the question and told you
