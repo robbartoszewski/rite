@@ -146,6 +146,17 @@ def brief(
             f"board ({listed.message}), so there is no refinement list this "
             "cycle. Do not refine from memory.\n"
         )
+    # ⚠ **A ticket whose STATUS says the work is over is not refinement work
+    # either (SCRUM-73).** `scheduled` is only ever added, so a Done ticket
+    # stays in this list for ever — and a round posted on it asks the User to
+    # define done for work that is finished and merged. Named, because the
+    # `scheduled` label is the Owner's to take off and nothing else here
+    # would mention the ticket at all.
+    from rite_ai.tickets.statuses import is_terminal
+
+    over = [t for t in listed if is_terminal(t)]
+    listed = [t for t in listed if not is_terminal(t)]
+
     attempts = rounds.all_attempts(root, manager)
     states, tickets = [], {}
     for ticket in listed:
@@ -188,6 +199,13 @@ def brief(
         )
     for ticket_id, why in work.needs_person.items():
         lines.append(f"- **{ticket_id} needs a person**: {why}")
+    for ticket in over:
+        lines.append(
+            f"- **{ticket.id} is {ticket.status or 'in a terminal status'}**: "
+            f"that work is over, so rite does not refine it and no Worker is "
+            f"started on it. Its `{view.SCHEDULED}` label outlived the work — "
+            "take it off."
+        )
     if not lines:
         return corrected
     return (

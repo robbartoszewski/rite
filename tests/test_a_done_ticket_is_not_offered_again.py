@@ -166,6 +166,20 @@ class TestTheBriefOmitsIt:
         assert cycle.ready == ["KAN-31"]
         assert cycle.scheduled == 1
 
+    def test_the_idle_reason_does_not_contradict_the_read(self, tmp_path):
+        """⚠ "the board listed nothing waiting" is false when the board
+        listed a Done ticket. The verdict is right; the sentence under it has
+        to be about the read that was actually made."""
+        cycle = plan_cycle(project(tmp_path), board=Board(done()))
+
+        assert cycle.verdict == IDLE
+        assert "whose status says the work is over" in cycle.detail
+
+    def test_an_empty_board_still_says_nothing_was_waiting(self, tmp_path):
+        cycle = plan_cycle(project(tmp_path), board=Board())
+
+        assert cycle.detail.startswith("the board listed nothing waiting as of")
+
     def test_format_cycle_prints_it(self, tmp_path):
         from rite_ai.loop import format_cycle
 
@@ -324,6 +338,26 @@ class TestWhatCountsAsFinished:
         keeps the old behaviour."""
         assert not is_terminal(Ticket(id="K-1", title="t", status="Icebox"))
 
+    @pytest.mark.parametrize("status", ["Resolved", "Cancelled", "Duplicate"])
+    def test_a_live_column_with_a_finished_sounding_name_is_not_finished(self, status):
+        """⚠ The category DECIDES when it is there, both ways. A board may
+        have a column literally called "Resolved" sitting in JIRA's
+        `indeterminate` category, meaning work in progress; reading the name
+        as a second opinion would park that ticket for ever."""
+        assert not is_terminal(
+            Ticket(
+                id="K-1",
+                title="t",
+                status=status,
+                metadata={
+                    "fields": {"status": {"statusCategory": {"key": "indeterminate"}}}
+                },
+            )
+        )
+        # The control: the same name, from a backend that reports no
+        # category at all, is still read as finished.
+        assert is_terminal(Ticket(id="K-1", title="t", status=status))
+
     def test_the_backends_category_beats_its_column_name(self):
         assert is_terminal(
             Ticket(
@@ -343,7 +377,7 @@ class TestWhatCountsAsFinished:
             {"fields": {"status": "Done"}},
             {"fields": {"status": {"statusCategory": None}}},
             {"fields": {"status": {"statusCategory": {"key": None}}}},
-            {"fields": {"status": {"statusCategory": {"key": "new"}}}},
+            {"fields": {"status": {"statusCategory": {"key": ""}}}},
         ],
     )
     def test_a_metadata_shape_it_does_not_recognise_falls_back_to_the_name(
@@ -521,3 +555,153 @@ class TestRiteTakesTheLabelBackOff:
         assert status.refined, "the fixture must be REFINED, or this proves nothing"
         assert not view.wanted(done("KAN-28"), status)
         assert view.wanted(todo("KAN-28"), status)
+
+
+class TestTheWorkerStartItselfRefuses:
+    """⚠ The last door, and the only one that actually spends anything:
+    `rite sandbox start --ticket`. TR4 gates it on REFINED, which is a
+    different question — KAN-28 was Done, merged AND REFINED. The broker
+    above runs this very command (`broker.launch_argv`), so a gate only
+    there would be a gate a person at the host walks straight past."""
+
+    def _ticket(self, status: str):
+        return Ticket(
+            id="7",
+            title="timout is way too long",
+            status=status,
+            description="make it configurable or smth",
+        )
+
+    def test_a_done_ticket_starts_no_worker_and_leaves_no_copy(
+        self, tmp_path, monkeypatch
+    ):
+        from rite_ai.sandbox.delivery import DELIVERY_FILE
+        from tests.refined_board import board_with
+        from tests.test_a_worker_starts_only_on_its_agreed_record import (
+            _project,
+            _start,
+        )
+
+        worker = _project(tmp_path, monkeypatch)
+        (worker / DELIVERY_FILE).write_text("# Ticket 6, an old one\n")
+        with board_with(tmp_path, monkeypatch, self._ticket("Done")):
+            result, seen = _start("--ticket", "7")
+
+        assert result.exit_code == 1
+        assert "Done" in result.output
+        last = result.output.strip().splitlines()[-1]
+        assert last.startswith("7 is Done"), last
+        assert "new" not in seen, "no sandbox was created"
+        assert not (worker / DELIVERY_FILE).exists(), "nothing stale is left behind"
+
+    def test_the_control_starts(self, tmp_path, monkeypatch):
+        from tests.refined_board import board_with
+        from tests.test_a_worker_starts_only_on_its_agreed_record import (
+            _project,
+            _start,
+        )
+
+        _project(tmp_path, monkeypatch)
+        with board_with(tmp_path, monkeypatch, self._ticket("In Progress")) as (
+            board,
+            _record,
+        ):
+            result, seen = _start("--ticket", "7")
+
+        assert result.exit_code == 0, result.output
+        assert board.reads == ["7"], "still one read of the board, and only one"
+        assert seen.get("new"), "the sandbox was created"
+
+
+@pytest.fixture
+def refining_project(tmp_path, monkeypatch):
+    """A project whose `lead` holds `route`, which is who refines (TRQ7)."""
+    from tests.test_the_owner_routes_to_other_managers import CONFIG
+
+    rite = tmp_path / ".rite"
+    rite.mkdir()
+    (rite / "brief.yaml").write_text(
+        "project:\n  name: acme\n  role: owner\n"
+        "what:\n  kind: app\ntechnology:\n  languages:\n    - python\n"
+    )
+    (rite / "modules.yaml").write_text("modules: {}\n")
+    (rite / "config.yaml").write_text(CONFIG)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("RITE_PROJECT_ROOT", raising=False)
+    return tmp_path
+
+
+class TestNorIsItRefinementWork:
+    """A round posted on a Done ticket asks the User to define done for work
+    that is finished and merged. `scheduled` is only ever added, so without
+    a status gate the brief carries it for ever."""
+
+    @pytest.fixture
+    def key(self, tmp_path):
+        import os
+        from unittest.mock import patch
+
+        from rite_ai.refinement import key as refinement_key
+
+        with patch.dict(
+            os.environ, {refinement_key.KEY_DIR_ENV: str(tmp_path / "refinement-key")}
+        ):
+            yield refinement_key.ensure()
+
+    def _brief(self, where, status: str) -> str:
+        from rite_ai.config.parse import parse_config
+        from rite_ai.refinement import instructions as ri
+        from tests.test_the_ready_label_is_a_view import Board
+        from tests.test_the_ready_label_is_a_view import ticket as a_ticket
+
+        board = Board(a_ticket("KAN-28", "scheduled"))
+        board.tickets["KAN-28"].status = status
+        return ri.brief(
+            where, "lead", board, parse_config(where / ".rite" / "config.yaml")
+        )
+
+    def test_a_done_ticket_is_not_offered_to_refine(self, key, refining_project):
+        got = self._brief(refining_project, "Done")
+
+        assert "start refining it now" not in got
+        assert "KAN-28 is Done" in got, "and the Owner is told why, not left guessing"
+
+    def test_the_control_is_offered(self, key, refining_project):
+        got = self._brief(refining_project, "To Do")
+
+        assert "KAN-28: start refining it now" in got
+
+
+class TestEveryViewSaysTheSameThing:
+    """⚠ `wanted` answering False put finished tickets into the
+    `--needs-refinement` bucket, where a REFINED one prints `[assigned]`.
+    Two statements about one ticket that cannot both be true."""
+
+    def test_board_list_does_not_call_a_finished_ticket_assigned(self):
+        from unittest.mock import patch
+
+        from click.testing import CliRunner
+
+        from rite_ai.cli.main import cli
+
+        row = type(
+            "Row",
+            (),
+            {"ticket": done("KAN-28"), "status": _Refined(), "ready": False},
+        )()
+        with (
+            patch("rite_ai.cli.main._ticket_backend", return_value=(object(), None)),
+            patch("rite_ai.refinement.view.truth", return_value=([row], "")),
+        ):
+            out = CliRunner().invoke(cli, ["board", "list", "--needs-refinement"])
+
+        assert out.exit_code == 0, out.output
+        assert "[assigned]" not in out.output
+        assert "[Done, not work]" in out.output
+
+
+class _Refined:
+    """A REFINED status, which is what a delivered ticket's record is."""
+
+    refined = True
+    state = "REFINED"

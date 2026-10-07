@@ -100,11 +100,19 @@ def is_terminal(ticket) -> bool:
     can be read: a name alone cannot tell a renamed Done column from a live
     one. A `None` ticket, or one with no status at all, is not terminal —
     absence of a status is not a record of being finished.
+
+    ⚠ **The category DECIDES when it is there, both ways.** It is not ORed
+    with the name list, which would park a live ticket: a board may well
+    have a column literally named "Resolved" or "Cancelled" sitting in
+    JIRA's `indeterminate` category, meaning work in progress. The name list
+    is the fallback for a backend that reports no category at all, never a
+    second opinion about one that did.
     """
     if ticket is None:
         return False
-    if _category_of(ticket) == DONE_CATEGORY:
-        return True
+    category = _category_of(ticket)
+    if category:
+        return category == DONE_CATEGORY
     return is_terminal_name(getattr(ticket, "status", "") or "")
 
 

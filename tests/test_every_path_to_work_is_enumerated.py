@@ -109,7 +109,9 @@ KNOWN = {
     ),
     # --- the one Worker start ----------------------------------------------
     ("cli/main.py", "sandbox_start", "start_worker"): (
-        "GATED (TR4): starts only on a REFINED ticket, from one read"
+        "GATED (TR4): starts only on a REFINED ticket, from one read; and "
+        "GATED (SCRUM-73) on that same read's STATUS — REFINED says a "
+        "definition of done was agreed, not that the work is still to do"
     ),
 }
 

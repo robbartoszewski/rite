@@ -303,11 +303,20 @@ def plan_cycle(
         return cycle
     if not cycle.ready:
         cycle.verdict = IDLE
+        # ⚠ What it listed, not "nothing": a board of Done tickets that still
+        # carry `scheduled` DID list something, and a detail saying otherwise
+        # contradicts the read it just made (SCRUM-73).
+        listed = (
+            f"the board listed nothing waiting but {len(cycle.finished)} "
+            "ticket(s) whose status says the work is over"
+            if cycle.finished
+            else "the board listed nothing waiting"
+        )
         cycle.detail = (
             # A snapshot with its time, not "the board is empty": a list lags
             # writes rite did not make itself (DF4); rite's own are read back
             # in `own_writes`.
-            f"the board listed nothing waiting as of {as_of(cycle.board_read_at)} "
+            f"{listed} as of {as_of(cycle.board_read_at)} "
             f"(a ticket created outside rite shortly before then, or since, is "
             f"not in that read); {len(free)} of {len(cycle.workers)} Worker(s) free"
         )

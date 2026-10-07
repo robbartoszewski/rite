@@ -5312,10 +5312,20 @@ def _board_list_by_refinement(backend, *, ready: bool) -> None:
     shown = [r for r in rows if r.ready == ready]
     if not shown:
         click.echo("no tickets")
+    from rite_ai.tickets.statuses import is_terminal
+
     for row in shown:
         title = normalise(row.ticket.title).text
         if ready:
             click.echo(f"  {row.ticket.id}  {title}")
+        elif is_terminal(row.ticket):
+            # ⚠ Before the refinement branches, and the reason it exists:
+            # since SCRUM-73 `view.wanted` answers False for finished work,
+            # so a Done ticket lands in this bucket. Printing `[assigned]`
+            # for it (which a REFINED one gets) would be two statements about
+            # one ticket that cannot both be true.
+            status = row.ticket.status or "finished"
+            click.echo(f"  {row.ticket.id}  [{status}, not work]  {title}")
         elif row.status.refined:
             click.echo(f"  {row.ticket.id}  [assigned]  {title}")
         else:
@@ -8599,6 +8609,32 @@ def _deliver_ticket(
         )
         click.echo(refused_for_refinement(checked.state, ticket), err=True)
         raise SystemExit(1)
+
+    # ⚠ **Nor does a ticket whose STATUS says the work is over (SCRUM-73).**
+    # REFINED is about the definition of done; this is about whether it has
+    # already been done, and the a9 run proved they are different questions:
+    # KAN-28 was Done, merged and still REFINED, and two Workers were started
+    # on it. From the SAME read as the refinement check, never a second one.
+    # Last line again, because that is what reaches the Manager that asked.
+    from rite_ai.tickets.statuses import is_terminal
+
+    if is_terminal(checked.ticket):
+        clear_delivery(worker_dir)
+        status = checked.ticket.status or "a terminal status"
+        click.echo(
+            f"not starting '{worker}': ticket {ticket} is {status}, so that "
+            "work is already finished. A `scheduled` or `ready-to-work` "
+            "label does not say otherwise: rite only ever adds those, so a "
+            "delivered ticket keeps them.",
+            err=True,
+        )
+        click.echo(
+            f"{ticket} is {status}: no Worker is started on finished work. "
+            "Take the label off, or reopen the ticket.",
+            err=True,
+        )
+        raise SystemExit(1)
+
     read_at = read_at_now()
     rendered = render_ticket(checked.ticket)
     phrases.report(root, f"ticket {checked.ticket.id}", rendered.scanned)
