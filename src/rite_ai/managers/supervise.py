@@ -3710,7 +3710,14 @@ def _default_starter(
     # anything. A Manager that dies in its pane is the failure this replaces,
     # and it reports the missing binary rather than the missing platform.
     confinement = boundary_for()
-    profile = confinement.write_profile(root, manager)
+    from rite_ai.managers.enclosure import LinkedManagerPath
+
+    try:
+        profile = confinement.write_profile(root, manager)
+    except LinkedManagerPath as e:
+        # SCRUM-69 review: a Manager directory that is a link is never
+        # followed into a grant. Not started, and said, rather than a stack.
+        return StartResult(False, str(e))
     github_env = github_access.pane_environment(root, manager)
     handle_spelling = spelling_for(engine, agent)
     cursor = engine == "cursor"

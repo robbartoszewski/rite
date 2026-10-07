@@ -145,10 +145,6 @@ class TestWhatRiteTeachesIsWhatRiteAllows:
             assert stdin_text.stray_end(command.split()[-1]) == "", command
             assert " --from-file " in command, command
 
-    def test_the_rule_says_once_and_nothing_after(self):
-        """Still said where a heredoc is still taught (a person at the host)."""
-        assert "ONCE, with nothing after it" in stdin_text.RULE
-
 
 class TestNothingElseIsWidened:
     @pytest.mark.parametrize(

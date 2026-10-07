@@ -859,3 +859,35 @@ def test_a_deferred_question_is_consumed_before_it_is_asked_now(project, monkeyp
     assert got.exit_code != 0
     assert not path.exists()
     assert len(checkins._queued(project, "lead")) == 1
+
+
+def test_a_linked_manager_directory_stops_the_launch_and_says_why(
+    project, tmp_path, monkeypatch
+):
+    """`rite start` reports it as a refusal to start, not a traceback, and
+    asks tmux for nothing."""
+    import rite_ai.managers.supervise as sup
+    from rite_ai.managers.boundaries import boundary_for
+
+    try:
+        boundary_for()
+    except Exception:
+        pytest.skip("no boundary on this machine")
+    target = tmp_path / "home-ish"
+    target.mkdir()
+    _swap_for_a_link(project, target)
+    monkeypatch.setattr(
+        sup, "start_session", lambda *a, **k: pytest.fail("tmux was asked")
+    )
+    result = sup._default_starter(
+        project,
+        "lead",
+        engine="claude",
+        resume_id="",
+        max_sessions=None,
+        window_seconds=None,
+        permission="",
+        prompt="go",
+        agent="",
+    )
+    assert not result.ok and "is a link" in result.message
