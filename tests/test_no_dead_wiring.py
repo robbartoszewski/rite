@@ -56,6 +56,21 @@ UNCALLED_ON_PURPOSE = {
         "`facts_of`. Public so the applier's and the planner's tests name it "
         "and the one gatherer is tested directly."
     ),
+    "governs_the_gate": (
+        "SCRUM-62's predicate — whether a path is part of the publish gate's "
+        "own configuration. Called by `inspect` in the same file, which is "
+        "the production entry point (`publishing/deliver._gate_suppression_"
+        "verdict` calls that). Public because it IS the policy: what a "
+        "Worker may not author is a governance property, and the tests "
+        "assert it path by path rather than through a git range, the way "
+        "`broker.decide`'s predicates are tested."
+    ),
+    "heredoc": (
+        "Still the form `stdin_text.refusal`, in the same file, teaches a "
+        "person at the host, who has no drafts directory. Since SCRUM-69 no "
+        "Manager is taught it; public because tests compose the stdin form "
+        "with it, and the stdin form is still accepted."
+    ),
     "lifecycle_dir": (
         "Where `request`, in the same file, writes a Manager's lifecycle "
         "requests and `honour_requests` names in what it says (SCRUM-59). "

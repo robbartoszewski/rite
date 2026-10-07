@@ -87,8 +87,33 @@ def take(root: Path, manager: str) -> list[str]:
     return [text for _, text in own_dir.take(root, manager, DIRNAME, MAX_REQUEST_BYTES)]
 
 
-def honour_deliveries(root: Path, manager: str, say) -> None:
-    """Deliver every request `manager` wrote, and tell it what happened."""
+def _gate_words(why: str) -> bool:
+    """Whether this refusal came from the publish gate or a check on it.
+
+    ⚠ **Matched on rite's OWN refusal text, which is the one place a
+    substring match is defensible here** — these strings are written three
+    functions away in `deliver.py` and `gate/`, not by a model and not by a
+    person. It decides only which of two journal classes an entry gets, so
+    the cost of a miss is a `delivery-refused` where a `gate-refused` was
+    meant, and never a failure going unrecorded.
+    """
+    lowered = why.lower()
+    return any(
+        mark in lowered
+        for mark in ("publish gate", "gate's own", "gitleaks", "secret", "suppress")
+    )
+
+
+def honour_deliveries(root: Path, manager: str, say, record=None) -> None:
+    """Deliver every request `manager` wrote, and tell it what happened.
+
+    `record` is SCRUM-71's journal recorder. Every refusal here is a
+    delivery the Manager asked for and did not get, which is exactly what
+    the a9 journal was missing: the Manager hears it in its next
+    instruction and the Owner, reading the journal afterwards, heard nothing
+    at all. None means the flag is off and nothing is recorded.
+    """
+    from rite_ai.managers import recording
     from rite_ai.managers.telling import tell_manager
     from rite_ai.publishing.deliver import Refused, deliver
 
@@ -97,6 +122,19 @@ def honour_deliveries(root: Path, manager: str, say) -> None:
             tell_manager(root, manager, ABOUT, text)
         except OSError as e:
             say(f"could not tell {manager!r} what happened to a delivery: {e}")
+
+    def note(kind: str, subject: str, observed: str, anchor: str) -> None:
+        if record is None:
+            return
+        record(
+            recording.Event(
+                kind,
+                subject,
+                observed,
+                "a finished ticket is delivered, or somebody is told why not",
+                anchor=anchor,
+            )
+        )
 
     try:
         pending = take(root, manager)
@@ -118,6 +156,12 @@ def honour_deliveries(root: Path, manager: str, say) -> None:
             )
             say(f"{manager!r}: {said}")
             tell(said)
+            note(
+                recording.DELIVERY_REFUSED,
+                f"{manager}: a malformed request",
+                f"a delivery request from {manager} could not be read: {request}",
+                f"manager {manager} delivery request",
+            )
             continue
         refused = _staged_pipeline_refusal(root, manager, request.ticket)
         if refused:
@@ -125,14 +169,35 @@ def honour_deliveries(root: Path, manager: str, say) -> None:
             tell(refused)
             continue
         result = deliver(root, request.worker, request.ticket, manager=manager)
+        subject = f"{request.worker}/{request.ticket}"
         if isinstance(result, Refused):
             said = f"NOT delivered {request.worker}/{request.ticket}: {result.why}"
             say(f"{manager!r}: {said}")
             tell(said)
+            note(
+                recording.GATE_REFUSED
+                if _gate_words(result.why)
+                else recording.DELIVERY_REFUSED,
+                subject,
+                f"the whole delivery of {subject} was refused: {result.why}",
+                f"worker {request.worker} ticket {request.ticket}",
+            )
             continue
         for outcome in result.outcomes:
             say(f"{manager!r}: {outcome.note()}")
             tell(outcome.note())
+            if not outcome.ok:
+                # ⚠ Per MODULE, because a delivery of three modules can fail
+                # one and deliver two, and the Owner needs to know which.
+                note(
+                    recording.GATE_REFUSED
+                    if _gate_words(outcome.why)
+                    else recording.DELIVERY_REFUSED,
+                    f"{subject} module {outcome.module}",
+                    f"{outcome.module} of {subject} was not delivered: {outcome.why}",
+                    f"worker {request.worker} ticket {request.ticket} "
+                    f"module {outcome.module}",
+                )
         say(f"{manager!r}: {request.worker}: {result.sandbox}")
         tell(f"{request.worker}: {result.sandbox}")
 

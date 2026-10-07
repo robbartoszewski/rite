@@ -485,8 +485,17 @@ def _with_a_freed_slot(root: Path, manager: str, wake, clock):
     return combined
 
 
-def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
+def _honour_worker_requests(
+    root: Path, manager: str, broker, say, recorder=None
+) -> None:
     """Start the Workers this cycle asked for, or say why not.
+
+    🔴 **SCRUM-71: a refusal here also reaches the journal.** The Manager
+    hears it in its next instruction, and before this the Owner — reading
+    the journal after an unattended run — heard nothing. A request REFUSED
+    is a failure; a request QUEUED for want of a slot is a queue, and is
+    deliberately not recorded, or a busy fleet would fill the journal with
+    its own capacity every cycle.
 
     ⚠ **A sandboxed Manager cannot start a sandboxed Worker** — the kernel
     refuses a second profile inside the first (B9) — so it writes a request
@@ -584,6 +593,19 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
         told.discard(raw)
         if ok:
             _record_owner(root, manager, raw, say)
+        if not ok and recorder is not None:
+            from rite_ai.managers import recording
+
+            recorder(
+                recording.Event(
+                    recording.WORKER_START_REFUSED,
+                    manager,
+                    f"a Worker {manager} asked for was not started: {message}",
+                    "a Worker the Manager asks for starts, or the Manager is "
+                    "told why not and stops waiting",
+                    anchor=f"manager {manager} worker request",
+                )
+            )
         say(("started: " if ok else "") + message)
         tell(
             ("Started: " if ok else "NOT started: ")
@@ -1612,6 +1634,13 @@ def _supervise(
     refine: object = None,
     refinement_brief: object = None,
     recover: object = None,
+    # 🔴 SCRUM-71. `recording.recorder_for(...)`, or None when
+    # `--record-issues` is off. The boundary steps below hand it the
+    # failures a Manager cannot see because they happen out here: a
+    # delivery refused on the host, a Worker start refused by the broker.
+    # Composed in `cli.main`, where the flag is, so this loop never reads
+    # it — it only passes it on.
+    recorder: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -1884,7 +1913,7 @@ def _supervise(
         # A Worker queued for want of a slot is asked for again here, at a
         # moment no session is running (the waits wake for a freed slot).
         if broker is not None and _queued_requests(root, manager):
-            _honour_worker_requests(root, manager, broker, say)
+            _honour_worker_requests(root, manager, broker, say, recorder)
         # ⚠ WHAT CAUSES THIS CYCLE. "" means the ordinary causes: the last
         # session ended cleanly and the board says continue. "mail" means a
         # wait below ended because mail is in the inbox (DF2), and then the
@@ -2594,7 +2623,7 @@ def _supervise(
             # first, and a delivery removes it (PB1).
             from rite_ai.publishing.requests import honour_deliveries
 
-            honour_deliveries(root, manager, say)
+            honour_deliveries(root, manager, say, recorder)
             # And the PRs delivered earlier: merged ones release their
             # claims, and `auto_merge` merges through its gate (PB1 piece 5).
             from rite_ai.publishing.merging import tick as watch_pull_requests
@@ -2621,7 +2650,7 @@ def _supervise(
             # interval), after deliveries so a just-delivered sandbox reads
             # as gone, before Worker starts so a freed claim can be retaken.
             reconcile.reconcile(root, manager, say)
-            _honour_worker_requests(root, manager, broker, say)
+            _honour_worker_requests(root, manager, broker, say, recorder)
             if callable(chores):
                 # TR9: at the boundary with the Worker requests, and for the
                 # same reason: it talks to the board, which the two-second

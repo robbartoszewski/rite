@@ -10221,6 +10221,68 @@ def _refuse_a_shared_board(root: Path, manager: str) -> None:
     raise SystemExit(1)
 
 
+def _recover_and_record(root: Path, manager: str, say, recorder, recover=None):
+    """Recover stalled Workers, and record what recovery DID (SCRUM-71).
+
+    ⚠ **The Manager cannot record this itself**, which is why the supervisor
+    does. A Worker restarted in place, or a ticket re-staged, happens on the
+    host while the Manager is mid-session; the Manager sees only the result,
+    and in the a9 run the restart of an already-finished Worker reached the
+    journal from nowhere at all.
+
+    `recover_stalled_workers` already returns its actions "for the caller to
+    say/record" — this is that caller. Recording is per ACTION rather than
+    per cycle, because a stall that lasts an hour is reported every cycle and
+    one entry per cycle would bury the other failures under it.
+    """
+    from rite_ai.managers import recording
+    from rite_ai.managers.recovery import REPORT, RESTAGE, recover_stalled_workers
+
+    # ⚠ CALLED BY NAME here rather than injected from the call site, which is
+    # what `test_no_dead_wiring` scans for: passed in as a bare name,
+    # `recover_stalled_workers` read as a function nothing calls, and that
+    # test exists because nine such functions once shipped inert. `recover`
+    # stays injectable for a test that drives the recording without a
+    # watchdog, yoloAI or a claims ledger.
+    actions = (
+        recover_stalled_workers(root, manager, say)
+        if recover is None
+        else recover(root, manager, say)
+    ) or []
+    for action in actions:
+        where = f"worker {action.worker} ticket {action.ticket or 'unrecorded'}"
+        if action.kind == REPORT:
+            recorder(
+                recording.Event(
+                    recording.RECOVERY_EXHAUSTED,
+                    action.worker,
+                    f"{action.worker} stayed stalled and ran out of recovery "
+                    f"budget; it was left STALLED: {action.reason}",
+                    "a stalled Worker is recovered, or somebody is told it "
+                    "could not be",
+                    anchor=where,
+                )
+            )
+            continue
+        what = (
+            "its ticket was re-staged"
+            if action.kind == RESTAGE
+            else "it was restarted in place"
+        )
+        recorder(
+            recording.Event(
+                recording.RECOVERY_ACTED,
+                action.worker,
+                f"{action.worker} stalled and {what}"
+                + (f": {action.reason}" if action.reason else ""),
+                "a Worker runs its ticket to a delivery without the host "
+                "having to intervene",
+                anchor=where,
+            )
+        )
+    return actions
+
+
 def _start_a_manager(
     root: Path,
     role,
@@ -10338,11 +10400,18 @@ def _start_a_manager(
     # needs somebody to look at a server. Before this, both arrived as
     # "stopped on 'unknown' after 0 session(s) — this is a fault, not a
     # completion", which was neither true nor actionable for either.
+    from rite_ai.managers import recording
     from rite_ai.managers.broker import for_project
     from rite_ai.managers.chores import create_asked_for
     from rite_ai.managers.chores import instructions as chore_instructions
-    from rite_ai.managers.recovery import recover_stalled_workers
     from rite_ai.refinement.protocol import step as refinement_step
+
+    # 🔴 SCRUM-71. The journal's recorder for this run, or a no-op when the
+    # flag is off. Composed HERE, where `record_issues` is, and handed to
+    # the boundary steps that know about a failure — rather than inside
+    # `supervise`, which would need the flag threaded through it for the
+    # one thing that reads it.
+    recorder = recording.recorder_for(root, role.name, enabled=record_issues)
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
@@ -10465,6 +10534,16 @@ def _start_a_manager(
     claude_signed_in = _claude_login(root, role)
     cursor_signed_in = _cursor_login(root, role)
     listener = _slack_listener(root, role.name)
+    if listener is not None:
+        # 🔴 SCRUM-71: a failed post and a misrouted answer reach the journal.
+        #
+        # ⚠ SET HERE rather than passed to `_slack_listener`, whose signature
+        # is deliberately unchanged. Three tests replace that function with a
+        # positional-only stand-in, and a new keyword argument broke all
+        # three — including the one asserting the mailbox moves before the
+        # Manager runs, which then never reached `supervise` at all. A field
+        # the caller fills needs nothing of the constructor.
+        listener.record = recorder
     waiting = _waiting_for(root, role.name)
     outcome = None
     try:
@@ -10493,7 +10572,10 @@ def _start_a_manager(
             # (preserving its unapplied work), or re-stage its ticket when its
             # sandbox is gone — at the cycle boundary, off the two-second poll.
             # Sits beside the local tier below, driving neither.
-            recover=lambda say: recover_stalled_workers(root, role.name, say),
+            # SCRUM-71: a recovery or a restart is one of the recordable
+            # events, so it goes through the recorder rather than past it.
+            recorder=recorder,
+            recover=lambda say: _recover_and_record(root, role.name, say, recorder),
             # L-6 (Robert, 2026-10-03): the local tier runs hands-off, driven
             # by this same cycle.
             #

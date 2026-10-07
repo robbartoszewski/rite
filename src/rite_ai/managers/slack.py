@@ -888,6 +888,18 @@ class Listener:
     refinement_id: str = ""
     """Its id, learned by `open` once rite has both posted there and read
     there. Empty means rounds go to the DM, and `open` said why."""
+    record: object = None
+    """🔴 SCRUM-71's journal recorder, or None when `--record-issues` is off.
+
+    ⚠ **Called at the two places the relay KNOWS it failed**, not off
+    `news()`. A problem line is prose, and recording by matching rite's own
+    sentences is the dead-wiring trap this project has met before: the text
+    changes and the recorder goes quiet with nothing saying so. These two
+    call sites hold the fact itself — Slack refused the post, or the answer
+    could not reach the thread the Owner asked in.
+
+    The a9 run is why both are here: the Owner's answers were relayed into
+    the notes thread, and the journal recorded none of it."""
 
     def news(self) -> list[str]:
         """Problems not yet said, for the supervisor to print — once each.
@@ -1906,6 +1918,20 @@ class Listener:
                 # check-ins included. The Owner saw silence, which is the
                 # failure A5 exists to prevent. The reply itself must still
                 # reach them, so it goes to the pile that always can.
+                if answering:
+                    # 🔴 SCRUM-71. THE a9 FAILURE, recorded where it happens:
+                    # the Owner asked in their DM and the answer went to the
+                    # ambient pile whose own root line says nothing in it
+                    # needs them.
+                    self._record_failure(
+                        "routing",
+                        message.path.name,
+                        f"an answer from {self.manager} could not be posted in "
+                        f"the thread of the message it answered, so it went to "
+                        f"the day's notes instead — where the Owner is told "
+                        f"nothing needs them",
+                        "an answer appears in the thread the question was asked in",
+                    )
                 if answering and not str(getattr(message, "answers", "") or ""):
                     # ⚠ Only the GUESS is cleared, and only when the guess is
                     # what just failed (SCRUM-21). `_awaiting` is rite's
@@ -1949,6 +1975,13 @@ class Listener:
                 # Not marked read, so the next tick retries it — and the ones
                 # after it wait, so replies are never posted out of order.
                 self._problem(f"cannot post a reply: {sent.problem}")
+                self._record_failure(
+                    "relay",
+                    message.path.name,
+                    f"a message from {self.manager} could not be posted to "
+                    f"Slack: {sent.problem}. Every reply behind it waits too",
+                    "what the Manager says reaches the person it is for",
+                )
                 break
             posted[message.path.name] = {
                 "channel": sent.channel,
@@ -2246,6 +2279,34 @@ class Listener:
         if self.clock() - at >= ANSWER_WINDOW_SECONDS:
             return None
         return (channel, ts)
+
+    def _record_failure(
+        self, kind: str, subject: str, observed: str, expected: str
+    ) -> None:
+        """One journal entry for a relay failure this method just saw.
+
+        Never raises and never needs the caller to check: `record` is None
+        when the flag is off, and the recorder itself swallows everything.
+        """
+        if self.record is None:
+            return
+        from rite_ai.managers import recording
+
+        which = (
+            recording.ROUTING_ANOMALY if kind == "routing" else recording.RELAY_FAILED
+        )
+        try:
+            self.record(
+                recording.Event(
+                    which,
+                    f"{self.manager}: {subject}",
+                    observed,
+                    expected,
+                    anchor=f"manager {self.manager} message {subject}",
+                )
+            )
+        except Exception:  # noqa: BLE001 - a journal write never breaks a relay
+            pass
 
     def _notes_root(self, target: str, *, call=None):
         """Today's top-level notes post, made on first use; (channel, ts), or

@@ -228,8 +228,10 @@ def test_deliveries_are_honoured_before_worker_requests():
     import rite_ai.managers.supervise as supervise
 
     source = Path(supervise.__file__).read_text()
-    assert source.index("honour_deliveries(root, manager, say)") < source.index(
-        "_honour_worker_requests(root, manager, broker, say)\n            if"
+    assert source.index(
+        "honour_deliveries(root, manager, say, recorder)"
+    ) < source.index(
+        "_honour_worker_requests(root, manager, broker, say, recorder)\n            if"
     )
 
 

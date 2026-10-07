@@ -165,9 +165,13 @@ def inspect(paths, *, ruleset: str = "", read_at=None) -> Verdict:
     """
     found: set[str] = set()
     for path in paths or ():
-        name = _governing_name(path, ruleset)
-        if not name:
+        # Through the public predicate, which is the one this module
+        # documents and the one tests read: a private twin doing the real
+        # work is how the two drift apart, and `test_no_dead_wiring` is
+        # right that a public function nothing calls is a liability.
+        if not governs_the_gate(path, ruleset):
             continue
+        name = _governing_name(path, ruleset)
         if name == CONFIG_FILE and read_at is not None:
             before = _gate_section(read_at("base", path))
             after = _gate_section(read_at("branch", path))
