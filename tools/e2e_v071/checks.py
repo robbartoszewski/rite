@@ -9,11 +9,18 @@ Every check returns a Result with one of three statuses:
 A check reads only `Evidence`: what the observer collected during the run plus
 the run's own logs. So `harness.py check <run>` re-judges a finished run offline,
 and the unit tests judge fixture runs, good and broken, with the same code.
+
+The checks are scenario-generic: which ticket is the pipeline ticket, the Owner's,
+or the decoy, and whose sandbox is killed, come from the scenario (`Evidence`), so
+the mixed and the all-local scenario are judged by the same functions. A scenario
+lists the checks that apply to it in its fleet.yaml.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+from tools.e2e_v071.observe import delivered_prs
 
 PASS, FAIL, PENDING = "PASS", "FAIL", "PENDING"
 
@@ -36,6 +43,18 @@ FORBIDDEN_DURING_RUN = (
     ("rite", "board", "assign"),
 )
 
+# The local tier's pipeline, as plan section 3.3a names its persisted stages.
+STAGES = (
+    "defined",
+    "decomposed",
+    "plan_reviewed",
+    "approached",
+    "executed",
+    "step_reviewed",
+    "recomposed",
+    "delivery_requested",
+)
+
 
 @dataclass(frozen=True)
 class Result:
@@ -50,10 +69,14 @@ class Evidence:
     """Everything a check may read. Built by `harness.collect` from a run."""
 
     tickets: dict  # key -> board id
-    gpu_worker: str
-    claude_worker: str
     owner: str
     planner: str
+    gpu_workers: tuple = ()
+    pipeline_keys: tuple = ()
+    owner_key: str | None = None
+    decoy_key: str | None = None
+    kill_worker: str = ""
+    engines: dict = field(default_factory=dict)  # unit name -> engine, from config
     events: list = field(default_factory=list)
     claims_samples: list = field(default_factory=list)  # [{at, claims}]
     start_requests: list = field(default_factory=list)  # every one ever seen
@@ -70,25 +93,22 @@ class Evidence:
     stage_log: dict | None = None  # SCRUM-72: key -> [stage, ...] in order
     lifecycle_requests: list | None = None  # SCRUM-59: [{op, worker, at, by}]
     reconcile_reports: list | None = None  # SCRUM-64: [{at, released, told}]
-    plan_review_requests: list | None = (
-        None  # SCRUM-72 plan section 3.3b: [{ticket, to, at}]
-    )
+    plan_review_requests: list | None = None  # SCRUM-72 3.3b: [{ticket, to, at}]
 
-
-from tools.e2e_v071.observe import delivered_prs  # noqa: E402
+    @property
+    def work_keys(self) -> list[str]:
+        return [k for k in self.tickets if k != self.decoy_key]
 
 
 def every_ticket_delivered(ev: Evidence) -> Result:
     c = "every ticket reaches a delivered PR"
     missing, seen = [], []
-    for key, tid in ev.tickets.items():
-        if key == "done-decoy":
-            continue
-        prs = delivered_prs(ev.events, tid)
+    for key in ev.work_keys:
+        prs = delivered_prs(ev.events, ev.tickets[key])
         if prs:
             seen.append(f"{key}→{prs[-1]['pr_url']}")
         else:
-            missing.append(f"{key} ({tid})")
+            missing.append(f"{key} ({ev.tickets[key]})")
     if missing:
         return Result(
             "every_ticket_delivered",
@@ -99,134 +119,115 @@ def every_ticket_delivered(ev: Evidence) -> Result:
     return Result("every_ticket_delivered", PASS, "; ".join(seen), c)
 
 
-def gpu_ticket_worked_by_gpu_worker(ev: Evidence) -> Result:
-    c = "the GPU Worker's ticket is worked, and delivered, by the GPU Worker"
-    tid = ev.tickets["gpu-slug"]
-    starts = [
-        e
-        for e in ev.events
-        if e.get("event") == "sandbox-started" and str(e.get("ticket")) == str(tid)
-    ]
-    prs = delivered_prs(ev.events, tid)
-    who = {e.get("worker") for e in starts} | {p["worker"] for p in prs}
-    if not prs:
-        return Result(
-            "gpu_ticket_worked_by_gpu_worker",
-            FAIL,
-            f"gpu-slug ({tid}) was not delivered; started by {sorted(who) or 'nobody'}",
-            c,
-        )
-    if who != {ev.gpu_worker}:
-        return Result(
-            "gpu_ticket_worked_by_gpu_worker",
-            FAIL,
-            f"gpu-slug was worked by {sorted(who)}, not only {ev.gpu_worker}",
-            c,
-        )
+def pipeline_tickets_worked_by_gpu_workers(ev: Evidence) -> Result:
+    c = "each pipeline ticket is worked, and delivered, by a GPU Worker only"
+    name = "pipeline_tickets_worked_by_gpu_workers"
+    notes = []
+    for key in ev.pipeline_keys:
+        tid = str(ev.tickets[key])
+        starts = [
+            e
+            for e in ev.events
+            if e.get("event") == "sandbox-started" and str(e.get("ticket")) == tid
+        ]
+        prs = delivered_prs(ev.events, tid)
+        who = {e.get("worker") for e in starts} | {p["worker"] for p in prs}
+        if not prs:
+            return Result(
+                name, FAIL, f"{key} ({tid}) not delivered; started by {sorted(who)}", c
+            )
+        if not who or not who <= set(ev.gpu_workers):
+            return Result(name, FAIL, f"{key} was worked by {sorted(who)}", c)
+        notes.append(f"{key}: {', '.join(sorted(who))}")
+    return Result(name, PASS, "; ".join(notes), c)
+
+
+def plans_written_by_planner_approved_by_owner(ev: Evidence) -> Result:
+    c = "each pipeline ticket's plan is written by planner and approved by the Owner"
+    name = "plans_written_by_planner_approved_by_owner"
+    notes = []
+    for key in ev.pipeline_keys:
+        plan = ev.decompositions.get(key)
+        if plan is None:
+            return Result(
+                name,
+                FAIL,
+                f"no decomposition found for {key} (if SCRUM-72 moved plan state, "
+                "update observe.decomposition)",
+                c,
+            )
+        problems = []
+        if plan.get("decomposed_by") != ev.planner:
+            problems.append(f"decomposed_by={plan.get('decomposed_by')!r}")
+        if plan.get("approval") != "approved" or plan.get("approved_by") != ev.owner:
+            problems.append(
+                f"approval={plan.get('approval')!r} by {plan.get('approved_by')!r}"
+            )
+        open_ = [
+            s["id"] for s in plan.get("subtasks", []) if s.get("status") != "accepted"
+        ]
+        if open_:
+            problems.append(f"subtasks not accepted: {open_}")
+        if problems:
+            return Result(name, FAIL, f"{key}: " + "; ".join(problems), c)
+        notes.append(f"{key}: {len(plan['subtasks'])} subtasks accepted")
     return Result(
-        "gpu_ticket_worked_by_gpu_worker",
-        PASS,
-        f"started and delivered by {ev.gpu_worker}",
-        c,
+        name, PASS, "; ".join(notes) + f" (by {ev.planner}, approved by {ev.owner})", c
     )
 
 
-def gpu_plan_by_planner_approved_by_owner(ev: Evidence) -> Result:
-    c = "the GPU Worker's plan is written by planner and approved by lead"
-    plan = ev.decompositions.get("gpu-slug")
-    if plan is None:
-        return Result(
-            "gpu_plan_by_planner_approved_by_owner",
-            FAIL,
-            "no decomposition found for gpu-slug (if SCRUM-72 moved plan state, "
-            "update observe.decomposition)",
-            c,
-        )
-    problems = []
-    if plan.get("decomposed_by") != ev.planner:
-        problems.append(f"decomposed_by={plan.get('decomposed_by')!r}")
-    if plan.get("approval") != "approved" or plan.get("approved_by") != ev.owner:
-        problems.append(
-            f"approval={plan.get('approval')!r} by {plan.get('approved_by')!r}"
-        )
-    unaccepted = [
-        s["id"] for s in plan.get("subtasks", []) if s.get("status") != "accepted"
-    ]
-    if unaccepted:
-        problems.append(f"subtasks not accepted: {unaccepted}")
-    if problems:
-        return Result(
-            "gpu_plan_by_planner_approved_by_owner", FAIL, "; ".join(problems), c
-        )
-    return Result(
-        "gpu_plan_by_planner_approved_by_owner",
-        PASS,
-        f"{len(plan['subtasks'])} subtasks accepted; "
-        f"written by {ev.planner}, approved by {ev.owner}",
-        c,
-    )
-
-
-def plan_approved_through_inbox(ev: Evidence) -> Result:
-    c = "the GPU plan's approval went through lead's inbox (plan 3.3b), no host command"
+def plans_approved_through_inbox(ev: Evidence) -> Result:
+    c = "each plan's approval went through the Owner's inbox (plan 3.3b)"
+    name = "plans_approved_through_inbox"
     if ev.plan_review_requests is None:
         return Result(
-            "plan_approved_through_inbox",
+            name,
             PENDING,
             "STUB-PENDING SCRUM-72: plan-review request record not defined yet",
             c,
         )
-    asked = [
-        r
-        for r in ev.plan_review_requests
-        if str(r.get("ticket")) == str(ev.tickets["gpu-slug"])
-        and r.get("to") == ev.owner
-    ]
-    if not asked:
-        return Result(
-            "plan_approved_through_inbox",
-            FAIL,
-            f"no plan-review request to {ev.owner} for gpu-slug",
-            c,
-        )
-    return Result(
-        "plan_approved_through_inbox", PASS, f"{len(asked)} request(s) to {ev.owner}", c
-    )
+    for key in ev.pipeline_keys:
+        tid = str(ev.tickets[key])
+        asked = [
+            r
+            for r in ev.plan_review_requests
+            if str(r.get("ticket")) == tid and r.get("to") == ev.owner
+        ]
+        if not asked:
+            return Result(
+                name, FAIL, f"no plan-review request to {ev.owner} for {key}", c
+            )
+    return Result(name, PASS, f"every pipeline plan was asked of {ev.owner}", c)
 
 
 def owner_answer_reached_worker(ev: Evidence) -> Result:
     c = "the Owner's answer reaches its Worker"
+    name = "owner_answer_reached_worker"
     answered = [r for r in ev.owner_log if r.get("kind") == "answered"]
     if not answered:
         return Result(
-            "owner_answer_reached_worker",
-            FAIL,
-            "the Worker never asked the Owner (no question was answered)",
-            c,
+            name, FAIL, "the Worker never asked the Owner (no question was answered)", c
         )
     written = [r for r in ev.owner_log if r.get("kind") == "written-into-sandbox"]
     acked = [r for r in ev.owner_log if r.get("kind") == "acknowledged"]
-    diff = ev.pr_diffs.get("owner-currency", "")
+    diff = ev.pr_diffs.get(ev.owner_key or "", "")
     in_pr = bool(ev.owner_answer) and ev.owner_answer in diff
+    qid = answered[-1].get("qid")
     if not written and not acked:
         return Result(
-            "owner_answer_reached_worker",
-            FAIL,
-            f"answered {answered[-1].get('qid')} "
-            "but rite never wrote it into the sandbox",
-            c,
+            name, FAIL, f"answered {qid} but rite never wrote it into the sandbox", c
         )
     if not in_pr:
         return Result(
-            "owner_answer_reached_worker",
+            name,
             FAIL,
-            "the delivered owner-currency PR does not contain the Owner's answer",
+            f"the delivered {ev.owner_key} PR does not contain the Owner's answer",
             c,
         )
     return Result(
-        "owner_answer_reached_worker",
+        name,
         PASS,
-        f"qid {answered[-1].get('qid')}: written into the sandbox, "
+        f"qid {qid}: written into the sandbox, "
         f"{'acknowledged, ' if acked else ''}and in the PR",
         c,
     )
@@ -247,16 +248,16 @@ def came_back(e: dict, kill: dict) -> bool:
 
 def killed_sandbox_recovered(ev: Evidence) -> Result:
     c = "a killed Worker sandbox is recovered, with no human"
+    name = "killed_sandbox_recovered"
     kills = [i for i in ev.inductions if i.get("kind") == "kill-sandbox"]
     if not kills:
-        return Result("killed_sandbox_recovered", FAIL, "the kill was never induced", c)
+        return Result(name, FAIL, "the kill was never induced", c)
     k = kills[0]
     after = [e for e in ev.events if came_back(e, k)]
     rec = ev.recovery.get(k["worker"]) or {}
-    recovered = bool(after) or float(rec.get("last_at") or 0) > k["at"]
-    if not recovered:
+    if not after and float(rec.get("last_at") or 0) <= k["at"]:
         return Result(
-            "killed_sandbox_recovered",
+            name,
             FAIL,
             f"{k['worker']} ({k['sandbox']}) killed at {k['at']:.0f}; "
             "no restart or re-stage after it",
@@ -269,35 +270,27 @@ def killed_sandbox_recovered(ev: Evidence) -> Result:
     ]
     if not delivered:
         return Result(
-            "killed_sandbox_recovered",
-            FAIL,
-            f"recovered, but {k['ticket']} was not delivered afterwards",
-            c,
+            name, FAIL, f"recovered, but {k['ticket']} was not delivered afterwards", c
         )
+    how = after[0]["event"] if after else "recovery.json"
     return Result(
-        "killed_sandbox_recovered",
-        PASS,
-        f"{k['worker']} came back "
-        f"({after[0]['event'] if after else 'recovery.json'}) "
-        f"and delivered {k['ticket']}",
-        c,
+        name, PASS, f"{k['worker']} came back ({how}) and delivered {k['ticket']}", c
     )
 
 
 def recovery_went_through_manager(ev: Evidence) -> Result:
     c = "the recovery was the Manager's, through SCRUM-59's lifecycle request"
+    name = "recovery_went_through_manager"
     if ev.lifecycle_requests is None:
         return Result(
-            "recovery_went_through_manager",
+            name,
             PENDING,
             "STUB-PENDING SCRUM-59: lifecycle request record not defined yet",
             c,
         )
     kills = [i for i in ev.inductions if i.get("kind") == "kill-sandbox"]
     if not kills:
-        return Result(
-            "recovery_went_through_manager", FAIL, "the kill was never induced", c
-        )
+        return Result(name, FAIL, "the kill was never induced", c)
     k = kills[0]
     asked = [
         r
@@ -308,30 +301,21 @@ def recovery_went_through_manager(ev: Evidence) -> Result:
     ]
     if not asked:
         return Result(
-            "recovery_went_through_manager",
+            name,
             FAIL,
             f"no Manager lifecycle request for {k['worker']} after the kill",
             c,
         )
-    return Result(
-        "recovery_went_through_manager",
-        PASS,
-        f"{asked[0]['op']} requested by {asked[0].get('by')}",
-        c,
-    )
+    return Result(name, PASS, f"{asked[0]['op']} requested by {asked[0].get('by')}", c)
 
 
 def restart_releases_stale_claim(ev: Evidence) -> Result:
     c = "a Manager restart mid-run reconciles stale state"
+    name = "restart_releases_stale_claim"
     r = [i for i in ev.inductions if i.get("kind") == "stale-while-down"]
     restarted = [i for i in ev.inductions if i.get("kind") == "manager-restarted"]
     if not r or not restarted:
-        return Result(
-            "restart_releases_stale_claim",
-            FAIL,
-            "the restart with stale state was never induced",
-            c,
-        )
+        return Result(name, FAIL, "the restart with stale state was never induced", c)
     worker, stale_at, back = r[0]["worker"], r[0]["at"], restarted[0]["at"]
 
     def holds(sample: dict) -> bool:
@@ -342,40 +326,31 @@ def restart_releases_stale_claim(ev: Evidence) -> Result:
     during = [s for s in ev.claims_samples if stale_at <= s["at"] <= back]
     if not any(holds(s) for s in during):
         return Result(
-            "restart_releases_stale_claim",
+            name,
             FAIL,
             f"{worker} held no claim while the Manager was down, so nothing was stale",
             c,
         )
     later = [s for s in ev.claims_samples if s["at"] > back]
     if not later:
-        return Result(
-            "restart_releases_stale_claim",
-            FAIL,
-            "no claims were observed after the restart",
-            c,
-        )
+        return Result(name, FAIL, "no claims were observed after the restart", c)
     if holds(later[-1]):
         return Result(
-            "restart_releases_stale_claim",
+            name,
             FAIL,
             f"{worker}'s claim (sandbox gone, work delivered) "
             "was still held at the last sample",
             c,
         )
-    return Result(
-        "restart_releases_stale_claim",
-        PASS,
-        f"{worker}'s stale claim released after the restart",
-        c,
-    )
+    return Result(name, PASS, f"{worker}'s stale claim released after the restart", c)
 
 
 def restart_did_not_escalate(ev: Evidence) -> Result:
     c = "the restart reconciles WITHOUT escalating (SCRUM-64)"
+    name = "restart_did_not_escalate"
     if ev.reconcile_reports is None:
         return Result(
-            "restart_did_not_escalate",
+            name,
             PENDING,
             "STUB-PENDING SCRUM-64: reconciliation report and escalation "
             "marker not defined yet",
@@ -383,12 +358,9 @@ def restart_did_not_escalate(ev: Evidence) -> Result:
         )
     escalated = [x for x in ev.reconcile_reports if x.get("escalated")]
     if escalated:
-        return Result("restart_did_not_escalate", FAIL, f"escalated: {escalated[0]}", c)
+        return Result(name, FAIL, f"escalated: {escalated[0]}", c)
     return Result(
-        "restart_did_not_escalate",
-        PASS,
-        f"{len(ev.reconcile_reports)} report(s), none escalated",
-        c,
+        name, PASS, f"{len(ev.reconcile_reports)} report(s), none escalated", c
     )
 
 
@@ -418,7 +390,8 @@ def induced_failures_journaled(ev: Evidence) -> Result:
 
 def done_ticket_never_offered(ev: Evidence) -> Result:
     c = "no Done ticket is offered again (SCRUM-73)"
-    tid = str(ev.tickets["done-decoy"])
+    name = "done_ticket_never_offered"
+    tid = str(ev.tickets[ev.decoy_key])
     seen = []
     if any(
         str(e.get("ticket")) == tid
@@ -431,66 +404,45 @@ def done_ticket_never_offered(ev: Evidence) -> Result:
     if any(str(r.get("ticket")) == tid for r in ev.start_requests):
         seen.append("a Worker start was requested for it")
     if seen:
-        return Result(
-            "done_ticket_never_offered",
-            FAIL,
-            f"done-decoy ({tid}): " + ", ".join(seen),
-            c,
-        )
+        return Result(name, FAIL, f"{ev.decoy_key} ({tid}): " + ", ".join(seen), c)
     if not ev.claims_samples:
-        return Result(
-            "done_ticket_never_offered",
-            FAIL,
-            "no samples were taken, so absence proves nothing",
-            c,
-        )
+        return Result(name, FAIL, "no samples were taken, so absence proves nothing", c)
     return Result(
-        "done_ticket_never_offered",
+        name,
         PASS,
         f"never started, claimed or requested across {len(ev.claims_samples)} samples",
         c,
     )
 
 
-def gpu_pipeline_stages_in_order(ev: Evidence) -> Result:
-    c = "the GPU ticket's record shows every stage, in order (plan section 3.3a)"
-    want = [
-        "defined",
-        "decomposed",
-        "plan_reviewed",
-        "approached",
-        "executed",
-        "step_reviewed",
-        "recomposed",
-        "delivery_requested",
-    ]
+def pipeline_stages_in_order(ev: Evidence) -> Result:
+    c = "each pipeline ticket's record shows every stage, in order (plan 3.3a)"
+    name = "pipeline_stages_in_order"
     if ev.stage_log is None:
         return Result(
-            "gpu_pipeline_stages_in_order",
+            name,
             PENDING,
             "STUB-PENDING SCRUM-72: the transition log is not defined yet",
             c,
         )
-    got = ev.stage_log.get("gpu-slug") or []
-    # Per-subtask stages repeat, so compare the order each stage FIRST appears in.
-    firsts = [s for i, s in enumerate(got) if s not in got[:i]]
-    if firsts != want:
-        return Result(
-            "gpu_pipeline_stages_in_order",
-            FAIL,
-            f"stages {got} do not contain {want} in order",
-            c,
-        )
-    return Result("gpu_pipeline_stages_in_order", PASS, " → ".join(firsts), c)
+    want = list(STAGES)
+    notes = []
+    for key in ev.pipeline_keys:
+        got = ev.stage_log.get(key) or []
+        # Per-subtask stages repeat, so compare the order each stage FIRST appears in.
+        firsts = [s for i, s in enumerate(got) if s not in got[:i]]
+        if firsts != want:
+            return Result(name, FAIL, f"{key}: stages {got} are not {want} in order", c)
+        notes.append(f"{key}: {' → '.join(firsts)}")
+    return Result(name, PASS, "; ".join(notes), c)
 
 
 def no_forbidden_host_commands(ev: Evidence) -> Result:
     c = "no host command run by a person (audited: the harness's own commands)"
     bad = []
-    for r in ev.commands:
-        argv = r.get("argv")
-        if r.get("phase") != "run" or not argv:
-            continue
+    ran = [r for r in ev.commands if r.get("phase") == "run" and r.get("argv")]
+    for r in ran:
+        argv = r["argv"]
         words = tuple(a.rsplit("/", 1)[-1] if i == 0 else a for i, a in enumerate(argv))
         if any(words[: len(f)] == f for f in FORBIDDEN_DURING_RUN):
             bad.append(" ".join(argv[:4]))
@@ -501,18 +453,34 @@ def no_forbidden_host_commands(ev: Evidence) -> Result:
     return Result(
         "no_forbidden_host_commands",
         PASS,
-        f"{sum(1 for r in ev.commands if r.get('phase') == 'run' and r.get('argv'))}"
-        " run-phase commands, none a rescue; "
+        f"{len(ran)} run-phase commands, none a rescue; "
         "a person's own shell is not visible to this check",
+        c,
+    )
+
+
+def no_claude_in_the_fleet(ev: Evidence) -> Result:
+    c = "the all-local fleet has no Claude unit (every Manager and Worker is local)"
+    claude = sorted(n for n, e in ev.engines.items() if not str(e).startswith("local:"))
+    if not ev.engines:
+        return Result(
+            "no_claude_in_the_fleet", FAIL, "the fleet config was not read", c
+        )
+    if claude:
+        return Result("no_claude_in_the_fleet", FAIL, f"not local: {claude}", c)
+    return Result(
+        "no_claude_in_the_fleet",
+        PASS,
+        ", ".join(f"{n}={e}" for n, e in sorted(ev.engines.items())),
         c,
     )
 
 
 ALL = (
     every_ticket_delivered,
-    gpu_ticket_worked_by_gpu_worker,
-    gpu_plan_by_planner_approved_by_owner,
-    plan_approved_through_inbox,
+    pipeline_tickets_worked_by_gpu_workers,
+    plans_written_by_planner_approved_by_owner,
+    plans_approved_through_inbox,
     owner_answer_reached_worker,
     killed_sandbox_recovered,
     recovery_went_through_manager,
@@ -520,13 +488,16 @@ ALL = (
     restart_did_not_escalate,
     induced_failures_journaled,
     done_ticket_never_offered,
-    gpu_pipeline_stages_in_order,
+    pipeline_stages_in_order,
     no_forbidden_host_commands,
+    no_claude_in_the_fleet,
 )
+BY_NAME = {c.__name__: c for c in ALL}
 
 
-def evaluate(ev: Evidence) -> list[Result]:
-    return [check(ev) for check in ALL]
+def evaluate(ev: Evidence, names: tuple[str, ...] | None = None) -> list[Result]:
+    """Run the named checks (a scenario's list), or all of them."""
+    return [BY_NAME[n](ev) for n in names] if names else [c(ev) for c in ALL]
 
 
 def verdict(results: list[Result]) -> str:

@@ -1,15 +1,41 @@
-# The v0.7.1 acceptance gate's fleet and run settings (docs/design/V071_DOGFOOD_FIXES.md §4.2).
-# Everything the harness creates is named from `project_name` + the run id, so nothing it
-# touches can collide with the yoloAI dogfood, Bentora, or any other rite project.
+# Scenario 1 — MIXED: a Claude Manager drives a GPU Worker (the SCRUM-72 path).
+# The v0.7.1 acceptance gate's fleet as V071_DOGFOOD_FIXES.md §4.2 has it. Everything the
+# harness creates is named from `project_name` + the run id, so nothing it touches can
+# collide with the yoloAI dogfood, Bentora, or any other rite project.
 
-project_name: e2e-v071
+project_name: e2e-mixed
+
+scenario:
+  name: mixed
+  title: "Mixed fleet — Claude lead + local planner + Claude Worker + GPU Worker"
+  # Tickets that must go through the local tier's deterministic pipeline
+  # (spec → refine → approach → review → delivered), shown as swimlanes in the demo.
+  pipeline_tickets: [gpu-slug]
+  owner_ticket: owner-currency   # the ticket whose definition of done needs the Owner
+  decoy_ticket: done-decoy
+  kill_worker: alpha             # whose sandbox is killed mid-ticket
+  restart_manager: lead          # whose supervisor is restarted with stale state
+  checks:
+    - every_ticket_delivered
+    - pipeline_tickets_worked_by_gpu_workers
+    - plans_written_by_planner_approved_by_owner
+    - plans_approved_through_inbox
+    - owner_answer_reached_worker
+    - killed_sandbox_recovered
+    - recovery_went_through_manager
+    - restart_releases_stale_claim
+    - restart_did_not_escalate
+    - induced_failures_journaled
+    - done_ticket_never_offered
+    - pipeline_stages_in_order
+    - no_forbidden_host_commands
 
 github:
   owner: robbartoszewski
   # The board (GitHub issues) AND the PR target: rite has no offline board, and
   # `publish.strategy: pull_request` needs a GitHub origin. One private repo per run,
   # created only by `harness.py setup --create-repo` (an outward-facing action).
-  repo_prefix: rite-e2e-v071-
+  repo_prefix: rite-e2e-mixed-
   # The GitHub App rite opens PRs with (the yoloAI dogfood's IDs). Its installation
   # must include the run's new repo: add it in the App's installation settings, or
   # install on all repositories. `rite doctor` (the last step of setup) checks it.
