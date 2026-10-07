@@ -146,6 +146,22 @@ def honour_deliveries(root: Path, manager: str, say, record=None) -> None:
         )
         say(f"{manager!r}: {said}")
         tell(said)
+        # 🔴 SCRUM-71. **The worst delivery failure in this function, and it
+        # was the one not recorded.** Every refusal below is about one
+        # request rite READ; this is rite not reading them at all — so a
+        # Manager's deliveries stop wholesale, for as long as the directory
+        # stays unopenable, and the Owner reading the journal afterwards saw
+        # nothing. Recorded with the directory in the anchor, because the
+        # fix is a filesystem one and the path is the actionable part.
+        note(
+            recording.DELIVERY_REFUSED,
+            f"{manager}: the requests directory",
+            f"rite could not read {manager}'s delivery requests at all: "
+            f"{requests_dir(root, manager)} cannot be opened as rite's own "
+            f"directory ({e}). Every delivery it asks for stops until that "
+            "is fixed, not just one",
+            f"manager {manager} requests directory",
+        )
         return
     for raw in pending:
         request = decide(raw)

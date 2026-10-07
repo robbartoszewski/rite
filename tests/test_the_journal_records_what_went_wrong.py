@@ -485,6 +485,45 @@ class TestEachWiredSiteActuallyRecords:
         (entry,) = _entries(root)
         assert "web" in entry and "uncommitted" in entry
 
+    def test_an_unreadable_requests_directory_is_recorded(self, tmp_path):
+        """⚠ **The worst delivery failure in that function, and the one that
+        was not recorded.** Every other refusal there is about one request
+        rite READ; this is rite not reading them at all, so a Manager's
+        deliveries stop wholesale for as long as the directory stays
+        unopenable — and the Owner reading the journal afterwards saw
+        nothing."""
+        from unittest.mock import patch
+
+        from rite_ai.publishing.requests import honour_deliveries, requests_dir
+
+        root = _project(tmp_path)
+        where = requests_dir(root, "lead")
+        where.mkdir(parents=True, exist_ok=True)
+        (where / "1.json").write_text('{"worker":"alpha","ticket":"KAN-7"}')
+
+        with patch(
+            "rite_ai.publishing.requests.take",
+            side_effect=OSError("Permission denied"),
+        ):
+            honour_deliveries(root, "lead", lambda _line: None, _recorder(root))
+
+        (entry,) = _entries(root)
+        assert "could not read" in entry
+        assert "Permission denied" in entry
+        assert str(where) in entry, "the path is the actionable part"
+        assert "not just one" in entry
+
+    def test_a_readable_but_empty_directory_records_nothing(self, tmp_path):
+        """The control: no requests is the ordinary state of every cycle,
+        and recording it would bury the failures under it."""
+        from rite_ai.publishing.requests import honour_deliveries
+
+        root = _project(tmp_path)
+
+        honour_deliveries(root, "lead", lambda _line: None, _recorder(root))
+
+        assert _entries(root) == []
+
     def test_a_clean_delivery_records_nothing(self, tmp_path):
         from rite_ai.publishing.deliver import Delivered, Outcome
 
