@@ -666,7 +666,7 @@ def briefing(manager: str, owner: str, roles, *, root: Path) -> str:
             "Route only what a person gave you authority for. If it is missing "
             "something you would otherwise have to guess — which file, what "
             "counts as done, what must not change — ask the User before you "
-            "route, with `rite ask`, as above. Never route a guess, and "
+            f"route, with `{rite} ask`, as above. Never route a guess, and "
             "never leave the other Manager to ask: it cannot reach the User. "
             "Once routed, the other Manager should need nothing more from you.\n"
         )

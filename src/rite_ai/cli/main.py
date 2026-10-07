@@ -5472,8 +5472,8 @@ def _provenance_line(provenance: dict) -> str:
     "from_file",
     default="",
     help="A file in your drafts directory holding the text, written with your "
-    "Write tool. The form your instructions teach: nothing in it is expanded. "
-    "It is removed once sent.",
+    "file-writing tool, not the shell. The form your instructions teach: "
+    "nothing in it is expanded. It is removed once sent.",
 )
 def refine_ask(ticket_id: str, text: str, is_message: bool, from_file: str) -> None:
     """Ask the User about a ticket — the Owner Manager only (TR2).
@@ -5489,8 +5489,8 @@ def refine_ask(ticket_id: str, text: str, is_message: bool, from_file: str) -> N
     ⚠ This only ASKS. The round is checked and sent by your supervisor,
     outside your sandbox; whether it went, or why not, is in your next
     instruction. **The text is a file: `--from-file <draft>` (SCRUM-69)**,
-    written with your Write tool in your drafts directory; `-` with the text
-    on stdin is still accepted (F14).
+    written with your file-writing tool (not the shell) in your drafts
+    directory; `-` with the text on stdin is still accepted (F14).
 
     An instruction he gave in chat is refined straight away too, before it
     is a ticket: `--message <message-id>`. If he accepts, rite files it as a
@@ -5499,8 +5499,10 @@ def refine_ask(ticket_id: str, text: str, is_message: bool, from_file: str) -> N
     unrefined, so nothing he asked for is lost, and refinement goes on.
 
     Examples:
-      rite refine ask KAN-7 --from-file round.md
+      rite refine ask KAN-7 --from-file <your drafts directory>/round.md
     """
+    import shlex
+
     from rite_ai.config.managers import routing_owner
     from rite_ai.managers import current_manager
     from rite_ai.managers.routing import ticket_problem
@@ -5533,19 +5535,22 @@ def refine_ask(ticket_id: str, text: str, is_message: bool, from_file: str) -> N
             err=True,
         )
         raise SystemExit(1)
+    # The ticket first: it is echoed into the command a refusal teaches, so
+    # it is checked before anything is read or taught.
+    problem = ticket_problem(ticket_id)
+    if problem:
+        click.echo(f"refusing: {problem}.", err=True)
+        raise SystemExit(1)
     text, draft = _manager_text(
         root,
         speaking,
         text,
         from_file,
-        f"rite refine ask {ticket_id}",
+        f"rite refine ask {shlex.quote(ticket_id.strip())}"
+        + (" --message" if is_message else ""),
         "<your round>",
         "round.md",
     )
-    problem = ticket_problem(ticket_id)
-    if problem:
-        click.echo(f"refusing: {problem}.", err=True)
-        raise SystemExit(1)
     if not text.strip():
         click.echo("refusing to send an empty round.", err=True)
         raise SystemExit(1)
@@ -10526,15 +10531,28 @@ def _manager_text(
     command: str,
     placeholder: str,
     name: str,
-) -> tuple[str, Path | None]:
+) -> tuple:
     """The text a Manager's `reply`, `ask`, `route` or `refine ask` sends, and
-    the draft to consume once it is queued (SCRUM-69).
+    the draft (`stdin_text.Draft`, or None for stdin) to consume once it is
+    queued (SCRUM-69).
 
     Exactly one source: `--from-file <draft>` (what is taught) or `-` with the
     text on stdin (still accepted). Text on the command line is refused, as
-    before, and so are both sources, or neither. Exits with the reason."""
-    from rite_ai.managers import stdin_text
+    before, and so are both sources, or neither. Exits with the reason.
 
+    What a refusal teaches depends on who ran it (`_teach`): a Manager is
+    taught the file form, a person at the host the heredoc they could
+    always use, word for word as before."""
+    from rite_ai.managers import current_manager, stdin_text
+
+    if from_file and text and text != stdin_text.STDIN:
+        # Command-line text is the worse problem: whatever it held has
+        # already run, and that is what must be said.
+        click.echo(
+            _command_line_refusal(root, manager, command, placeholder, name),
+            err=True,
+        )
+        raise SystemExit(1)
     if from_file and text:
         click.echo(
             "refusing: give the text in --from-file or on stdin with `-`, not "
@@ -10544,14 +10562,25 @@ def _manager_text(
         raise SystemExit(1)
     if from_file:
         try:
-            return stdin_text.read_draft(root, manager, from_file)
+            text, draft = stdin_text.read_draft(root, manager, from_file)
         except stdin_text.DraftRefused as e:
             click.echo(f"refusing: {e}. Nothing was sent.", err=True)
             raise SystemExit(1) from None
+        # The draft stays LOCKED until it is consumed; a refusal after this
+        # point releases it with the command, leaving it where it was written.
+        ctx = click.get_current_context(silent=True)
+        if ctx is not None:
+            ctx.call_on_close(draft.close)
+        return text, draft
     if not text:
         click.echo(
-            "refusing: no text. Put it in a file and name it:\n"
-            + stdin_text.file_form(root, manager, command, name, placeholder),
+            "refusing: no text. "
+            + (
+                "Put it in a file and name it:\n"
+                if current_manager()
+                else "Send it on stdin through a quoted heredoc:\n"
+            )
+            + _teach(root, manager, command, name, placeholder),
             err=True,
         )
         raise SystemExit(1)
@@ -10559,12 +10588,35 @@ def _manager_text(
         return stdin_text.read(text), None
     except stdin_text.OnTheCommandLine:
         click.echo(
-            stdin_text.refusal(command, placeholder, root, manager, name), err=True
+            _command_line_refusal(root, manager, command, placeholder, name),
+            err=True,
         )
         raise SystemExit(1) from None
 
 
-def _say_consumed(draft: Path | None) -> None:
+def _command_line_refusal(
+    root: Path, manager: str, command: str, placeholder: str, name: str
+) -> str:
+    from rite_ai.managers import current_manager, stdin_text
+
+    if current_manager():
+        return stdin_text.refusal(command, placeholder, root, manager, name)
+    return stdin_text.refusal(command, placeholder)
+
+
+def _teach(root: Path, manager: str, command: str, name: str, placeholder: str) -> str:
+    """How to send a text, said to whoever ran the command: a Manager (its
+    process has `RITE_MANAGER`) writes a draft and names it (SCRUM-69); a
+    person at the host gets the heredoc, which works in their own shell and
+    names no Manager's directory they have no reason to know."""
+    from rite_ai.managers import current_manager, stdin_text
+
+    if current_manager():
+        return stdin_text.file_form(root, manager, command, name, placeholder)
+    return stdin_text.heredoc(f"{command} -", placeholder)
+
+
+def _say_consumed(draft) -> None:
     from rite_ai.managers import stdin_text
 
     problem = stdin_text.consume_draft(draft)
@@ -10589,8 +10641,8 @@ def _say_consumed(draft: Path | None) -> None:
     "from_file",
     default="",
     help="A file in your drafts directory holding the text, written with your "
-    "Write tool. The form your instructions teach: nothing in it is expanded. "
-    "It is removed once sent.",
+    "file-writing tool, not the shell. The form your instructions teach: "
+    "nothing in it is expanded. It is removed once sent.",
 )
 def route(manager_name: str, text: str, ticket: str, from_file: str) -> None:
     """Hand work to another Manager in this root — the Owner only.
@@ -10606,13 +10658,15 @@ def route(manager_name: str, text: str, ticket: str, from_file: str) -> None:
     Manager holding `route`, whatever the request says.
 
     ⚠ **THE TEXT IS A FILE: `--from-file <draft>` (SCRUM-69)**, as for
-    `rite reply`, written with your Write tool in your drafts directory, never
-    on the command line (F14). Routed work quotes tickets more than anything
-    else does. `-` with the text on stdin is still accepted.
+    `rite reply`, written with your file-writing tool (not the shell) in your
+    drafts directory, never on the command line (F14). Routed work quotes
+    tickets more than anything else does. `-` with the text on stdin is still accepted.
 
     Examples:
-      rite route --ticket RT-12 helper --from-file route.md
+      rite route --ticket RT-12 helper --from-file <your drafts directory>/route.md
     """
+    import shlex
+
     from rite_ai.config.managers import routing_owner
     from rite_ai.managers import current_manager
     from rite_ai.managers.routing import request
@@ -10657,7 +10711,9 @@ def route(manager_name: str, text: str, ticket: str, from_file: str) -> None:
         speaking,
         text,
         from_file,
-        f"rite route --ticket {ticket.strip() or '<ID>'} {manager_name}",
+        "rite route --ticket "
+        + (shlex.quote(ticket.strip()) if ticket.strip() else "<ID>")
+        + f" {manager_name}",
         "<what to do, and what to report back>",
         "route.md",
     )
@@ -10743,8 +10799,8 @@ def chore(message_ids: tuple[str, ...]) -> None:
     "from_file",
     default="",
     help="A file in your drafts directory holding the text, written with your "
-    "Write tool. The form your instructions teach: nothing in it is expanded. "
-    "It is removed once sent.",
+    "file-writing tool, not the shell. The form your instructions teach: "
+    "nothing in it is expanded. It is removed once sent.",
 )
 def reply(text: str, manager: str, from_file: str) -> None:
     """Say something to the User, from a Manager — read with `rite replies`.
@@ -10764,18 +10820,19 @@ def reply(text: str, manager: str, from_file: str) -> None:
     redirected, erring toward refusing too much (`reads_as_action`).
 
     ⚠ **THE TEXT IS A FILE: `--from-file <draft>` (SCRUM-69).** Write it
-    with your Write tool in your drafts directory (your instructions name
-    it), and rite sends it exactly as written. Text on the command line is
-    refused: in double quotes the shell runs whatever is in backticks first,
-    and a Manager's text often quotes a ticket someone else wrote
-    (`managers/stdin_text`). `-` with the text on stdin is still accepted.
+    with your file-writing tool, not the shell, in your drafts directory
+    (your instructions name it), and rite sends it exactly as written. Text
+    on the command line is refused: in double quotes the shell runs
+    whatever is in backticks first, and a Manager's text often quotes a
+    ticket someone else wrote (`managers/stdin_text`). `-` with the text on
+    stdin is still accepted.
 
     Examples:
-      rite reply --manager planner --from-file reply.md
+      rite reply --manager planner --from-file <your drafts directory>/reply.md
     """
     import shlex
 
-    from rite_ai.managers import current_manager, stdin_text
+    from rite_ai.managers import current_manager
     from rite_ai.managers.mailbox import OUTBOX, REPLY, full_warning, prune, send
     from rite_ai.managers.reads_as_action import sign_of_action
 
@@ -10824,10 +10881,10 @@ def reply(text: str, manager: str, from_file: str) -> None:
             "where nobody is asked to answer. Ask it instead"
             + (
                 f", with the same file:\n  rite ask --manager {speaking} "
-                f"--from-file {shlex.quote(str(draft))}\n"
+                f"--from-file {shlex.quote(str(draft.path))}\n"
                 if draft is not None
                 else ":\n"
-                + stdin_text.file_form(
+                + _teach(
                     root,
                     speaking,
                     f"rite ask --manager {speaking}",
@@ -10895,9 +10952,10 @@ def reply(text: str, manager: str, from_file: str) -> None:
     "--while",
     "meanwhile",
     default="",
-    help="`-`: what you will do meanwhile is the FIRST LINE of stdin, the "
-    "question the rest. Required with --defer: if there is nothing, the "
-    "question blocks you and must be asked now. Never text on the command line.",
+    help="`-`: what you will do meanwhile is the FIRST LINE of the text (the "
+    "draft, or stdin), the question the rest. Required with --defer: if "
+    "there is nothing, the question blocks you and must be asked now. Never "
+    "text on the command line.",
 )
 @click.option(
     "--manager",
@@ -10910,8 +10968,8 @@ def reply(text: str, manager: str, from_file: str) -> None:
     "from_file",
     default="",
     help="A file in your drafts directory holding the text, written with your "
-    "Write tool. The form your instructions teach: nothing in it is expanded. "
-    "It is removed once sent.",
+    "file-writing tool, not the shell. The form your instructions teach: "
+    "nothing in it is expanded. It is removed once sent.",
 )
 def ask(
     question: str, defer: bool, meanwhile: str, manager: str, from_file: str
@@ -10932,8 +10990,8 @@ def ask(
     accepted.
 
     Examples:
-      rite ask --manager planner --from-file ask.md
-      rite ask --manager planner --defer --while - --from-file ask.md
+      rite ask --manager planner --from-file <your drafts directory>/ask.md
+      rite ask --manager planner --defer --while - --from-file <…>/ask.md
     """
     from rite_ai.managers import checkins, current_manager, stdin_text
     from rite_ai.managers.mailbox import OUTBOX, QUESTION, full_warning, prune, send
@@ -10969,9 +11027,9 @@ def ask(
             "refusing: --while takes `-`, and what you will do meanwhile is "
             "the first line of your text. In double quotes on the command line "
             "the shell runs anything in backticks or $( ) BEFORE rite sees it "
-            "— and if yours had any, it already ran. Put both in one file, the "
+            "— and if yours had any, it already ran. Put both in one text, the "
             "meanwhile on its first line:\n"
-            + stdin_text.file_form(
+            + _teach(
                 root,
                 asking,
                 f"rite ask --manager {asking} --defer --while -",
@@ -11004,7 +11062,7 @@ def ask(
             f"refusing to defer: no --while, or an empty first line. If you "
             f"cannot say what you will "
             f"do meanwhile, {checkins.REFUSED_WITHOUT_WHILE}:\n"
-            + stdin_text.file_form(
+            + _teach(
                 root, asking, f"rite ask --manager {asking}", "ask.md", "<question>"
             ),
             err=True,
@@ -11013,6 +11071,7 @@ def ask(
 
     if not defer:
         send(root, asking, OUTBOX, question, kind=QUESTION)
+        _say_consumed(draft)
         if meanwhile.strip():
             # A --while with no --defer is most likely a forgotten --defer.
             # Asking now is the safe reading, and it is said.
@@ -11031,6 +11090,10 @@ def ask(
             # NEXT window would make them wait hours for something they are
             # here to answer.
             q = checkins.defer(root, asking, question, meanwhile)
+            # Consumed the moment it is queued, BEFORE asking: if `ask_now`
+            # fails, the question is deferred already, and a retry with the
+            # same draft would queue it twice.
+            _say_consumed(draft)
             checkins.ask_now(
                 root,
                 asking,
@@ -11048,6 +11111,10 @@ def ask(
             # ⚠ Nowhere to wait: a question deferred to a check-in that never
             # comes is a question nobody is asked. Asked now, with the reason.
             q = checkins.defer(root, asking, question, meanwhile)
+            # Consumed the moment it is queued, BEFORE asking: if `ask_now`
+            # fails, the question is deferred already, and a retry with the
+            # same draft would queue it twice.
+            _say_consumed(draft)
             checkins.ask_now(
                 root,
                 asking,
@@ -11062,14 +11129,14 @@ def ask(
             )
         else:
             q = checkins.defer(root, asking, question, meanwhile)
+            _say_consumed(draft)
             click.echo(
                 f"deferred as {q.id} — {state.line}. At the check-in you "
                 "re-read it first and withdraw it if you have answered it "
                 "yourself; otherwise it is asked. It is asked at once if your "
                 "loop goes idle first."
             )
-    # Queued, deferred or asked: in every branch above the text is now rite's.
-    _say_consumed(draft)
+    # Each branch above consumed the draft the moment its question was queued.
     warning = full_warning(prune(root, asking, OUTBOX), asking)
     if warning:
         click.echo(warning, err=True)
@@ -11242,7 +11309,7 @@ def message(manager_name: str, text: str) -> None:
         # never learn their message went nowhere.
         click.echo("refusing to send an empty message.", err=True)
         raise SystemExit(1)
-    from rite_ai.managers import current_manager
+    from rite_ai.managers import current_manager, stdin_text
 
     speaking_as = current_manager()
     if speaking_as:
@@ -11256,9 +11323,15 @@ def message(manager_name: str, text: str) -> None:
         click.echo(
             f"refusing: this is Manager {speaking_as!r}, and a Manager does "
             f"not write a Manager's inbox — a message there is delivered as "
-            f"the Owner's instruction. To answer the person, use `rite reply "
-            f"--manager {speaking_as} -` with the text on stdin, or `rite ask` "
-            "for a question.",
+            "the Owner's instruction. To answer the person, use `rite reply`, "
+            "or `rite ask` for a question:\n"
+            + stdin_text.file_form(
+                root,
+                speaking_as,
+                f"rite reply --manager {speaking_as}",
+                "reply.md",
+                "<your message>",
+            ),
             err=True,
         )
         raise SystemExit(1)

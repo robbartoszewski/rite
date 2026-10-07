@@ -135,7 +135,13 @@ def test_some_statements_are_refused_on_purpose(text):
 
 @pytest.mark.parametrize("text", ASKS)
 def test_rite_reply_refuses_it_writes_nothing_and_names_ask(project, text):
-    result = CliRunner().invoke(cli, ["reply", "--manager", "lead", "-"], input=text)
+    # As the Manager itself (`RITE_MANAGER`): a Manager is taught the file form.
+    result = CliRunner().invoke(
+        cli,
+        ["reply", "--manager", "lead", "-"],
+        input=text,
+        env={"RITE_MANAGER": "lead"},
+    )
     assert result.exit_code == 1, result.output
     assert "rite ask --manager lead --from-file " in result.output
     assert read(project, "lead", OUTBOX) == []

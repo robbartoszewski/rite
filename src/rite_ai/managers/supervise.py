@@ -64,6 +64,7 @@ from rite_ai.managers.board_context import board_now
 from rite_ai.managers.boundaries import (
     UnsupportedPlatform,
     boundary_for,
+    heredoc_dir,
     temp_environment,
 )
 from rite_ai.managers.broker import take_requests
@@ -666,8 +667,8 @@ def _say_refusals(
                 f"refused: {command.strip()!r} — it runs a command inside "
                 "backticks or $( ), which the engine asks approval for. When "
                 "that is text for `rite reply`, `rite ask` or `rite route`, "
-                "the text goes on stdin through a quoted heredoc, as the "
-                "Manager's instructions show, never in double quotes."
+                "the text goes in a draft file named with `--from-file`, as "
+                "the Manager's instructions show, never in double quotes."
             )
         elif allowed(command):
             # ⚠ TWO CAUSES, and the transcript does not say which (SB11,
@@ -3727,8 +3728,11 @@ def _default_starter(
                 if placement and placement[0] == "env"
                 else {}
             ),
-            # TMPDIR and Claude Code's own CLAUDE_CODE_TMPDIR (`temp_environment`).
-            **temp_environment(confinement.engine_tmp(root, manager)),
+            # TMPDIR and Claude Code's own CLAUDE_CODE_TMPDIR, and zsh's
+            # heredocs in the Manager's own directory (`temp_environment`).
+            **temp_environment(
+                confinement.engine_tmp(root, manager), heredoc_dir(root, manager)
+            ),
             **model_env,
             # C6/C26: WHERE the GitHub credential is, never the credential.
             # Derived from what `github_access.open_access` left on disk, so

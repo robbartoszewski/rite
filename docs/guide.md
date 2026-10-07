@@ -277,8 +277,9 @@ naming what it will do meanwhile, on the first line of its text:
     tickets 8 and 9, which do not touch the CLI
     rename --out to --output?
 
-It writes that to a file in its own drafts directory with its Write tool, and
-runs `rite ask --defer --while - --from-file <that file>`.
+It writes that to a file in its own drafts directory with its file-writing
+tool (not the shell), and runs `rite ask --defer --while - --from-file <that
+file>`.
 
 A Manager's text always travels as a file like this (SCRUM-69), never in
 double quotes on the command line: there the shell runs anything in

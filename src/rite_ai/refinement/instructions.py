@@ -20,6 +20,7 @@ header or pass for an instruction.
 
 from __future__ import annotations
 
+import shlex
 import time
 from pathlib import Path
 
@@ -100,8 +101,10 @@ def instructions(root: Path, manager: str, config) -> str:
             stdin_text.file_form(
                 root, manager, f"{rite} refine ask <ID>", "round.md", "your round"
             ),
-            "and about an instruction he gave in chat, the same, with:",
-            f"   {rite} refine ask --message <message-id> --from-file <the same path>",
+            "and about an instruction he gave in chat, the same two steps, "
+            "with this as step 2:",
+            f"   {rite} refine ask --message <message-id> --from-file "
+            + shlex.quote(str(stdin_text.drafts_dir(root, manager) / "round.md")),
             stdin_text.FILE_RULE,
             "",
         ]

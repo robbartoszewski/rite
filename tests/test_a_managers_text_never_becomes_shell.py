@@ -32,10 +32,12 @@ import pytest
 from click.testing import CliRunner
 
 from rite_ai.cli.main import _manager_roles, cli
+from rite_ai.config.parse import parse_config
 from rite_ai.managers import MANAGER_ENV, checkins, routing, stdin_text
 from rite_ai.managers.mailbox import INBOX, OUTBOX, how_to_reply, read
 from rite_ai.managers.supervise import _substitutes
 from rite_ai.managers.transcripts import Refusal
+from rite_ai.refinement.instructions import instructions as refinement_instructions
 from rite_ai.tickets.interface import Ticket
 from tests.refined_board import refined
 
@@ -218,11 +220,16 @@ def test_no_instruction_teaches_a_heredoc_any_more(project):
             routing.briefing("lead", "lead", roles, root=project),
             routing.briefing("helper", "lead", roles, root=project),
             checkins.instructions(project, "lead"),
+            # The refinement rounds are a Manager's text too (`refine ask`).
+            refinement_instructions(
+                project, "lead", parse_config(project / ".rite" / "config.yaml")
+            ),
         ]
     )
     assert "<<'" not in said and "RITE_TEXT_" not in said
     runs = [ln for ln in said.splitlines() if ln.strip().startswith("2. Run: ")]
-    assert len(runs) >= 5, runs
+    assert len(runs) >= 6, runs
+    assert any(" refine ask " in run for run in runs), runs
     assert all("--from-file " in run for run in runs), runs
 
 
@@ -275,7 +282,7 @@ def test_w9_the_refusal_says_substitution_not_a_broken_settings_file(
     supervise._say_refusals(tmp_path, 0.0, said.append, engine="claude", manager="")
     (line,) = said
     assert "backticks or $( )" in line
-    assert "quoted heredoc" in line
+    assert "--from-file" in line and "heredoc" not in line
     assert "did not apply" not in line
 
 

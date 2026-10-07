@@ -66,6 +66,7 @@ from pathlib import Path
 from rite_ai.managers import manager_dir, user_dir
 from rite_ai.managers.enclosure import (  # noqa: PLC2701
     _engine_state_paths,
+    _own_subdirs,
     _running_rite,
     _tool_paths,
     engine_tmp,
@@ -609,6 +610,10 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     # It is under rite's data directory now (DF3), not the project, and
     # granted by exact path.
     manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
+    # And inside it, the two directories a Manager's text passes through
+    # (SCRUM-69): zsh's heredocs (`boundaries.heredoc_dir`), which zsh will
+    # not create, and the drafts `rite reply --from-file` reads.
+    _own_subdirs(root, manager)
     mailbox_dir(root, manager, OUTBOX).mkdir(parents=True, exist_ok=True)
     mailbox_dir(root, manager, INBOX).mkdir(parents=True, exist_ok=True)
     # ⚠ Before composing, for the same reason and with the same resolution of

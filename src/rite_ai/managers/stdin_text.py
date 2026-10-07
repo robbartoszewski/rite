@@ -37,15 +37,18 @@ in the dogfood, and neither is rite's to fix inside the heredoc:
 - a model that writes the end line twice makes the engine refuse the whole
   call before rite runs (1 refused call in 42, SCRUM-45).
 
-So the Manager writes its text with its own Write tool into its OWN drafts
-directory (`drafts_dir`) and names it: `--from-file <path>`. No shell
-creates anything, nothing in the file is expanded, and there is no end line
-to double. `read_draft` is the only way in. It accepts a regular file directly
-inside this Manager's drafts directory, opened without following a link, and
-nothing else, because a draft is sent in the Manager's name and must be one
-only that Manager could have written (`manager_dir` is granted to its own
-profile alone, MM8). A draft is consumed once its message is queued, so a
-retry with the same path cannot send it twice. The heredoc on stdin is still
+So the Manager writes its text with its own file-writing tool (not the
+shell) into its OWN drafts directory (`drafts_dir`) and names it:
+`--from-file <path>`. No shell creates anything, nothing in the file is
+expanded, and there is no end line to double. `read_draft` is the only way
+in. It accepts a regular file directly inside this Manager's drafts
+directory, reached without following a link, and nothing else, because a
+draft is sent in the Manager's name: no other Manager's profile grants that
+directory (`manager_dir`, MM8), so of the Managers only this one can have
+written it. (The person and rite's supervisor, outside every sandbox, can
+too.) A draft is locked while it is sent and consumed once its message is
+queued, so neither a retry nor a second send at the same moment sends it
+twice. The heredoc on stdin is still
 ACCEPTED; it is no longer TAUGHT.
 """
 
@@ -179,80 +182,213 @@ class DraftRefused(Exception):
     """A `--from-file` path that is not a draft of this Manager's."""
 
 
-def read_draft(root: Path, manager: str, given: str) -> tuple[str, Path]:
-    """`(text, path)` for the draft `given` names: an absolute path, or a bare
-    file name in this Manager's drafts directory.
+class Draft:
+    """A draft read for sending, held LOCKED until it is consumed or the
+    process ends (`read_draft`).
 
-    Refuses (`DraftRefused`), reading nothing, anything that is not a regular
-    file DIRECTLY inside this Manager's own resolved drafts directory: a path
-    elsewhere, `..`, a subdirectory, a link at the leaf (opened with
-    `O_NOFOLLOW`), a directory, a fifo, or a file over `DRAFT_LIMIT`. The final
-    newline an editor adds is not part of the text."""
+    `path` is for messages only: nothing is ever reopened by it. Every later
+    step goes through `_dir`, the drafts directory opened once without
+    following a link."""
+
+    def __init__(self, path: Path, dir_fd: int, fd: int, name: str, info) -> None:
+        self.path = path
+        self._dir = dir_fd
+        self._fd = fd
+        self._name = name
+        self._id = (info.st_dev, info.st_ino)
+
+    def __str__(self) -> str:
+        return str(self.path)
+
+    def close(self) -> None:
+        """Release the lock and the directory, consumed or not."""
+        for fd in (self._fd, self._dir):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        self._fd = self._dir = -1
+
+    def consume(self) -> str:
+        """Remove the draft, still under its lock; "" or what went wrong.
+
+        Only the file that was READ is removed: the name is unlinked
+        through the drafts directory's own descriptor, and only while it
+        still names the inode that was read."""
+        try:
+            now = os.stat(self._name, dir_fd=self._dir, follow_symlinks=False)
+            if (now.st_dev, now.st_ino) == self._id:
+                os.unlink(self._name, dir_fd=self._dir)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            return (
+                f"⚠ sent, but the draft {self.path} could not be removed ({e}): "
+                "delete it, or do not run the same command again, or it is "
+                "sent twice"
+            )
+        finally:
+            self.close()
+        return ""
+
+
+def _refuse_open(what: Path, e: OSError) -> DraftRefused:
+    # ELOOP (or ENOTDIR for a directory link on Linux): a link, said as what
+    # it is.
+    if e.errno in (errno.ELOOP, errno.ENOTDIR, errno.EMLINK):
+        return DraftRefused(f"{what} cannot be read as a draft: it is a link")
+    return DraftRefused(f"{what} cannot be read as a draft: {e.strerror or e}")
+
+
+def _open_drafts(root: Path, manager: str) -> int:
+    """The drafts directory, opened through the Manager's own directory with
+    no link followed at `drafts` itself.
+
+    🔴 **A link here was trusted (SCRUM-69 review).** The Manager can write
+    its own directory, so it can replace `drafts` with a link to anywhere
+    (`~/.ssh`). Inside its profile that reaches nothing; but a person at the
+    host running `rite reply --manager <m> --from-file <name>` runs rite
+    unconfined, and resolving the link would have read — and removed — a file
+    the Manager can never touch. `manager_dir` itself the Manager cannot
+    replace (its parent is not granted), so it is opened normally: links
+    ABOVE it are rite's own (a rite home through a link)."""
+    from rite_ai.managers import manager_dir
+
     own = drafts_dir(root, manager)
     try:
-        home = own.resolve(strict=True)
+        base = os.open(manager_dir(Path(root), manager), os.O_RDONLY | os.O_DIRECTORY)
     except OSError:
         raise DraftRefused(
             f"there are no drafts yet: write your text to a file in {own} first"
         ) from None
-    path = Path(given).expanduser()
-    if not path.is_absolute():
-        path = own / path
     try:
-        parent = path.parent.resolve(strict=True)
-    except OSError:
-        raise DraftRefused(f"{given} is not in your drafts directory, {own}") from None
-    if parent != home or path.name in ("", ".", ".."):
-        raise DraftRefused(
-            f"{given} is not in your drafts directory, {own}: rite sends only "
-            "what you wrote there, because it goes out in your name"
+        return os.open(
+            DRAFTS_DIRNAME,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=base,
         )
-    leaf = parent / path.name
-    try:
-        fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         raise DraftRefused(
-            f"{leaf} does not exist. If you sent it already, it was removed "
-            "once queued: write a new file for a new message"
+            f"there are no drafts yet: write your text to a file in {own} first"
         ) from None
     except OSError as e:
-        # ELOOP: the leaf is a link. Said as what it is.
-        why = "it is a link" if e.errno == errno.ELOOP else str(e)
-        raise DraftRefused(f"{leaf} cannot be read as a draft: {why}") from None
+        raise _refuse_open(own, e) from None
+    finally:
+        os.close(base)
+
+
+def read_draft(root: Path, manager: str, given: str) -> tuple[str, Draft]:
+    """`(text, draft)` for the draft `given` names: a path, absolute or from
+    the current directory, to a file directly in this Manager's drafts
+    directory. The final newline an editor adds is not part of the text.
+
+    Refuses (`DraftRefused`), sending nothing, anything that is not a regular
+    file DIRECTLY inside this Manager's own drafts directory: a path
+    elsewhere, a subdirectory, a link anywhere from the Manager's directory
+    down (`_open_drafts`, `O_NOFOLLOW` at the leaf), a directory, a fifo, a
+    file with a second hard link or another owner, or one over `DRAFT_LIMIT`.
+
+    🔴 **Exactly once, with no window (SCRUM-69 review).** Two `rite reply
+    --from-file reply.md` started together both read the file before either
+    removed it, so the text went twice. The draft is now LOCKED (`flock`,
+    exclusive, not waiting) from the moment it is read until `Draft.consume`
+    has removed it, and after taking the lock rite checks that the name
+    still names the file it opened. The second run either fails to take the
+    lock (refused: being sent) or takes it after the first has removed the
+    name (refused: already sent). Kernel locks die with their process, so a
+    crashed rite never leaves a draft unsendable. A lock rather than a
+    rename to a claimed name: a refusal after reading then keeps the draft
+    exactly where the Manager wrote it, with nothing to put back — and
+    putting a renamed draft back is itself a race with a newer one."""
+    import fcntl
+
+    path = Path(given).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    name = path.name
+    own = drafts_dir(root, manager)
+    if name in ("", ".", ".."):
+        raise DraftRefused(f"{given} is not a file in your drafts directory, {own}")
+    dir_fd = _open_drafts(root, manager)
+    fd = -1
     try:
+        try:
+            given_dir = os.stat(path.parent)
+        except OSError:
+            given_dir = None
+        here = os.fstat(dir_fd)
+        if given_dir is None or (given_dir.st_dev, given_dir.st_ino) != (
+            here.st_dev,
+            here.st_ino,
+        ):
+            raise DraftRefused(
+                f"{given} is not in your drafts directory, {own}: rite sends "
+                "only what you wrote there, because it goes out in your name"
+            )
+        leaf = own / name
+        try:
+            fd = os.open(
+                name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd
+            )
+        except FileNotFoundError:
+            raise DraftRefused(
+                f"{leaf} does not exist. If you sent it already, it was removed "
+                "once queued: write a new file for a new message"
+            ) from None
+        except OSError as e:
+            raise _refuse_open(leaf, e) from None
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise DraftRefused(f"{leaf} is not a regular file")
+        if info.st_nlink != 1:
+            raise DraftRefused(
+                f"{leaf} has {info.st_nlink} hard links: a draft is a file you "
+                "wrote, not a link to another"
+            )
+        if info.st_uid != os.getuid():
+            raise DraftRefused(f"{leaf} is not owned by you")
         if info.st_size > DRAFT_LIMIT:
             raise DraftRefused(
                 f"{leaf} is {info.st_size} bytes; a message is at most {DRAFT_LIMIT}"
             )
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DraftRefused(
+                f"{leaf} is being sent by another rite right now: it is sent "
+                "once, so this one sends nothing"
+            ) from None
+        try:
+            now = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            now = None
+        if now is None or (now.st_dev, now.st_ino) != (info.st_dev, info.st_ino):
+            raise DraftRefused(
+                f"{leaf} was sent and removed while this rite waited to read "
+                "it: it is sent once, so this one sends nothing"
+            )
         raw = os.read(fd, DRAFT_LIMIT + 1)
-    finally:
-        os.close(fd)
-    if len(raw) > DRAFT_LIMIT:
-        raise DraftRefused(f"{leaf} is over {DRAFT_LIMIT} bytes")
-    return raw.decode("utf-8", errors="replace").removesuffix("\n"), leaf
+        if len(raw) > DRAFT_LIMIT:
+            raise DraftRefused(f"{leaf} is over {DRAFT_LIMIT} bytes")
+        draft = Draft(leaf, dir_fd, fd, name, info)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        os.close(dir_fd)
+        raise
+    return raw.decode("utf-8", errors="replace").removesuffix("\n"), draft
 
 
-def consume_draft(path: Path | None) -> str:
+def consume_draft(draft: Draft | None) -> str:
     """Remove a draft whose message is queued; "" or what went wrong.
 
     ⚠ Only after the message is queued: a send that failed keeps its draft, so
     the retry is the same command. Removed after, so the same command cannot
     send the same text twice (SCRUM-45's deliver-exactly-once)."""
-    if path is None:
+    if draft is None:
         return ""
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return ""
-    except OSError as e:
-        return (
-            f"⚠ sent, but the draft {path} could not be removed ({e}): delete "
-            "it, or do not run the same command again, or it is sent twice"
-        )
-    return ""
+    return draft.consume()
 
 
 def file_form(
@@ -265,8 +401,8 @@ def file_form(
     Support` on macOS, which has a space."""
     path = drafts_dir(root, manager) / name
     return (
-        f"1. Write {placeholder} to `{path}` with your Write tool: the whole "
-        "text, exactly as it is to be read, and nothing else.\n"
+        f"1. Write {placeholder} to `{path}` with your file-writing tool, not the "
+        "shell: the whole text, exactly as it is to be read, and nothing else.\n"
         f"2. Run: {command} --from-file {shlex.quote(str(path))}"
     )
 

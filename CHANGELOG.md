@@ -11,9 +11,10 @@ no other way, so it went silent. It now writes its text to a file in its own
 drafts directory and runs `rite reply --from-file <file>` (the same for
 `ask`, `route` and `refine ask`). Nothing in the file is expanded, and there
 is no end line it can write twice. rite reads only a file in that Manager's
-own drafts directory, and removes it once the message is sent, so a retry
-cannot send it twice. From your own shell, `-` with the text on stdin still
-works.
+own drafts directory, and removes it once the message is queued, so a retry
+cannot send it twice, and two sends started at the same moment send it once.
+From your own shell, `-` with the text on stdin still works, and that is what
+a refusal there tells you.
 
 ### A check mark means the Worker read your answer: `rite ack`
 

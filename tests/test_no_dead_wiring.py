@@ -50,18 +50,6 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
-    "heredoc": (
-        "Still the form `stdin_text.refusal`, in the same file, teaches a "
-        "person at the host, who has no drafts directory. Since SCRUM-69 no "
-        "Manager is taught it; public because tests compose the stdin form "
-        "with it, and the stdin form is still accepted."
-    ),
-    "drafts_dir": (
-        "Where `read_draft` and `file_form`, in the same file, look: the one "
-        "spelling of a Manager's drafts directory (SCRUM-69). Public so that "
-        "tests, and anything that tells a Manager where to write, name it "
-        "from here rather than joining the path again."
-    ),
     "compose_policy": (
         "Landlock's half of `compose`, called by `write_profile` in the same "
         "file. Public for the same reason: it IS the boundary — the set of "

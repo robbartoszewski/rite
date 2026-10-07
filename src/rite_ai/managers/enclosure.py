@@ -717,8 +717,22 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     # And its own directory (MM8), for the same reason: granted, not creatable
     # from inside, since its parent is not granted.
     manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
+    # And inside it, the two directories a Manager's text passes through
+    # (SCRUM-69): zsh's heredocs (`boundaries.heredoc_dir`), which zsh will
+    # not create, and the drafts `rite reply --from-file` reads.
+    _own_subdirs(root, manager)
     path.write_text(compose(root, manager, home) + "\n")
     return path
+
+
+def _own_subdirs(root: Path, manager: str) -> None:
+    """Create a Manager's heredoc and drafts directories, outside its
+    boundary (SCRUM-69). Shared with Landlock's `write_profile`."""
+    from rite_ai.managers.boundaries import heredoc_dir
+    from rite_ai.managers.stdin_text import drafts_dir
+
+    for path in (heredoc_dir(root, manager), drafts_dir(root, manager)):
+        path.mkdir(mode=0o700, exist_ok=True)
 
 
 def limitations() -> tuple[str, ...]:

@@ -109,7 +109,7 @@ def test_the_owner_is_told_to_ask_the_user_before_routing(tmp_path, monkeypatch,
     # kept beside the new one.
     assert "asking you back" not in said
     assert "ask the User before you" in said
-    assert "`rite ask`, as above" in said
+    assert " ask`, as above" in said
     assert "Never route a guess" in said
 
 
