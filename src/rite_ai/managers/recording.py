@@ -110,6 +110,22 @@ dropped, so a condition that returns after 2000 other events is recorded
 again — which is the right way round: re-recording an old failure costs a
 duplicate entry, and forgetting to bound it costs the run."""
 
+FORGET_AFTER_SECONDS = 7 * 24 * 3600
+"""How long a recorded event stays suppressed.
+
+⚠ **Without this the ledger never expires, and "once per run" quietly
+becomes "once per project, ever"** (found by review, 2026-10-07). The keys
+of some of these are deliberately low-cardinality — a broker refusal whose
+subject is the Manager itself — so a failure fixed in October and
+reintroduced in December would go unrecorded, and the journal would say
+nothing about it.
+
+Seven days is the trade between the two failures either side of it: dedup
+that is too short re-files the whole backlog on every restart, which is the
+noise rule 2 exists to prevent, and dedup that never expires is silence. A
+week is longer than any run between restarts seen so far and far shorter
+than a project."""
+
 
 @dataclass(frozen=True)
 class Event:
@@ -162,25 +178,46 @@ def _ledger_path(root: Path, manager: str) -> Path:
     return manager_dir(Path(root), manager) / LEDGER_FILE
 
 
-def _read(path: Path) -> list[str]:
+def _read(path: Path) -> dict[str, float]:
+    """`{event key: when it was recorded}`.
+
+    Unreadable is treated as EMPTY, which can only ever cause a duplicate
+    entry. The other way round — treating it as "everything already
+    recorded" — would silently stop recording, which is this ticket's own
+    defect. A key whose time cannot be read is kept with time 0, so it
+    expires at the next read rather than suppressing for ever.
+    """
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        # Unreadable is treated as empty, which can only ever cause a
-        # DUPLICATE entry. The other way round — treating it as "everything
-        # already recorded" — would silently stop recording, which is this
-        # ticket's own defect.
-        return []
+        return {}
     if not isinstance(loaded, dict):
-        return []
-    keys = loaded.get("recorded")
-    return [k for k in keys if isinstance(k, str)] if isinstance(keys, list) else []
+        return {}
+    recorded = loaded.get("recorded")
+    if isinstance(recorded, list):
+        # The first shape, a bare list. Read rather than discarded so an
+        # upgrade mid-run does not re-file everything already filed.
+        return {k: 0.0 for k in recorded if isinstance(k, str)}
+    if not isinstance(recorded, dict):
+        return {}
+    out: dict[str, float] = {}
+    for key, at in recorded.items():
+        if isinstance(key, str):
+            out[key] = float(at) if isinstance(at, (int, float)) else 0.0
+    return out
 
 
-def _write(path: Path, keys: list[str]) -> None:
+def _live(keys: dict[str, float], now: float) -> dict[str, float]:
+    """The keys still inside `FORGET_AFTER_SECONDS`, newest last."""
+    fresh = {k: at for k, at in keys.items() if now - at < FORGET_AFTER_SECONDS}
+    ordered = sorted(fresh.items(), key=lambda item: item[1])
+    return dict(ordered[-MAX_REMEMBERED:])
+
+
+def _write(path: Path, keys: dict[str, float], now: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    kept = keys[-MAX_REMEMBERED:]
-    path.write_text(json.dumps({"recorded": kept}) + "\n", encoding="utf-8")
+    body = json.dumps({"recorded": _live(keys, now)}) + "\n"
+    path.write_text(body, encoding="utf-8")
 
 
 def recorder_for(root: Path, manager: str, *, enabled: bool, say=None):
@@ -230,8 +267,11 @@ def _record(root: Path, manager: str, event: Event, say) -> bool:
         )
         return False
 
+    import time
+
+    now = time.time()
     path = _ledger_path(root, manager)
-    keys = _read(path)
+    keys = _live(_read(path), now)
     key = event.key()
     if key in keys:
         return False
@@ -256,12 +296,13 @@ def _record(root: Path, manager: str, event: Event, say) -> bool:
     # Remembered only after the entry is on disk. The other order loses an
     # entry on a failed write and never tries again — the shape `journal._write`
     # exists to prevent for its own files.
-    _write(path, [*keys, key])
+    _write(path, {**keys, key: now}, now)
     return True
 
 
 __all__ = [
     "DELIVERY_REFUSED",
+    "FORGET_AFTER_SECONDS",
     "EVENTS",
     "GATE_REFUSED",
     "LEDGER_FILE",

@@ -223,6 +223,31 @@ class TestTheEntryItself:
 
 
 class TestItNeverEndsTheRun:
+    def test_the_production_recorder_is_not_mute(self):
+        """⚠ **`say` was omitted where the recorder is actually built**, so
+        a read-only journal or a refused class produced no entry AND no
+        line anywhere — an empty journal reading as a clean bill of health,
+        this ticket's exact defect. The tests saw the complaints only
+        because they inject a `say`, so the suite was green while
+        production was silent. Found by review, 2026-10-07."""
+        import ast
+        import inspect as inspect_mod
+
+        from rite_ai.cli import main as main_mod
+
+        source = inspect_mod.getsource(main_mod._start_a_manager)
+        call = next(
+            node
+            for node in ast.walk(ast.parse(source.lstrip()))
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "attr", "") == "recorder_for"
+        )
+
+        assert "say" in {kw.arg for kw in call.keywords}, (
+            "the recorder is built without a `say`, so every failure to "
+            "record one of these is silent in production"
+        )
+
     def test_an_unwritable_journal_is_said_not_raised(self, tmp_path):
         from unittest.mock import patch
 
@@ -258,10 +283,78 @@ class TestItNeverEndsTheRun:
         assert _recorder(root)(_an_event())
         assert len(_entries(root)) == 2
 
-    def test_the_ledger_is_bounded(self):
-        """It is read and written every cycle for the life of a perpetual
-        run, so it cannot grow without limit."""
-        assert recording.MAX_REMEMBERED > 0
+    def test_the_ledger_is_actually_bounded(self):
+        """⚠ **This test used to assert `MAX_REMEMBERED > 0`**, which is
+        true of any number and says nothing: removing the bound from
+        `_write` left the whole file green while the ledger grew for the
+        life of a perpetual run. Found by review, 2026-10-07. It now
+        asserts what the bound DOES."""
+        now = 1_000_000.0
+        many = {f"k{i}": now for i in range(recording.MAX_REMEMBERED + 500)}
+
+        kept = recording._live(many, now)
+
+        assert len(kept) == recording.MAX_REMEMBERED
+
+    def test_the_oldest_are_the_ones_dropped(self):
+        now = 1_000_000.0
+        keys = {f"k{i}": now - (recording.MAX_REMEMBERED - i) for i in range(10)}
+        keys["newest"] = now
+
+        kept = recording._live(keys, now)
+
+        assert "newest" in kept
+
+
+class TestTheLedgerExpires:
+    """⚠ **Without an expiry "once per run" quietly becomes "once per
+    project, ever"** (found by review). Some of these keys are deliberately
+    low-cardinality — a broker refusal whose subject is the Manager itself —
+    so a failure fixed in October and reintroduced in December would go
+    unrecorded and the journal would say nothing."""
+
+    def test_a_failure_that_comes_back_much_later_is_recorded_again(
+        self, tmp_path, monkeypatch
+    ):
+        import time
+
+        root = _project(tmp_path)
+        assert _recorder(root)(_an_event())
+
+        later = time.time() + recording.FORGET_AFTER_SECONDS + 60
+        monkeypatch.setattr(time, "time", lambda: later)
+
+        assert _recorder(root)(_an_event())
+        assert len(_entries(root)) == 2
+
+    def test_the_same_failure_within_the_window_is_not(self, tmp_path, monkeypatch):
+        """The control: the expiry must not defeat the dedup."""
+        import time
+
+        root = _project(tmp_path)
+        assert _recorder(root)(_an_event())
+
+        later = time.time() + recording.FORGET_AFTER_SECONDS - 60
+        monkeypatch.setattr(time, "time", lambda: later)
+
+        assert not _recorder(root)(_an_event())
+        assert len(_entries(root)) == 1
+
+    def test_a_ledger_in_the_old_list_shape_is_still_read(self, tmp_path):
+        """An upgrade mid-run must not re-file everything already filed."""
+        import json
+
+        from rite_ai.managers import manager_dir
+
+        root = _project(tmp_path)
+        _recorder(root)(_an_event())
+        ledger = manager_dir(root, "lead") / recording.LEDGER_FILE
+        keys = list(json.loads(ledger.read_text())["recorded"])
+        ledger.write_text(json.dumps({"recorded": keys}))
+
+        # A bare list carries no time, so it expires at the next read — which
+        # costs one duplicate and never silence.
+        assert recording._read(ledger) == dict.fromkeys(keys, 0.0)
 
 
 class TestEachWiredSiteActuallyRecords:
@@ -446,6 +539,81 @@ class TestEachWiredSiteActuallyRecords:
         (entry,) = _entries(root)
         assert "ran out of recovery budget" in entry
 
+    def test_a_restart_that_FAILED_is_not_recorded_as_a_success(self, tmp_path):
+        """⚠ **The journal stated the opposite of what happened.**
+        `recover_stalled_workers` returned the PLANNED actions after
+        executing them, so a restart that failed was recorded as "it was
+        restarted in place" — measured 2026-10-07, with the terminal saying
+        "could not restart stalled Worker 'alpha'" at the same moment. A
+        journal that contradicts the run is worse than one that says
+        nothing, which is this ticket's own subject."""
+        from rite_ai.managers.recovery import RESTART, RecoveryAction
+
+        root = _project(tmp_path)
+
+        self._recovered(
+            root,
+            [
+                RecoveryAction(
+                    "alpha",
+                    RESTART,
+                    "KAN-7",
+                    "session stalled; sandbox present",
+                    attempted=False,
+                    outcome="the sandbox refused to start",
+                )
+            ],
+        )
+
+        (entry,) = _entries(root)
+        assert "FAILED" in entry
+        assert "the sandbox refused to start" in entry
+        assert "and it was restarted in place:" not in entry
+
+    def test_the_real_recovery_reports_whether_it_worked(self, tmp_path):
+        """⚠ Driven through `recover_stalled_workers` itself, because the
+        defect was in what IT returned. A stand-in for it could not have
+        caught this, and the first version of these tests only had one."""
+        from rite_ai.managers.recovery import recover_stalled_workers
+        from rite_ai.reporting.heartbeat import StallReport
+
+        root = _project(tmp_path)
+        stall = StallReport(
+            worker="alpha", last_seen=0.0, seconds_silent=9999.0, ticket="KAN-7"
+        )
+
+        actions = recover_stalled_workers(
+            root,
+            "lead",
+            lambda _line: None,
+            stalls_of=lambda: [stall],
+            classify=lambda _r: "present",
+            do_restart=lambda _r: (False, "the sandbox refused to start"),
+        )
+
+        assert [a.attempted for a in actions] == [False]
+        assert actions[0].outcome == "the sandbox refused to start"
+
+    def test_a_restart_that_worked_still_reads_as_one(self, tmp_path):
+        from rite_ai.managers.recovery import recover_stalled_workers
+        from rite_ai.reporting.heartbeat import StallReport
+
+        root = _project(tmp_path)
+        stall = StallReport(
+            worker="alpha", last_seen=0.0, seconds_silent=9999.0, ticket="KAN-7"
+        )
+
+        actions = recover_stalled_workers(
+            root,
+            "lead",
+            lambda _line: None,
+            stalls_of=lambda: [stall],
+            classify=lambda _r: "present",
+            do_restart=lambda _r: (True, "restarted"),
+        )
+
+        assert [a.attempted for a in actions] == [True]
+
     def test_a_cycle_with_nothing_stalled_records_nothing(self, tmp_path):
         root = _project(tmp_path)
 
@@ -531,7 +699,12 @@ class TestTheRelayRecordsItsOwnFailures:
 
         entries = _entries(root)
         assert entries, "a misrouted answer recorded nothing"
-        assert "day's notes" in entries[0]
+        # ⚠ It states that the answer did not appear where the Owner asked,
+        # which is what is KNOWN at that point. The first version asserted
+        # it "went to the day's notes instead" — before the notes post had
+        # been attempted, and that post can fail too (found by review).
+        assert "does not appear where the Owner asked" in entries[0]
+        assert "went to the day's notes instead" not in entries[0]
 
     def test_an_ordinary_exchange_records_nothing(self, tmp_path):
         """The control: a reply that reaches the thread it answered is not a

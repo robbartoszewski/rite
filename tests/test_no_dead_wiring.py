@@ -65,12 +65,6 @@ UNCALLED_ON_PURPOSE = {
         "assert it path by path rather than through a git range, the way "
         "`broker.decide`'s predicates are tested."
     ),
-    "heredoc": (
-        "Still the form `stdin_text.refusal`, in the same file, teaches a "
-        "person at the host, who has no drafts directory. Since SCRUM-69 no "
-        "Manager is taught it; public because tests compose the stdin form "
-        "with it, and the stdin form is still accepted."
-    ),
     "lifecycle_dir": (
         "Where `request`, in the same file, writes a Manager's lifecycle "
         "requests and `honour_requests` names in what it says (SCRUM-59). "

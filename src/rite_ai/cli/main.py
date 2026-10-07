@@ -10264,17 +10264,30 @@ def _recover_and_record(root: Path, manager: str, say, recorder, recover=None):
                 )
             )
             continue
-        what = (
+        tried = (
             "its ticket was re-staged"
             if action.kind == RESTAGE
             else "it was restarted in place"
         )
+        # ⚠ **WHAT HAPPENED, not what was planned.** `attempted` is False
+        # when the restart or re-stage failed, and an entry reading "it was
+        # restarted in place" for a restart that did not happen is a journal
+        # stating the opposite of the truth — worse than no journal, which is
+        # this ticket's own subject. Found by review, 2026-10-07.
+        if action.attempted is False:
+            observed = (
+                f"{action.worker} stalled and rite tried to recover it — "
+                f"{tried} — and that FAILED: {action.outcome or 'no reason given'}"
+            )
+        else:
+            observed = f"{action.worker} stalled and {tried}" + (
+                f": {action.reason}" if action.reason else ""
+            )
         recorder(
             recording.Event(
                 recording.RECOVERY_ACTED,
                 action.worker,
-                f"{action.worker} stalled and {what}"
-                + (f": {action.reason}" if action.reason else ""),
+                observed,
                 "a Worker runs its ticket to a delivery without the host "
                 "having to intervene",
                 anchor=where,
@@ -10411,7 +10424,16 @@ def _start_a_manager(
     # the boundary steps that know about a failure — rather than inside
     # `supervise`, which would need the flag threaded through it for the
     # one thing that reads it.
-    recorder = recording.recorder_for(root, role.name, enabled=record_issues)
+    # ⚠ **`say` IS NOT OPTIONAL HERE.** Without it `_complain` is a no-op, so
+    # a read-only journal, a refused event class or any error recording one
+    # produced no entry AND no line anywhere — an empty journal reading as a
+    # clean bill of health, which is the exact defect this ticket exists to
+    # fix. The tests only saw the complaints because they inject a `say`, so
+    # the suite was green while production was mute. Found by review,
+    # 2026-10-07.
+    recorder = recording.recorder_for(
+        root, role.name, enabled=record_issues, say=lambda line: click.echo(line)
+    )
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":

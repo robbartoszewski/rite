@@ -1926,10 +1926,11 @@ class Listener:
                     self._record_failure(
                         "routing",
                         message.path.name,
-                        f"an answer from {self.manager} could not be posted in "
-                        f"the thread of the message it answered, so it went to "
-                        f"the day's notes instead — where the Owner is told "
-                        f"nothing needs them",
+                        f"an answer from {self.manager} could not be posted "
+                        f"in the thread of the message it answered, so it "
+                        f"does not appear where the Owner asked. rite falls "
+                        f"back to the day's notes, whose own root line says "
+                        f"nothing in it needs them",
                         "an answer appears in the thread the question was asked in",
                     )
                 if answering and not str(getattr(message, "answers", "") or ""):
