@@ -32,14 +32,27 @@ class DriverState:
     written: set = field(default_factory=set)
     acked: set = field(default_factory=set)
     requests_seen: set = field(default_factory=set)
+    plans_seen: dict = field(default_factory=dict)  # ticket key -> last snapshot
     kill_done: bool = False
     restart_done: bool = False
 
 
-def sample(run: RunDir, obs: Observer, fleet: Fleet, st: DriverState) -> None:
-    """One observation, appended: claims, and every Worker start request ever seen
-    (requests are consumed when honoured, so only a sampler sees them all)."""
+def sample(
+    run: RunDir, obs: Observer, fleet: Fleet, st: DriverState, tickets: dict
+) -> None:
+    """One observation, appended: claims; every Worker start request ever seen
+    (requests are consumed when honoured, so only a sampler sees them all); and each
+    pipeline ticket's plan whenever it changed, which is what the demo replays as the
+    ticket moving through the pipeline."""
     run.append("samples.jsonl", {"claims": obs.claims()})
+    for key in fleet.pipeline_keys:
+        try:
+            plan = obs.decomposition(tickets[key])
+        except RuntimeError as e:
+            plan = {"unreadable": str(e)[-200:]}
+        if plan != st.plans_seen.get(key):
+            st.plans_seen[key] = plan
+            run.append("plans.jsonl", {"key": key, "plan": plan})
     for m in fleet.managers:
         for req in obs.start_requests(obs.manager_dir(m["name"])):
             k = (req.get("worker"), str(req.get("ticket")))
@@ -70,7 +83,7 @@ def play_owner(
     owner_dir = obs.manager_dir(fleet.owner)
     ledger = obs.worker_questions(owner_dir)
     on = _sandbox_ticket(obs.events())
-    target = str(tickets["owner-currency"])
+    target = str(tickets[fleet.owner_key]) if fleet.owner_key else None
     for qid, sandbox in (ledger.get("_open") or {}).items():
         if qid in st.answered:
             continue
@@ -110,16 +123,16 @@ def play_owner(
 def maybe_kill(
     run: RunDir, obs: Observer, fleet: Fleet, tickets: dict, st: DriverState, env: dict
 ) -> None:
-    """Kill the Claude Worker's sandbox once, mid-ticket: after it has worked a few
-    minutes on an ordinary ticket and before that ticket is delivered."""
+    """Kill the scenario's `kill_worker`'s sandbox once, mid-ticket: after it has
+    worked a few minutes on a ticket and before that ticket is delivered."""
     if st.kill_done:
         return
-    claude = next(w["name"] for w in fleet.workers if not w.get("engine"))
-    skip = {str(tickets["owner-currency"]), str(tickets["done-decoy"])}
+    victim = fleet.kill_worker
+    skip = {str(tickets[k]) for k in (fleet.owner_key, fleet.decoy_key) if k}
     after = float(fleet.run.get("kill_after_minutes", 3)) * 60
     events = obs.events()
     for e in reversed(events):
-        if e.get("event") != "sandbox-started" or e.get("worker") != claude:
+        if e.get("event") != "sandbox-started" or e.get("worker") != victim:
             continue
         ticket = str(e.get("ticket"))
         if (
@@ -133,7 +146,7 @@ def maybe_kill(
             "inductions.jsonl",
             {
                 "kind": "kill-sandbox",
-                "worker": claude,
+                "worker": victim,
                 "sandbox": e["sandbox"],
                 "ticket": ticket,
                 "mode": "stop",

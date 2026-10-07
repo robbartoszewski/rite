@@ -1,0 +1,89 @@
+# Scenario 2 — ALL-LOCAL: no Claude anywhere. Local (Ollama) Managers drive a GPU Worker.
+#
+# ⚠ TWO local Managers, on two DIFFERENT models, not one. A plan must be approved by a
+# Manager that did not write it (DD-3.5) and runs a different model from its author
+# (RL-6, `engine_identity` compares the model for a local engine). One local Manager that
+# both writes and approves cannot pass the review stage at all. So:
+#   planner  writes the plans   (qwen3.8, the same model as the GPU Worker)
+#   lead     approves them      (qwen3-32b, a different model) and is the Owner
+# Memory: the two models are ~17 GB + ~20 GB on a 48 GB machine. Ollama may swap them;
+# turns get slower, nothing breaks. One GPU Worker for the same reason (add gpu2 to try two).
+
+project_name: e2e-local
+
+scenario:
+  name: all_local
+  title: "All-local fleet — local lead + local planner + GPU Worker (no Claude)"
+  pipeline_tickets: [gpu-slug, gpu-total]
+  owner_ticket: null             # see README: a local Worker's question path is unproven
+  decoy_ticket: done-decoy
+  kill_worker: gpu1
+  restart_manager: lead
+  checks:
+    - every_ticket_delivered
+    - pipeline_tickets_worked_by_gpu_workers
+    - plans_written_by_planner_approved_by_owner
+    - plans_approved_through_inbox
+    - killed_sandbox_recovered
+    - recovery_went_through_manager
+    - restart_releases_stale_claim
+    - restart_did_not_escalate
+    - induced_failures_journaled
+    - done_ticket_never_offered
+    - pipeline_stages_in_order
+    - no_forbidden_host_commands
+    - no_claude_in_the_fleet
+
+github:
+  owner: robbartoszewski
+  repo_prefix: rite-e2e-local-
+  app_id: "5156044"
+  installation_id: "167030531"
+
+managers:
+  - name: lead            # the Owner (route) and the plan reviewer (plan-review); local
+    preset: lead
+    engine: "local:large"
+    endpoint: "http://localhost:11434"
+    model: "qwen3-32b-ctx32k:latest"
+    agent: goose
+    context_window: 32768
+  - name: planner         # writes the GPU Worker's plans (decompose); local, another model
+    preset: planner
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+workers:
+  - name: gpu1
+    manager: lead
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+heartbeat:
+  interval_minutes: 2
+  stall_threshold: 2
+
+run:
+  deadline_minutes: 360        # local turns take minutes each; two models may swap
+  poll_seconds: 30
+  start_planner_loop: true
+  kill_after_minutes: 5
+  timezone: Europe/Warsaw
+
+yoloai:
+  patched_bin_dir: ~/.local/opt/yoloai-0.11.0-broad
+  patched_version_marker: "-broad"
+
+fixed_build:
+  min_version: ""
+  probes:
+    - {fix: SCRUM-69, argv: [reply, --help], expect: "--from-file"}
+    - {fix: SCRUM-59, argv: [request, --help], expect: "restart"}
+    - {fix: SCRUM-72, argv: [plan, --help], expect: "approve"}
+    - {fix: SCRUM-64, python: "import rite_ai.managers.reconcile"}

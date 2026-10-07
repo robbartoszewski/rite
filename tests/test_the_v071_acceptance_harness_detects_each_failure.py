@@ -87,10 +87,20 @@ def good_run() -> Evidence:
     ]
     return Evidence(
         tickets=dict(T),
-        gpu_worker="gpu1",
-        claude_worker="alpha",
         owner="lead",
         planner="planner",
+        gpu_workers=("gpu1",),
+        pipeline_keys=("gpu-slug",),
+        owner_key="owner-currency",
+        decoy_key="done-decoy",
+        kill_worker="alpha",
+        # Read only by `no_claude_in_the_fleet` (the all-local scenario's check), so
+        # the fixture's units are all local; the control below puts a Claude one in.
+        engines={
+            "lead": "local:large",
+            "planner": "local:small",
+            "gpu1": "local:small",
+        },
         events=events,
         claims_samples=[
             {"at": 1000, "claims": [{"worker": "gpu1", "ticket": "13"}]},
@@ -201,7 +211,7 @@ CONTROLS = {
             if e.get("event") == "delivered" and e["ticket"] == "12"
         )
     ),
-    "gpu_ticket_worked_by_gpu_worker": lambda ev: ev.events.append(
+    "pipeline_tickets_worked_by_gpu_workers": lambda ev: ev.events.append(
         {
             "event": "sandbox-started",
             "worker": "alpha",
@@ -210,10 +220,10 @@ CONTROLS = {
             "at": 160,
         }
     ),
-    "gpu_plan_by_planner_approved_by_owner": lambda ev: ev.decompositions[
+    "plans_written_by_planner_approved_by_owner": lambda ev: ev.decompositions[
         "gpu-slug"
     ].update(approved_by="planner"),
-    "plan_approved_through_inbox": lambda ev: setattr(ev, "plan_review_requests", []),
+    "plans_approved_through_inbox": lambda ev: setattr(ev, "plan_review_requests", []),
     "owner_answer_reached_worker": lambda ev: setattr(
         ev, "pr_diffs", {"owner-currency": '+DEFAULT_CURRENCY = "EUR"\n'}
     ),
@@ -233,7 +243,7 @@ CONTROLS = {
     "done_ticket_never_offered": lambda ev: ev.claims_samples[0]["claims"].append(
         {"worker": "alpha", "ticket": "15"}
     ),
-    "gpu_pipeline_stages_in_order": lambda ev: ev.stage_log.__setitem__(
+    "pipeline_stages_in_order": lambda ev: ev.stage_log.__setitem__(
         "gpu-slug",
         [
             "defined",
@@ -246,6 +256,7 @@ CONTROLS = {
             "delivery_requested",
         ],
     ),
+    "no_claude_in_the_fleet": lambda ev: ev.engines.update(alpha="claude"),
     "no_forbidden_host_commands": lambda ev: ev.commands.append(
         {"phase": "run", "argv": ["/opt/bin/rite", "sandbox", "restart", "alpha"]}
     ),
@@ -437,3 +448,197 @@ def test_the_add_commands_carry_the_local_engine_flags():
         assert flag in argv
     planner = next(m for m in fleet.managers if m["name"] == "planner")
     assert "--preset" in harness._manager_args(planner)
+
+
+# ---- the two scenarios ----
+
+
+def test_both_scenarios_exist_and_name_only_real_checks():
+    from tools.e2e_v071.config import scenario_names
+
+    assert scenario_names() == ["all_local", "mixed"]
+    for name in scenario_names():
+        fleet = load(name)
+        assert set(fleet.check_names) <= set(checks.BY_NAME), name
+        keys = {t.key for t in fleet.tickets}
+        assert set(fleet.pipeline_keys) <= keys and fleet.decoy_key in keys
+        assert fleet.kill_worker in {w["name"] for w in fleet.workers}
+        assert all(
+            fleet.worker(fleet.ticket(k).for_worker).get("engine")
+            for k in fleet.pipeline_keys
+        )
+
+
+def test_the_all_local_fleet_has_no_claude_and_an_independent_reviewer():
+    """DD-3.5 and RL-6, by rite's own identity function: the plan's author and its
+    approver are two local Managers on two DIFFERENT models. With one local Manager
+    the review stage could never pass."""
+    from rite_ai.config.managers import model_identity
+
+    fleet = load("all_local")
+    units = [*fleet.managers, *fleet.workers]
+    assert all(str(u.get("engine", "")).startswith("local:") for u in units)
+    roles = {m["name"]: m for m in fleet.managers}
+    author, approver = roles[fleet.planner], roles[fleet.owner]
+    assert fleet.planner != fleet.owner
+    assert model_identity(author["model"]) != model_identity(approver["model"])
+    assert "no_claude_in_the_fleet" in fleet.check_names
+    assert fleet.owner_key is None
+
+
+def test_the_mixed_fleet_is_the_plans_fleet_with_the_owner_ticket():
+    fleet = load("mixed")
+    assert fleet.owner_key == "owner-currency"
+    assert fleet.kill_worker == "alpha" and fleet.pipeline_keys == ("gpu-slug",)
+    assert "owner_answer_reached_worker" in fleet.check_names
+
+
+# ---- the demonstration ----
+
+
+def _run_on_disk(tmp_path):
+    """A finished mixed run's records, as the harness writes them."""
+    import json
+
+    from tools.e2e_v071.runlog import RunDir
+
+    run = RunDir(tmp_path / "mixed-20261007T000000Z")
+    (run.project / ".rite").mkdir(parents=True)
+    ev = good_run()
+    (run.project / ".rite" / "events.jsonl").write_text(
+        "".join(json.dumps(e) + "\n" for e in ev.events)
+    )
+    run.file("tickets.json").write_text(json.dumps(T))
+    run.file("run.json").write_text(json.dumps({"scenario": "mixed", "repo": "o/r"}))
+    for i in ev.inductions:
+        run.file("inductions.jsonl").open("a").write(json.dumps(i) + "\n")
+    for o, at in zip(ev.owner_log, (1600, 1650, 1700)):
+        run.file("owner.jsonl").open("a").write(json.dumps({"at": at, **o}) + "\n")
+    plans = [
+        (
+            200,
+            {
+                "decomposed_by": "planner",
+                "approval": "pending",
+                "approved_by": "",
+                "subtasks": [{"id": "s1", "status": "planned"}],
+            },
+        ),
+        (
+            300,
+            {
+                "decomposed_by": "planner",
+                "approval": "approved",
+                "approved_by": "lead",
+                "subtasks": [{"id": "s1", "status": "planned"}],
+            },
+        ),
+        (
+            800,
+            {
+                "decomposed_by": "planner",
+                "approval": "approved",
+                "approved_by": "lead",
+                "subtasks": [{"id": "s1", "status": "accepted"}],
+            },
+        ),
+    ]
+    for at, plan in plans:
+        run.file("plans.jsonl").open("a").write(
+            json.dumps({"at": at, "key": "gpu-slug", "plan": plan}) + "\n"
+        )
+    run.file("commands.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "at": 10 + n,
+                    "phase": "setup",
+                    "argv": ["rite", "refine", "accept", tid],
+                }
+            )
+            + "\n"
+            for n, tid in enumerate(T.values())
+        )
+    )
+    return run
+
+
+def test_the_timeline_is_in_time_order_and_shows_each_induction(tmp_path):
+    from tools.e2e_v071 import demo
+
+    tl = demo.timeline(_run_on_disk(tmp_path))
+    assert [e["at"] for e in tl] == sorted(e["at"] for e in tl)
+    induced = [e["text"] for e in tl if e["kind"] == "induce"]
+    assert any("killed alpha" in t for t in induced)
+    assert any("restarted lead" in t for t in induced)
+    assert any(e["kind"] == "delivered" and "pull/2" in e["text"] for e in tl)
+
+
+def test_the_pipeline_shows_what_is_proven_and_never_ticks_what_72_has_not_defined(
+    tmp_path,
+):
+    from tools.e2e_v071 import demo
+
+    rows = demo.pipeline(_run_on_disk(tmp_path), load("mixed"))
+    gpu = rows["gpu-slug"]
+    assert gpu["refine"]["at"] and gpu["plan"]["by"] == "planner"
+    assert gpu["review"]["by"] == "lead" and gpu["execute"]["at"] == 800
+    assert gpu["delivered"]["pr"] == URL.format(2)
+    for col in ("spec", "approach", "recompose"):
+        assert gpu[col] == {"state": demo.AWAITING}
+    assert rows["claude-total"]["plan"]["state"].startswith("n/a")
+
+
+def test_the_pipeline_ticks_72s_stages_once_its_log_exists(tmp_path):
+    from tools.e2e_v071 import demo
+
+    rows = demo.pipeline(
+        _run_on_disk(tmp_path), load("mixed"), stage_log=good_run().stage_log
+    )
+    assert all(
+        rows["gpu-slug"][c].get("state") == "logged"
+        for c in ("spec", "approach", "recompose")
+    )
+
+
+def test_the_demo_page_is_self_contained_and_carries_the_run(tmp_path):
+    import json
+
+    from tools.e2e_v071 import demo
+
+    run = _run_on_disk(tmp_path)
+    run.file("report.json").write_text(
+        json.dumps(
+            {
+                "verdict": "INCOMPLETE",
+                "results": [
+                    {
+                        "name": "x",
+                        "status": "PENDING",
+                        "evidence": "e",
+                        "criterion": "c",
+                    }
+                ],
+            }
+        )
+    )
+    page = demo.write_demo(run, load("mixed")).read_text()
+    assert "__DATA__" not in page and "__TITLE__" not in page
+    assert "killed alpha" in page and "INCOMPLETE" in page
+    assert "<script src" not in page and "https://cdn" not in page
+    index = demo.write_gate_index(
+        [(run, load("mixed"))], tmp_path / "gate.html"
+    ).read_text()
+    assert "INCOMPLETE" in index and "demo.html" in index
+
+
+def test_replay_prints_the_run_and_its_verdict(tmp_path, capsys):
+    import json
+
+    from tools.e2e_v071 import demo
+
+    run = _run_on_disk(tmp_path)
+    run.file("report.json").write_text(json.dumps({"verdict": "PASS", "results": []}))
+    demo.replay(run, load("mixed"), speed=1e9)
+    out = capsys.readouterr().out
+    assert "INDUCED: killed alpha" in out and "verdict: PASS" in out
