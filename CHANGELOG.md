@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### A restarted Manager recovers by itself (SCRUM-64)
+
+When a Manager was stopped and restarted it used to resume whatever it last
+believed — a Worker mid-ticket, a sandbox it thought was running — and ask you,
+every cycle, to sort out state that was already resolved. It now checks each of
+its Workers against what is actually true before acting: it frees a claim only
+when that Worker's sandbox is really gone and its work was delivered or handed
+back, leaves anything it cannot read for certain, and tells itself what it
+found. A restart converges on its own, with nobody running host commands.
+
 ### rite runs no program a Worker's repository configures (host git hardening)
 
 rite runs git on the host inside repositories a Worker can write, and git

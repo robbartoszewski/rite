@@ -320,3 +320,25 @@ def test_landlock_withholds_the_link_and_fifo_making_rights(project):
         landlock.A_REFER,
     ):
         assert withheld & right, right
+
+
+def test_a_unix_socket_in_a_request_directory_is_set_aside(project):
+    """A socket named like a request is not a regular file: set aside, not
+    skipped and left to be met again (Option A review NIT)."""
+    import socket
+    import tempfile
+
+    own = manager_dir(project, "lead") / "requests"
+    own.mkdir(parents=True)
+    # AF_UNIX paths are short-limited and the Manager directory is deep, so
+    # bind in a short temp dir and move the socket into place.
+    short = Path(tempfile.mkdtemp()) / "s"
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.bind(str(short))
+        os.rename(short, own / "1.json")
+        taken = own_dir.take(project, "lead", "requests", 4096)
+        assert taken == [("1.json", "")]
+        assert list(own.glob("1.json.refused-*"))
+    finally:
+        s.close()

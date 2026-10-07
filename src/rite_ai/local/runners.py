@@ -120,9 +120,14 @@ class SubprocessVerifier:
 
 
 def _git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
+    # fsmonitor and hooks forced off (SCRUM-75): consistent with every other
+    # host-side git, whether this runs on the host or inside a Worker sandbox.
+    from rite_ai.githost import hardened_git_env
+
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
+        env=hardened_git_env(),
         capture_output=True,
         text=True,
         # git hands back path bytes as they are on disk, which need not be

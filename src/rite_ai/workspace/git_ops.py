@@ -123,9 +123,16 @@ def _run(
     cwd: Path,
     timeout: int = 60,
 ) -> subprocess.CompletedProcess[str]:
+    # Host-side git in a Manager-writable checkout: a repo-set core.fsmonitor
+    # runs a program on `git status`, which `prepare` runs every cycle on the
+    # reused checkout (SCRUM-75; the Option A review measured this site). The
+    # hardened env forces fsmonitor and hooks off whatever the repo says.
+    from rite_ai.githost import hardened_git_env
+
     return subprocess.run(
         args,
         cwd=cwd,
+        env=hardened_git_env(),
         capture_output=True,
         text=True,
         errors="replace",

@@ -1829,9 +1829,12 @@ def _supervise(
     # SCRUM-59: requests left by a run that stopped mid-session, honoured now
     # rather than after a session that may not come (the no-progress guard
     # can hold one off indefinitely). An interrupted claim is said, not redone.
-    from rite_ai.managers import lifecycle
+    from rite_ai.managers import lifecycle, reconcile
 
     lifecycle.honour_requests(root, manager, say)
+    # SCRUM-64: reconcile against ground truth BEFORE the first session, so a
+    # restarted Manager does not resume stale claims/sandboxes and escalate.
+    reconcile.reconcile(root, manager, say, at_start=True)
 
     # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
     # ended having made no progress (`_session_was_idle`); cleared by anything that
@@ -2601,9 +2604,13 @@ def _supervise(
             # deliveries (a delivery may already have removed the sandbox a
             # request names) and before Worker starts (a destroy frees the
             # slot a start in this same cycle needs).
-            from rite_ai.managers import lifecycle
+            from rite_ai.managers import lifecycle, reconcile
 
             lifecycle.honour_requests(root, manager, say)
+            # SCRUM-64: throttled per cycle (`reconcile` enforces the
+            # interval), after deliveries so a just-delivered sandbox reads
+            # as gone, before Worker starts so a freed claim can be retaken.
+            reconcile.reconcile(root, manager, say)
             _honour_worker_requests(root, manager, broker, say)
             if callable(chores):
                 # TR9: at the boundary with the Worker requests, and for the

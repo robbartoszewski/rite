@@ -169,3 +169,66 @@ def test_control_the_textconv_would_run_without_the_guard(tmp_path):
     git("commit", "-aqm", "two")
     subprocess.run(["git", "log", "-p"], cwd=repo, capture_output=True)
     assert marker.exists(), "control: textconv did not run even unguarded"
+
+
+def _repo_with_textconv(tmp_path: Path, marker: Path) -> Path:
+    repo = tmp_path / "m"
+    repo.mkdir()
+
+    def git(*a):
+        subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "t")
+    git("config", "user.email", "t@t.invalid")
+    (repo / "f.bin").write_text("one\n")
+    (repo / ".gitattributes").write_text("f.bin diff=pwn\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "one")
+    git("config", "diff.pwn.textconv", f"sh -c 'touch {marker}'; cat")
+    (repo / "f.bin").write_text("two\n")
+    git("commit", "-aqm", "two")
+    return repo
+
+
+def test_scope_budget_diff_runs_no_repo_textconv(tmp_path):
+    """Option A review, measured: scope_budget's `git diff` ran a repo
+    textconv on the host every delivery."""
+    from rite_ai.publishing.scope_budget import measure
+
+    marker = tmp_path / "RAN"
+    repo = _repo_with_textconv(tmp_path, marker)
+    measure(
+        repo,
+        "main~1..main",
+        dod_paths=set(),
+        exclude=[],
+        items=1,
+        lines_per_item=10,
+        factor=3.0,
+    )
+    assert not marker.exists(), "scope_budget ran the repo's textconv"
+
+
+def test_git_ops_status_runs_no_repo_fsmonitor(tmp_path):
+    """Option A review, measured: `prepare` runs git_ops on the reused module
+    checkout every cycle; a repo-set fsmonitor ran there."""
+    from rite_ai.workspace import git_ops
+
+    marker = tmp_path / "RAN"
+    repo = tmp_path / "m"
+    repo.mkdir()
+
+    def git(*a):
+        subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.name", "t")
+    git("config", "user.email", "t@t.invalid")
+    (repo / "a").write_text("x\n")
+    git("add", "a")
+    git("commit", "-q", "-m", "one")
+    git("config", "core.fsmonitor", f"sh -c 'touch {marker}'; echo")
+    git_ops.is_clean(repo)
+    git_ops.uncommitted_paths(repo)
+    assert not marker.exists(), "git_ops ran the repo's fsmonitor"

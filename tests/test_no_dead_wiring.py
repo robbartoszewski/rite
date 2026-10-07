@@ -50,6 +50,12 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    "facts_for": (
+        "What `reconcile`, in the same file, reads about one Worker to plan "
+        "with (SCRUM-64): the production default behind its injected "
+        "`facts_of`. Public so the applier's and the planner's tests name it "
+        "and the one gatherer is tested directly."
+    ),
     "lifecycle_dir": (
         "Where `request`, in the same file, writes a Manager's lifecycle "
         "requests and `honour_requests` names in what it says (SCRUM-59). "

@@ -100,7 +100,14 @@ def _open_base(root: Path, manager: str, area: str) -> int | None:
 
 
 def _refused(e: OSError, what: str) -> OSError:
-    if e.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+    if e.errno in (
+        errno.ELOOP,
+        errno.ENOTDIR,
+        errno.EISDIR,
+        errno.ENXIO,
+        errno.EOPNOTSUPP,
+        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+    ):
         return NotARegularFile(e.errno, f"{what} is not what rite made there")
     return e
 

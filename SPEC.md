@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.91 · **Date:** 2026-10-07
+**Version:** 0.24.92 · **Date:** 2026-10-07
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6718,13 +6718,20 @@ Planned in `docs/design/V071_DOGFOOD_FIXES.md`. The decided directions:
     look, and an unchanged answer is not told again, so a Manager asking
     every turn does not wake itself every turn. Requests left by a stopped
     run are honoured when the supervisor starts.
-- **Reconciliation (SCRUM-64).** At `rite start` and throttled per cycle, the
-  supervisor compares each Worker's claims with its live sandbox, handback,
-  publish record, PR, branch and board.
-  - It acts only on known facts: "cannot tell" is no action.
-  - It releases a claim only when the sandbox is known gone **and** the work is
-    delivered, merged or handed back.
-  - It tells the Manager what it found.
+- **Reconciliation (SCRUM-64). BUILT (0.24.92).** At `rite start` and throttled
+  per cycle, the supervisor compares each of this Manager's Workers against
+  ground truth (`managers/reconcile`): claims vs the live sandbox, a handback,
+  a delivered event, and a watched pull request.
+  - It acts only on known facts: a sandbox yoloAI cannot be asked about, an
+    unreadable claim ledger, and a Worker still running are all no action.
+  - It releases a claim only when the sandbox is known gone (`status.value ==
+    "not found"`, not merely stopped) **and** the work left the sandbox
+    (delivered, a PR open, or handed back); a gone sandbox whose work has NOT
+    landed keeps its claim and is reported, not released.
+  - A pure planner (`plan`) decides from a `Facts` triple; the applier
+    (`reconcile`) releases through `deliver._release_claims` and forgets the
+    owner, and tells the Manager every outcome. At start it also reaps dead
+    self-test sandboxes.
 - **Local Workers under any Manager (SCRUM-72).** The local tier is driven per
   local **Worker**, not per local Manager.
   - The plan gates are unchanged, and each stage (definition, plan, plan
@@ -8557,6 +8564,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.92 — a restarted Manager reconciles instead of escalating (SCRUM-64), and the last two host-git sites are hardened (SCRUM-75 follow-up).** §9.14.14's reconciliation bullet is BUILT. `managers/reconcile`: `plan(worker, Facts) -> Action` (RELEASE only when `sandbox_gone` and `work_landed`; REPORT when gone and not landed; HELD otherwise, which covers a live sandbox, an unknown one, and no claim), `facts_for`/`_sandbox_gone`/`_work_landed`/`_claim_paths` (the host readers; a handback, a delivered event or a watched PR each count as the work having left the sandbox), `_mine` (this Manager's Workers, `worker_handbacks._mine`'s rule plus the SCRUM-59 owner record), and `reconcile(...)` wired in `supervise._supervise` before the first session (`at_start=True`) and at the cycle boundary after deliveries and before Worker starts, throttled `THROTTLE_SECONDS`. It releases through `deliver._release_claims` + `lifecycle.forget_owner` and tells the Manager; every dependency is injectable. The Option A review then measured two host-git sites that escaped 0.24.91: `publishing.scope_budget.measure`'s `git diff` ran a repository-defined textconv on the host every delivery (now `--no-textconv` and `githost.hardened_git_env`), and `workspace.git_ops._run`'s `git status` ran a repository-defined fsmonitor every cycle through `workspace.prepare` (now hardened); `local.runners._git` is hardened for consistency, and `own_dir` now maps a unix socket (`EOPNOTSUPP`) to `NotARegularFile` so one planted in a request directory is set aside, not skipped. Tests: `tests/test_a_restarted_manager_reconciles.py` (the named dogfood scenario converging with no escalation, the two controls, the gone-but-undelivered report, the real claim+handback+release path, the `not found`-only liveness mapping, the throttle, the supervisor wiring; eleven mutations each red) and the two host-git sites pinned in `tests/test_host_git_runs_no_repo_configured_program.py`. One `facts_for` dead-wiring exemption recorded.
 
 **Changes in 0.24.91 — host git runs no program a Manager-writable repository names (SCRUM-75 follow-up; SCRUM-59 final review, measured).** rite runs git on the host in the project and each module checkout — `git status` every cycle (`progress._git_state`), the publish gate, a delivery — and those trees are Manager-writable. git executes programs a repository's own config names: a `core.fsmonitor` on `git status`, a `diff.<driver>.textconv` on `git log -p` (gitleaks' history scan), a hook on many commands. `githost.hardened_git_env` appends `core.fsmonitor=false`, `core.hooksPath=/dev/null` and `core.useBuiltinFSMonitor=false` through `GIT_CONFIG_*` (same precedence as `-c`, so it overrides the repo's config; additive, so a host-side delivery still commits under the operator's identity, and the `["git", …]` lists `tests/test_blast_radius.py` audits are untouched). Wired at every host-side site: `progress`, `deliver._run`, the gate (`findings`, `pattern_scan`, `gate`), and `gitleaks_runner`, whose history scan also gets `--no-textconv` (gitleaks forwards `--log-opts` to `git log`; measured to disable the driver against the installed gitleaks). Tests: `tests/test_host_git_runs_no_repo_configured_program.py` — a repo-set fsmonitor and a repo-set textconv each drop a marker when they run; under the hardened env and `--no-textconv` the marker never appears, and a control shows each WOULD run otherwise.
 
