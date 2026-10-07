@@ -297,9 +297,17 @@ def test_the_supervisor_runs_reconcile_at_start_and_per_cycle():
     first_session = src.index("stalled: _Stalled | None = None")
     assert start < first_session, "the start pass must run before the first session"
     # And a per-cycle pass at the boundary, after deliveries, before starts.
-    cycle = src.index("reconcile.reconcile(root, manager, say)")
-    deliveries = src.index("honour_deliveries(root, manager, say)")
-    starts = src.index("_honour_worker_requests(root, manager, broker, say)", cycle)
+    #
+    # ⚠ The spellings carry `recorder` since SCRUM-71, which hands these
+    # steps the journal recorder. This assertion named the old ones and had
+    # been failing since — unnoticed, because no topic grep matches this
+    # file's name. Written as the full call so a future argument breaks it
+    # loudly rather than letting a prefix match hide the change.
+    cycle = src.index("reconcile.reconcile(root, manager, say), manager, recorder")
+    deliveries = src.index("honour_deliveries(root, manager, say, recorder)")
+    starts = src.index(
+        "_honour_worker_requests(root, manager, broker, say, recorder)", cycle
+    )
     assert deliveries < cycle < starts
 
 

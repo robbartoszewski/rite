@@ -485,6 +485,41 @@ def _with_a_freed_slot(root: Path, manager: str, wake, clock):
     return combined
 
 
+def _record_reconciled(actions, manager: str, recorder) -> None:
+    """One journal entry per reconciliation the supervisor acted on
+    (SCRUM-71, unblocked by SCRUM-64).
+
+    ⚠ **A Manager cannot record these.** Reconciliation compares its own
+    state against the host's ground truth — claims, sandboxes, publish
+    records — and happens out here while the Manager is mid-session. In the
+    a9 run a claim outliving the work it was taken for reached the journal
+    from nowhere at all.
+
+    ⚠ **The outcome is carried verbatim, not classified.** `_release_claims`
+    reports a failure in its return string rather than by raising, so the
+    entry says what the release actually said. Deriving a boolean by
+    matching rite's own prose is the trap one layer along, and the entry is
+    honest either way: "the claim it still holds is stale — its claims were
+    NOT released (…)" reads correctly.
+    """
+    if recorder is None or not actions:
+        return
+    from rite_ai.managers import recording
+
+    for action in actions:
+        detail = action.reason + (f" — {action.outcome}" if action.outcome else "")
+        recorder(
+            recording.Event(
+                recording.RECONCILED,
+                action.worker,
+                f"{manager} and the host disagreed about {action.worker}: " + detail,
+                "a Worker's claim and its sandbox end together with its work, "
+                "so there is nothing left to reconcile",
+                anchor=f"manager {manager} worker {action.worker} {action.kind}",
+            )
+        )
+
+
 def _honour_worker_requests(
     root: Path, manager: str, broker, say, recorder=None
 ) -> None:
@@ -1863,7 +1898,9 @@ def _supervise(
     lifecycle.honour_requests(root, manager, say)
     # SCRUM-64: reconcile against ground truth BEFORE the first session, so a
     # restarted Manager does not resume stale claims/sandboxes and escalate.
-    reconcile.reconcile(root, manager, say, at_start=True)
+    _record_reconciled(
+        reconcile.reconcile(root, manager, say, at_start=True), manager, recorder
+    )
 
     # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
     # ended having made no progress (`_session_was_idle`); cleared by anything that
@@ -2649,7 +2686,9 @@ def _supervise(
             # SCRUM-64: throttled per cycle (`reconcile` enforces the
             # interval), after deliveries so a just-delivered sandbox reads
             # as gone, before Worker starts so a freed claim can be retaken.
-            reconcile.reconcile(root, manager, say)
+            _record_reconciled(
+                reconcile.reconcile(root, manager, say), manager, recorder
+            )
             _honour_worker_requests(root, manager, broker, say, recorder)
             if callable(chores):
                 # TR9: at the boundary with the Worker requests, and for the

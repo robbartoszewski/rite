@@ -81,6 +81,16 @@ RECOVERY_EXHAUSTED = "recovery-exhausted"
 ROUTING_ANOMALY = "routing-anomaly"
 """A route or a reply went somewhere it should not have, or nowhere."""
 
+RECONCILED = "reconciled"
+"""A restarted Manager found its own state disagreeing with the ground truth
+and acted on it, or could not (SCRUM-64's reconciliation).
+
+⚠ Every one of these is a failure that ALREADY HAPPENED and went unnoticed:
+a claim outliving the work it was taken for, or a sandbox gone with the work
+still in it. The reconciler is the thing that notices, which is exactly why
+the Owner should hear about it — a fleet that silently needs reconciling
+every cycle is a fleet with a leak somewhere upstream."""
+
 EVENTS = (
     RELAY_FAILED,
     DELIVERY_REFUSED,
@@ -89,18 +99,23 @@ EVENTS = (
     RECOVERY_ACTED,
     RECOVERY_EXHAUSTED,
     ROUTING_ANOMALY,
+    RECONCILED,
 )
 """The whole set. See rule 1: a class outside this is refused."""
 
 NOT_YET = {
-    "reconciliation": "SCRUM-64 builds reconciliation; nothing reconciles yet",
     "idle-slot-held": "SCRUM-70 fixes the held slot; nothing reports one yet",
 }
 """Classes the ticket names that nothing can record yet, and why.
 
 ⚠ Here rather than in `EVENTS`. A class declared and never written is a
 claim about what the journal covers that nothing honours, and the whole
-subject of this ticket is a channel claiming coverage it did not have."""
+subject of this ticket is a channel claiming coverage it did not have.
+
+`reconciliation` was here until SCRUM-64 landed and gave it something to
+record; it is `RECONCILED` now. An entry leaving this dict is the shape to
+want — it means the gap closed rather than the claim being quietly
+widened."""
 
 LEDGER_FILE = "recorded-issues.json"
 MAX_REMEMBERED = 2000
@@ -303,6 +318,7 @@ def _record(root: Path, manager: str, event: Event, say) -> bool:
 __all__ = [
     "DELIVERY_REFUSED",
     "FORGET_AFTER_SECONDS",
+    "RECONCILED",
     "EVENTS",
     "GATE_REFUSED",
     "LEDGER_FILE",

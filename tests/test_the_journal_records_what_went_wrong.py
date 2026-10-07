@@ -181,13 +181,16 @@ class TestTheVocabularyIsClosed:
 
     def test_the_classes_nothing_can_record_yet_are_named_with_their_reason(self):
         """⚠ The ticket asks for reconciliation actions and a slot held by
-        an idle sandbox. Neither exists to be recorded — SCRUM-64 builds
-        reconciliation and SCRUM-70 fixes the held slot — so they are named
-        as gaps rather than declared as coverage."""
-        assert set(recording.NOT_YET) == {"reconciliation", "idle-slot-held"}
+        an idle sandbox, and neither existed to be recorded. Reconciliation
+        LEFT this dict once SCRUM-64 landed and gave it something to record
+        — an entry leaving is the shape to want, because it means the gap
+        closed rather than the claim being quietly widened. A slot held by
+        an idle sandbox is still SCRUM-70's."""
+        assert set(recording.NOT_YET) == {"idle-slot-held"}
         for why in recording.NOT_YET.values():
             assert "SCRUM-" in why
         assert not set(recording.NOT_YET) & set(recording.EVENTS)
+        assert recording.RECONCILED in recording.EVENTS
 
 
 class TestTheEntryItself:
@@ -628,6 +631,116 @@ class TestEachWiredSiteActuallyRecords:
         actions = [RecoveryAction("alpha", RESTART, "KAN-7", "no heartbeat")]
 
         assert self._recovered(root, actions) == actions
+
+
+class TestReconciliationIsRecorded:
+    """⚠ The class that was in `NOT_YET` until SCRUM-64 gave it something to
+    record. Every one of these is a failure that ALREADY HAPPENED and went
+    unnoticed — a claim outliving the work it was taken for, or a sandbox
+    gone with the work still in it — and in the a9 run none of them reached
+    the journal."""
+
+    def _recorded(self, tmp_path: Path, actions):
+        from rite_ai.managers.supervise import _record_reconciled
+
+        root = _project(tmp_path)
+        _record_reconciled(actions, "lead", _recorder(root))
+        return _entries(root)
+
+    def test_a_stale_claim_released_is_recorded(self, tmp_path):
+        from rite_ai.managers.reconcile import RELEASE, Action
+
+        (entry,) = self._recorded(
+            tmp_path,
+            [
+                Action(
+                    "alpha",
+                    RELEASE,
+                    "its sandbox is gone and its work was delivered",
+                    outcome="released 2 claim(s)",
+                )
+            ],
+        )
+
+        assert "alpha" in entry
+        assert "released 2 claim(s)" in entry
+
+    def test_a_release_that_FAILED_says_so(self, tmp_path):
+        """⚠ `_release_claims` reports a failure in its RETURN STRING rather
+        than by raising, and `Action` carried only the plan — so an entry
+        would have said a stale claim was released whether or not it was.
+        The same defect the review found in `RecoveryAction`. Carried
+        verbatim rather than classified: a boolean derived by matching
+        rite's own prose is the trap one layer along."""
+        from rite_ai.managers.reconcile import RELEASE, Action
+
+        (entry,) = self._recorded(
+            tmp_path,
+            [
+                Action(
+                    "alpha",
+                    RELEASE,
+                    "the claim it still holds is stale",
+                    outcome="its claims were NOT released (OSError: read-only)",
+                )
+            ],
+        )
+
+        assert "NOT released" in entry
+
+    def test_work_still_in_a_gone_sandbox_is_recorded(self, tmp_path):
+        from rite_ai.managers.reconcile import REPORT, Action
+
+        (entry,) = self._recorded(
+            tmp_path,
+            [Action("alpha", REPORT, "its sandbox is gone but its work has NOT")],
+        )
+
+        assert "has NOT" in entry
+
+    def test_a_cycle_with_nothing_to_reconcile_records_nothing(self, tmp_path):
+        assert self._recorded(tmp_path, []) == []
+
+    def test_the_real_reconciler_carries_what_the_release_said(self, tmp_path):
+        """⚠ Driven through `reconcile` itself, because the defect was in
+        what IT returned — a stand-in for it could not have caught this."""
+        from rite_ai.managers.reconcile import RELEASE, Facts, reconcile
+
+        root = _project(tmp_path)
+
+        actions = reconcile(
+            root,
+            "lead",
+            lambda _line: None,
+            at_start=True,
+            workers_of=lambda: ["alpha"],
+            facts_of=lambda _w: Facts(
+                has_claim=True, sandbox_gone=True, work_landed=True
+            ),
+            release=lambda _w: "its claims were NOT released (OSError: nope)",
+        )
+
+        assert [a.kind for a in actions] == [RELEASE]
+        assert actions[0].outcome == "its claims were NOT released (OSError: nope)"
+
+    def test_it_is_wired_at_both_supervise_call_sites(self):
+        """⚠ A recorder nothing calls is this ticket's own defect restated.
+        `reconcile` runs twice — once before the first session, once per
+        cycle — and an entry missed at start is the restart case SCRUM-64
+        exists for."""
+        import inspect as inspect_mod
+
+        from rite_ai.managers import supervise
+
+        source = inspect_mod.getsource(supervise)
+
+        assert source.count("_record_reconciled(") == 3, (
+            "two call sites plus the definition; a reconcile pass whose "
+            "actions are not recorded is one the Owner never hears about"
+        )
+        assert "reconcile.reconcile(root, manager, say, at_start=True), manager" in (
+            source
+        )
 
 
 class TestTheRelayRecordsItsOwnFailures:

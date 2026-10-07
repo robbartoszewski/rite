@@ -78,7 +78,7 @@ that was closed without one. Releasing it is the harm, not the fix.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 RELEASE = "release"  # sandbox gone AND the work genuinely landed -> release
@@ -108,6 +108,18 @@ class Action:
     worker: str
     kind: str
     reason: str = ""
+    outcome: str = ""
+    """What the action's host-side step SAID, once it has been taken — for
+    `RELEASE`, `_release`'s own words; "" for a `REPORT`, which takes none.
+
+    ⚠ **Added so the journal cannot state the opposite of what happened
+    (SCRUM-71).** `_release_claims` reports a failure in its return string
+    ("its claims were NOT released (…)") rather than by raising, and this
+    dataclass carried only the PLAN — so a recorded entry would have said a
+    stale claim was released whether or not it was. That is the defect the
+    same review found in `RecoveryAction`, and it is recorded verbatim here
+    rather than classified: a boolean derived by matching rite's own prose
+    is the dead-wiring trap one layer along."""
 
 
 def plan(worker: str, facts: Facts) -> Action:
@@ -438,7 +450,10 @@ def reconcile(
                     # about this Worker no longer holds: let the next REPORT
                     # through.
                     _SAID.pop(said_key, None)
-                    actions.append(action)
+                    # What HAPPENED, not what was planned (SCRUM-71): the
+                    # journal records the release's own result, which is where
+                    # "its claims were NOT released (…)" has to reach.
+                    actions.append(replace(action, outcome=result))
                 elif action.kind == REPORT:
                     told = f"{worker}: {action.reason}"
                     if _SAID.get(said_key) == told:
