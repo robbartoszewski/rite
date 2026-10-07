@@ -119,20 +119,16 @@ def ticket_problem(ticket: object) -> str:
 def take(root: Path, manager: str) -> list[str]:
     """Every pending request's raw text, oldest first, removed as it is read —
     a request left behind would be delivered twice."""
-    where = _routes_dir(root, manager)
-    if not where.is_dir():
+    # Through `own_dir`, following no link the Manager planted: measured, a
+    # `routes` linked to another Manager's took that Manager's route as this
+    # one's (SCRUM-69 round-3 review). A linked `routes` reads as nothing.
+    from rite_ai.managers import own_dir
+
+    try:
+        taken = own_dir.take(root, manager, ROUTES_DIRNAME, 4 * MAX_REQUEST_BYTES)
+    except OSError:
         return []
-    found: list[str] = []
-    for path in sorted(where.glob("*.json")):
-        try:
-            found.append(path.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            continue
-        try:
-            path.unlink()
-        except OSError:
-            pass
-    return found
+    return [text for _, text in taken]
 
 
 def decide(raw: str, *, owner: str, managers: list[str], read_ticket=None) -> Decision:

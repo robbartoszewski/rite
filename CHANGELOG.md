@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### rite no longer follows links a Manager plants in its own directory
+
+rite reads and writes a Manager's directory and outbox from outside the
+sandbox, and a Manager could replace a file there with a link: the next cycle's
+prompt then overwrote whatever file the link named, another Manager's routed
+work was taken as its own, and any readable file could be sent to you as its
+message. rite now opens everything there without following a link, sets aside
+anything that is not a plain file and says so, and a Manager's sandbox can no
+longer create links there.
+
 ### A Manager can stop, restart, check and gate its Workers itself (SCRUM-59)
 
 When a Worker's sandbox died, its Manager could do nothing about it: stopping,

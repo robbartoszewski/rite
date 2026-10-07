@@ -109,13 +109,22 @@ def _queued(root: Path, manager: str) -> list[Question]:
     It is returned with its raw content as the text rather than skipped. A
     question skipped here would never be asked, and rite would never say so.
     """
+    # Through `own_dir`, following no link the Manager planted (SCRUM-69
+    # round-3 review): a queue linked elsewhere would be read, and its files
+    # removed, wherever it pointed. A link in it is not a question.
+    from rite_ai.managers import own_dir
+
     where = _queue_dir(root, manager)
-    if not where.is_dir():
+    queue = f"{CHECKINS_DIRNAME}/{QUEUE_DIRNAME}"
+    try:
+        names = own_dir.names(root, manager, queue, ".json")
+    except OSError:
         return []
     out: list[Question] = []
-    for path in sorted(where.glob("*.json")):
+    for name in names:
+        path = where / name
         try:
-            raw = path.read_text()
+            raw = own_dir.read(root, manager, queue, name, 256 * 1024)
         except OSError:
             continue
         try:
@@ -134,6 +143,14 @@ def _queued(root: Path, manager: str) -> list[Question]:
         except (ValueError, TypeError):
             out.append(Question(path.stem, raw.strip(), "", 0.0, path))
     return out
+
+
+def _drop(root: Path, manager: str, q: Question) -> None:
+    """Remove an asked or withdrawn question, through the queue's own
+    descriptor: an `unlink` by path follows a linked directory above it."""
+    from rite_ai.managers import own_dir
+
+    own_dir.unlink(root, manager, f"{CHECKINS_DIRNAME}/{QUEUE_DIRNAME}", q.path.name)
 
 
 def record(root: Path, manager: str, event: dict) -> None:
@@ -205,10 +222,7 @@ def ask_now(
     now = time.time()
     for q in questions:
         record(root, manager, {"event": "asked", "id": q.id, "at": now, "how": how})
-        try:
-            q.path.unlink()
-        except FileNotFoundError:
-            pass
+        _drop(root, manager, q)
     return path
 
 
@@ -523,10 +537,7 @@ def withdraw(root: Path, manager: str, qid: str, answered_by: str) -> str:
                     "answered_by": answered_by,
                 },
             )
-            try:
-                q.path.unlink()
-            except FileNotFoundError:
-                pass
+            _drop(root, manager, q)
             return ""
     waiting = ", ".join(q.id for q in _queued(root, manager)) or "none"
     return (
@@ -686,10 +697,7 @@ def _deliver_checkin(root: Path, manager: str) -> str:
         record(
             root, manager, {"event": "asked", "id": q.id, "at": now, "how": "checkin"}
         )
-        try:
-            q.path.unlink()
-        except FileNotFoundError:
-            pass
+        _drop(root, manager, q)
     write_atomic(
         _checkins_dir(root, manager) / LAST_CHECKIN_FILENAME,
         json.dumps({"at": now}) + "\n",

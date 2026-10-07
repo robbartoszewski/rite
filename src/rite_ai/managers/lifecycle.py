@@ -400,7 +400,7 @@ def _status(root: Path, req: Request) -> str:
 def _gate(root: Path, req: Request) -> str:
     """The publish gate on the ticket branch a delivery collected, with its
     findings: what `rite publish check` would say, said to the Manager."""
-    from rite_ai.config.parse import ParseError, parse_modules
+    from rite_ai.config.parse import ParseError, module_dir_problem, parse_modules
     from rite_ai.gate.gate import brief, run_gate
     from rite_ai.publishing import record as publish_record
     from rite_ai.publishing.deliver import _sha, _worker_modules  # noqa: PLC2701
@@ -424,6 +424,10 @@ def _gate(root: Path, req: Request) -> str:
     said = []
     for module in mine:
         project = Path(root) / module.path
+        problem = module_dir_problem(Path(root), module.path)
+        if problem:
+            said.append(f"{module.name}: {problem}")
+            continue
         if not (project / ".git").exists():
             said.append(f"{module.name}: {module.path} is not a git checkout here")
             continue
@@ -546,5 +550,7 @@ def instructions(root: Path, manager: str) -> str:
         "collected branch and names what it found. `restart` keeps the "
         "Worker's work and is limited, like rite's own recovery; `destroy` "
         "deletes the sandbox, and is refused while it holds work or a "
-        "question. You may act only on Workers rite started for you.\n"
+        "question. You may act only on Workers rite started for you. An "
+        "answer to `status` or `gate` that has not changed since you last "
+        "asked is not repeated: no new note means nothing new.\n"
     )

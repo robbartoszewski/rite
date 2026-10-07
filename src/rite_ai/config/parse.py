@@ -419,7 +419,7 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
 
 
 _BRANCH_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./"
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./#+@"
 )
 
 
@@ -440,10 +440,18 @@ def branch_problem(branch) -> str:
         return f"{branch!r} must start with a letter or a digit"
     if not set(branch) <= _BRANCH_CHARS:
         return (
-            f"{branch!r} is not a branch name: letters, digits, '-', '_', '.' "
-            "and '/' only"
+            f"{branch!r} is not a branch name: letters, digits, '-', '_', '.', "
+            "'/', '#', '+' and '@' only"
         )
-    if ".." in branch or "//" in branch or branch.endswith(("/", ".", ".lock")):
+    if (
+        ".." in branch
+        or "//" in branch
+        or "@{" in branch
+        or branch == "@"
+        or "/." in branch
+        or ".lock/" in branch
+        or branch.endswith(("/", ".", ".lock"))
+    ):
         return f"{branch!r} is not a branch name git accepts"
     return ""
 
@@ -456,6 +464,24 @@ def module_path_problem(mod_path) -> str:
         return "must be a path"
     if mod_path.startswith(("/", "~")) or ".." in Path(mod_path).parts:
         return f"{mod_path!r} must be a path inside the project, relative to it"
+    return ""
+
+
+def module_dir_problem(root: Path, mod_path: str) -> str:
+    """Why `root/mod_path` is not a directory inside the project rite may run
+    git in; "" when it is. At the point of use, because the string check in
+    `module_path_problem` cannot see a link: a Manager can make `svc` a link
+    to another repository, and the gate or a delivery would run there, on
+    the host (SCRUM-59 final review)."""
+    where = Path(root) / mod_path
+    if where.is_symlink():
+        return f"{mod_path} is a link; rite runs git only in the project itself"
+    try:
+        inside = where.resolve().is_relative_to(Path(root).resolve())
+    except OSError:
+        inside = False
+    if not inside:
+        return f"{mod_path} is not inside the project"
     return ""
 
 

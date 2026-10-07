@@ -759,6 +759,12 @@ def deliver(
         return Refused(str(e))
     if not modules:
         return Refused(f"{worker} has no module in this project's modules.yaml")
+    from rite_ai.config.parse import module_dir_problem
+
+    for module in modules:
+        problem = module_dir_problem(root, module.path)
+        if problem:
+            return Refused(f"module {module.name}: {problem}")
 
     status = worker_sandbox_status(worker, root)
     if not status.known:

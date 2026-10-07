@@ -320,6 +320,24 @@ def _rejected_the_flag(done: subprocess.CompletedProcess) -> bool:
     return "unknown flag" in said or "unknown option" in said or "usage:" in said
 
 
+def _write_prompt(path: Path, prompt: str) -> None:
+    """Write the cycle's instruction to `path`, `0600`, never through a link.
+
+    🔴 SCRUM-69 round-3 review, measured: the Manager can replace
+    `prompt.txt` with a link, and `write_text` then overwrote whatever it
+    pointed at (`~/.zshrc`, say) with the prompt. `O_NOFOLLOW` covers the
+    last component; the directory itself the Manager cannot replace. Raises
+    OSError (ELOOP for a link)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        data = prompt.encode("utf-8")
+        while data:
+            data = data[os.write(fd, data) :]
+    finally:
+        os.close(fd)
+
+
 def start(
     root: Path,
     manager: str,
@@ -548,8 +566,7 @@ def start(
     # given one instruction, not a history.
     prompt_path = manager_dir(root, manager) / PROMPT_FILE
     try:
-        prompt_path.write_text(prompt)
-        prompt_path.chmod(0o600)
+        _write_prompt(prompt_path, prompt)
     except OSError as e:
         return StartResult(False, f"could not write the cycle's prompt: {e}")
     try:

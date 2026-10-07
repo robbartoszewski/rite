@@ -8263,6 +8263,12 @@ def sandbox_start(
         from rite_ai.sandbox import EXIT_NO_SLOT
 
         raise SystemExit(EXIT_NO_SLOT if result.full else 1)
+    # A new sandbox is nobody's yet: the supervisor records its Manager after
+    # this returns, when a Manager's request started it; one a person starts
+    # stays the person's (SCRUM-59).
+    from rite_ai.managers.lifecycle import forget_owner
+
+    forget_owner(root, worker)
     _clear_previous_handback(root, worker, began)
     if ticket is not None:
         _mark_started(root, config, ticket)
@@ -8595,10 +8601,15 @@ def sandbox_destroy(worker: str, force: bool) -> None:
     """
     from rite_ai.sandbox import destroy_worker
 
-    result = destroy_worker(worker, _find_project_root(), force=force)
+    root = _find_project_root()
+    result = destroy_worker(worker, root, force=force)
     click.echo(result.message)
     if not result.ok:
         raise SystemExit(1)
+    if root is not None:
+        from rite_ai.managers.lifecycle import forget_owner
+
+        forget_owner(root, worker)
 
 
 def _injected_secret_values(root: Path | None, worker: str) -> list[str]:

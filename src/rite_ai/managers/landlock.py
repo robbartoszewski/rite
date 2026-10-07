@@ -59,6 +59,7 @@ import ctypes.util
 import json
 import os
 import shlex
+import stat
 import struct
 import sys
 from pathlib import Path
@@ -486,6 +487,19 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
         # from inside one, so it asks the supervisor.
         "readable": [str(p) for p in dict.fromkeys(readable)],
         "writable": [str(p) for p in dict.fromkeys(writable)],
+        # 🔴 Granted only if NOT a link, checked at the moment the rule is
+        # added (SCRUM-69 round-3 review): a Landlock rule names the inode a
+        # path opens to, and `engine_tmp` sits in `.rite/user/`, which every
+        # Manager in the root can write, so a sibling could swap it for a
+        # link to `$HOME` between `write_profile` and the launch.
+        "no_follow": [
+            str(p)
+            for p in (
+                manager_dir(root, manager),
+                mail / OUTBOX,
+                engine_tmp(root, manager),
+            )
+        ],
         # Read-only although they sit under a granted tree elsewhere: an agent
         # that can rewrite git config can change what every later commit
         # claims.
@@ -740,14 +754,21 @@ def why_it_was_refused(root: Path, manager: str) -> str:
 FILE_ONLY = A_EXECUTE | A_READ_FILE | A_WRITE_FILE | A_TRUNCATE
 
 
-def _add_rule(ruleset_fd: int, path: str, access: int) -> None:
+def _add_rule(
+    ruleset_fd: int, path: str, access: int, *, no_follow: bool = False
+) -> None:
     if not os.path.isdir(path):
         access &= FILE_ONLY
     if access == 0:
         # Nothing this node can be granted; a zero-right rule is also EINVAL.
         return
-    fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
+    flags = os.O_PATH | os.O_CLOEXEC | (os.O_NOFOLLOW if no_follow else 0)
+    fd = os.open(path, flags)
     try:
+        if no_follow and not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(
+                f"refusing to grant {path}: it is a link, not rite's directory"
+            )
         attr = _path_beneath(access, fd)
         result, err = _syscall(
             SYS_ADD_RULE,
@@ -797,6 +818,7 @@ def apply(policy: dict) -> int:
 
     try:
         readonly = {str(p) for p in policy.get("readonly_overrides", ())}
+        no_follow = {str(p) for p in policy.get("no_follow", ())}
         for path in policy.get("readable", ()):
             if os.path.exists(path):
                 _add_rule(ruleset_fd, path, READ_ONLY & _handled(level))
@@ -809,7 +831,7 @@ def apply(policy: dict) -> int:
             # the only one that names it, and the writable trees above never
             # name these two directly.
             access = READ_ONLY if path in readonly else _handled(level)
-            _add_rule(ruleset_fd, path, access)
+            _add_rule(ruleset_fd, path, access, no_follow=path in no_follow)
         for path in readonly:
             if os.path.exists(path):
                 _add_rule(ruleset_fd, path, READ_ONLY & _handled(level))

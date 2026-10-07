@@ -85,7 +85,7 @@ the Manager's engine.
 - **Refused by construction:**
   - `destroy` with `force` (no field exists to carry it);
   - a Worker belonging to another Manager.
-- **Shared with recovery:** restarts use recovery's backoff (`recovery.json`).
+- **Shared with recovery:** restarts use recovery's backoff and limit (its ledger, moved outside every Manager's grant by SCRUM-59).
 - **Counts as progress:** the new request kind is added to `progress.footprint`
   and `COORDINATION`, so a session that only files requests is not "idle".
 - The three prompt texts and the deliver gate-refusal note switch to the CLI.

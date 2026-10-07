@@ -328,8 +328,12 @@ def _restart(root: Path, worker: str) -> tuple[bool, str]:
 
 def _restage(root: Path, worker: str) -> tuple[bool, str]:
     """Release the Worker's claim so its ticket returns to the board. The work
-    is already gone with the sandbox; the Manager re-dispatches next cycle."""
+    is already gone with the sandbox; the Manager re-dispatches next cycle.
+    Its owner is forgotten with the sandbox (SCRUM-59)."""
     from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.managers.lifecycle import forget_owner
+
+    forget_owner(Path(root), worker)
 
     ledger = ClaimsLedger(Path(root) / ".rite" / "claims.json")
     try:

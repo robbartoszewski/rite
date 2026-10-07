@@ -78,16 +78,15 @@ def take(root: Path, manager: str) -> list[dict]:
     """Every pending request, oldest first, removed as it is read: a request
     left behind would be sent twice. One that does not parse is returned as
     `{"problem": …}` so it is said, not dropped."""
-    where = _asks_dir(root, manager)
-    if not where.is_dir():
-        return []
+    from rite_ai.managers import own_dir
+
+    try:
+        taken = own_dir.take(root, manager, ASKS_DIRNAME, 256 * 1024)
+    except OSError as e:
+        # A linked `refine-asks` (the Manager planted it): not followed.
+        return [{"problem": f"the refinement requests could not be read ({e})"}]
     found: list[dict] = []
-    for path in sorted(where.glob("*.json")):
-        try:
-            raw = path.read_text(encoding="utf-8")
-            path.unlink()
-        except OSError:
-            continue
+    for _, raw in taken:
         try:
             data = json.loads(raw)
             if not isinstance(data, dict) or set(data) != {"ticket", "text"}:

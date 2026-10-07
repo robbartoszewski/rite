@@ -17,6 +17,7 @@ the caller to SAY: a Manager that did that is confused or compromised.
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from contextlib import contextmanager
@@ -26,20 +27,27 @@ _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
 def _open_dir(root: Path, manager: str, dirname: str) -> int | None:
-    """The Manager's `dirname`, opened as described above; None when it (or
-    the Manager's directory) does not exist yet."""
+    """The Manager's `dirname` (`a` or `a/b`), opened as described above, no
+    link followed at any component; None when it (or the Manager's
+    directory) does not exist yet."""
     from rite_ai.managers import manager_dir
 
     try:
-        base = os.open(manager_dir(Path(root), manager), _DIR_FLAGS)
+        fd = os.open(manager_dir(Path(root), manager), _DIR_FLAGS)
     except FileNotFoundError:
         return None
-    try:
-        return os.open(dirname, _DIR_FLAGS, dir_fd=base)
-    except FileNotFoundError:
-        return None
-    finally:
-        os.close(base)
+    for part in Path(dirname).parts:
+        try:
+            nxt = os.open(part, _DIR_FLAGS, dir_fd=fd)
+        except FileNotFoundError:
+            os.close(fd)
+            return None
+        except BaseException:
+            os.close(fd)
+            raise
+        os.close(fd)
+        fd = nxt
+    return fd
 
 
 @contextmanager
@@ -63,13 +71,29 @@ def _names(fd: int, suffix: str) -> list[str]:
     return sorted(n for n in os.listdir(fd) if n.endswith(suffix))
 
 
+REFUSED = ".refused"
+"""Suffix an entry is renamed to when it is not a regular file (a link, a
+directory, a fifo): out of every `*.json` glob, so it is not met again, and
+kept, not deleted, for a person to look at."""
+
+
+class NotARegularFile(OSError):
+    """An entry that is a link, a directory or anything but a regular file."""
+
+
 def _read(fd: int, name: str, limit: int) -> str:
     """A regular file's text, at most `limit` + 1 bytes (so a caller's size
-    check still sees it is too large); "" for anything else."""
-    leaf = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    check still sees it is too large). Raises `NotARegularFile` for anything
+    else, a link included (never followed)."""
+    try:
+        leaf = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.EISDIR, errno.ENXIO):
+            raise NotARegularFile(e.errno, f"{name} is not a regular file") from None
+        raise
     try:
         if not stat.S_ISREG(os.fstat(leaf).st_mode):
-            return ""
+            raise NotARegularFile(errno.EINVAL, f"{name} is not a regular file")
         chunks: list[bytes] = []
         size = 0
         while size <= limit:
@@ -84,8 +108,11 @@ def _read(fd: int, name: str, limit: int) -> str:
 
 
 def read(root: Path, manager: str, dirname: str, name: str, limit: int) -> str:
+    """A regular file's text; raises OSError (`NotARegularFile` for a link)."""
     with opened(root, manager, dirname) as fd:
-        return "" if fd is None else _read(fd, name, limit)
+        if fd is None:
+            raise FileNotFoundError(name)
+        return _read(fd, name, limit)
 
 
 def take(
@@ -95,7 +122,12 @@ def take(
 
     With `claim`, each is first RENAMED to `<name><claim>` (only one taker
     wins a rename) and the claimed name is returned; the caller removes it
-    when done. Without, each is removed as it is read."""
+    when done. Without, each is removed as it is read.
+
+    An entry that is not a regular file (a planted link, a directory) is
+    renamed to `<name>.refused`, never followed, and returned with text ""
+    so the caller's refusal ("not JSON") is told: left in place it would be
+    met, and wake the loop, every cycle (SCRUM-59 final review)."""
     found: list[tuple[str, str]] = []
     with opened(root, manager, dirname) as fd:
         if fd is None:
@@ -105,7 +137,13 @@ def take(
                 if claim:
                     os.rename(name, name + claim, src_dir_fd=fd, dst_dir_fd=fd)
                     name += claim
-                found.append((name, _read(fd, name, limit)))
+                try:
+                    text = _read(fd, name, limit)
+                except NotARegularFile:
+                    os.rename(name, name + REFUSED, src_dir_fd=fd, dst_dir_fd=fd)
+                    found.append((name + REFUSED, ""))
+                    continue
+                found.append((name, text))
                 if not claim:
                     os.unlink(name, dir_fd=fd)
             except OSError:

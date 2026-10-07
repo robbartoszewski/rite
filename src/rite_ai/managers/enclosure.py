@@ -431,10 +431,18 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
         ";   away and put a link in its place, which rite (outside) and the next",
         ";   profile would then follow. Writes inside are unaffected.",
         f"(deny file-write* (literal {_quote(own)}))",
+        "; ...and no link is made in it, or in the outbox (SCRUM-69 round 3):",
+        ";   rite reads both from outside, so what it finds there must be a",
+        ";   file. Not the whole defence (a directory renamed in can carry one),",
+        ";   which is why rite also opens everything there without following.",
+        f"(deny file-write-create (require-all (subpath {_quote(own)})"
+        " (vnode-type SYMLINK)))",
         "; This Manager's mailbox, outside the project: its outbox only.",
         f"(allow file-read* (subpath {_quote(mail)}))",
         f"(allow file-read* file-write* (subpath {_quote(mail / OUTBOX)}))",
         f"(deny file-write* (literal {_quote(mail / OUTBOX)}))",
+        f"(deny file-write-create (require-all (subpath {_quote(mail / OUTBOX)})"
+        " (vnode-type SYMLINK)))",
         f"(deny file-write* (subpath {_quote(mail / INBOX)}))",
     ]
 
@@ -465,6 +473,9 @@ def refuse_linked_manager_paths(root: Path, manager: str) -> None:
         mail_root(root, manager),
         mailbox_dir(root, manager, OUTBOX),
         mailbox_dir(root, manager, INBOX),
+        # In `.rite/user/`, which every Manager in the root can write; on
+        # Linux a linked one would be granted (Landlock opens the path).
+        engine_tmp(root, manager),
     ):
         if path.is_symlink():
             raise LinkedManagerPath(
