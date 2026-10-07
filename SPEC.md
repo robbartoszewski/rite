@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.88 · **Date:** 2026-10-07
+**Version:** 0.24.89 · **Date:** 2026-10-07
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6673,17 +6673,51 @@ Whether it is the right answer for a command that also releases claims is an
 because guessing at it is how the `start` collision became three meanings
 for one positional.
 
-#### 9.14.14. v0.7.1: lifecycle requests, reconciliation, local Workers under any Manager (DESIGN, not built)
+#### 9.14.14. Dogfood fixes: lifecycle requests, reconciliation, local Workers under any Manager (DESIGN; lifecycle requests BUILT)
 
 Planned in `docs/design/V071_DOGFOOD_FIXES.md`. The decided directions:
 
-- **Lifecycle requests (SCRUM-59).** A Manager never runs `rite sandbox …` or
-  `rite publish check` itself; its boundary cannot, and it is not widened.
+- **Lifecycle requests (SCRUM-59). BUILT (0.24.89).** A Manager never runs
+  `rite sandbox …` or `rite publish check` itself; its boundary cannot, and it
+  is not widened.
   - It runs `rite request {stop|destroy|restart|status|gate} <worker>`, which
-    writes the request in Python (no shell substitution).
-  - The supervisor carries the request out at the cycle boundary and tells the
-    Manager the outcome.
-  - `destroy` can never be forced from a request.
+    writes the request in Python (no shell substitution), and `rite request
+    {start|deliver} <worker> --ticket <id>` for the two request kinds that
+    already existed, in their existing shapes. No instruction teaches `echo …
+    > …/$(date +%s).json` any more.
+  - The supervisor carries the request out at the cycle boundary, after
+    deliveries and before Worker starts, claiming each by a rename so none is
+    done twice, and tells the Manager the outcome (`lifecycle.honour_requests`).
+    It reads the Manager's `lifecycle/` through descriptors, following no link.
+  - A request carries op, worker and ticket and nothing else; `destroy` can
+    never be forced. Only the Manager rite started a Worker for may act on it
+    (recorded outside every boundary when its start request is honoured, and
+    forgotten when its sandbox is destroyed or delivered); a Worker rite has
+    no record of is refused, being the person's. Not "the routing Manager":
+    who routes is in `config.yaml`, which a Manager can write (review,
+    measured).
+  - Requests are read, claimed and removed through `own_dir`, which follows
+    no link: the Manager can replace any directory inside its own, and the
+    supervisor acts on these outside every boundary. `requests/`,
+    `deliveries/` and `chores/` moved onto it too.
+  - A module's `branch` must be a branch name and its `path` relative and
+    inside the project (`parse.branch_problem`, `module_path_problem`), and
+    the gate runs on full ref names: `modules.yaml` is Manager-writable, and
+    a branch holding a git option made the host's `git log` write a file of
+    the Manager's choosing (review, measured).
+  - `restart` is limited and backed off with recovery: a requested restart is
+    counted under its own key, which recovery's per-cycle prune leaves alone,
+    one recovery gave up on is refused, and the ledger moved out of the
+    project (`recovery._ledger_path`), where a Manager could zero it;
+    `destroy` releases the Worker's claims; `status` says the sandbox state, the started
+    ticket, a pending question and unpushed work; `gate` runs the publish gate
+    on the ticket's collected branch. A refused delivery's note carries the
+    gate's findings (`gate.brief`: rule, file, line, commit; never the match).
+  - Asking to stop, destroy or restart counts as progress
+    (`progress.Footprint.lifecycle`, `COORDINATION`); `status` and `gate` only
+    look, and an unchanged answer is not told again, so a Manager asking
+    every turn does not wake itself every turn. Requests left by a stopped
+    run are honoured when the supervisor starts.
 - **Reconciliation (SCRUM-64).** At `rite start` and throttled per cycle, the
   supervisor compares each Worker's claims with its live sandbox, handback,
   publish record, PR, branch and board.
@@ -8523,6 +8557,8 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.89 — a Manager asks rite to act on a Worker (SCRUM-59).** §9.14.14's lifecycle bullet is BUILT. `rite request {start|deliver|stop|destroy|restart|status|gate} <worker> [--ticket]` (a Manager only) writes the request with `write_atomic` under a unique, oldest-first name (`lifecycle.request_name`: `time_ns` alone let two requests in one tick replace each other). `managers/lifecycle`: `decide` (op, worker, ticket; unknown keys refused, so no `force`), `ticket_problem` (a letter or digit first, no `..`), `record_owner`/`_owner_of`/`_may_act` (owner records beside the publish records, under no granted path), `take`/`interrupted` (claimed by rename, a crashed claim said and not retried; through `O_NOFOLLOW` descriptors), `honour_requests` (wired in `supervise` between deliveries and Worker starts; every outcome said and told), and the five operations. `supervise._record_owner` on a started Worker. `prompt.for_manager`, `broker.instructions` and `publishing.requests.instructions` teach the command; `lifecycle.instructions` is added to the Manager prompt. `deliver._publish`'s gate refusal quotes `gate.brief`. Tests: `tests/test_a_manager_asks_rite_to_act_on_a_worker.py` (the taught command filing its request inside the real Manager profile; each op written; start and deliver read by their honour steps; refusals writing nothing; another Manager's Worker refused; once only; a crashed claim; a linked `lifecycle` or request file not followed; destroy never forced; restart under recovery's backoff and limit; gate findings without the match; the refused delivery's findings; asking is progress; the honour order). Four existing assertions moved from the `echo` form to the command. Eighteen mutations, each red on its own test; two survived a first draft (the claim rename and the interrupted-claim rule) until a test killed the supervisor mid-request. Then from the security and correctness reviews: `own_dir` for all four request directories (`broker.requeue` now takes `root` and `manager` and creates without following); `parse.branch_problem` and `module_path_problem`; full ref names in the gate and in `deliver._publish`; no owner fallback (`lifecycle.forget_owner` on destroy and delivery); the requested-restart key `recovery.REQUESTED` and the ledger moved out of `.rite/`; `lifecycle.ACTING`, `acting_requests` and the unchanged-look rule; honoured at supervisor start; the delivery note says a delivery collects the fix; status names an unreadable start record, an unknown question, and the Worker's question as its words. Twelve more mutations red (two more were equivalent: `O_NOFOLLOW` beside `O_EXCL`, and a no-op).
 
 **Changes in 0.24.88 — the relay reads a file, not a heredoc (SCRUM-69, absorbing SCRUM-45 and SCRUM-22's transport residual).** `rite reply`, `ask`, `route` and `refine ask` take `--from-file <draft>`; every Manager instruction teaches only that form (`stdin_text.file_form`, `FILE_RULE`), and the heredoc on stdin stays accepted. `stdin_text.drafts_dir`, `read_draft` (regular file directly in the Manager's own drafts directory, opened through directory descriptors with no link followed from `manager_dir` down, one hard link, the user's, at most `DRAFT_LIMIT`, `flock`ed and rechecked under the lock), `stdin_text.Draft.consume` (after the message is queued, only the inode that was read: deliver exactly once, a failed send keeps the draft). `routing.briefing` takes `root`. `boundaries.temp_environment` adds `TMPPREFIX`, in the Manager's own `boundaries.heredoc_dir` (created with the drafts directory by both `write_profile`s), because zsh's here-document temp file under `/tmp` is what SB8's profile refused, and `TMPPREFIX` joins `ALLOWED_ON_TMUX_ARGV`. The command-line and `--while` refusals for a person at the host are unchanged (`_teach`, pinned as text). A second review measured that a subpath grant let a Manager rename its own directory away and link another's in its place: the seatbelt profile denies writes to the Manager's directory and outbox themselves, both `write_profile`s refuse a linked Manager directory or mail box (`enclosure.refuse_linked_manager_paths`, `LinkedManagerPath`), and the drafts are opened `O_NOFOLLOW` from the Manager's directory down. `Draft.consume` renames to a private name before unlinking, and the draft is read to its end. A deferred question's draft is consumed the moment it is queued, before it is asked now. Tickets are shell-quoted in a taught command. Tests: `tests/test_the_relay_reads_a_file.py` (the EPERM reproduced inside the real Manager profile and its carve-out; the taught file form delivering inside that profile; a sibling's profile unable to reach a Manager's heredocs; the file form delivering under bash and zsh where no heredoc can be made; every refusal of a path that is not this Manager's draft, a linked `drafts` and a hard link included; exactly-once, with a second process holding the draft and with the draft removed between open and lock; a refusal after reading keeping the draft; the swap refused inside the real profile, a linked Manager directory neither read through nor started; the starter's `TMPPREFIX`; a deferred question consumed before it is asked now), and F14's shell tests rewritten on the file form. Twenty-three mutations, each red on its own tests.
 

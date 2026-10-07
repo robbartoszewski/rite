@@ -46,6 +46,8 @@ REPORT = "report"  # backoff exhausted or cannot classify -> leave it for the Ow
 DEFAULT_MAX_RESTARTS = 3
 DEFAULT_BASE_BACKOFF = 300.0  # seconds before the 2nd attempt; doubles thereafter
 DEFAULT_BACKOFF_CAP = 3600.0
+REQUESTED = "requested:"
+"""Ledger key prefix for restarts a Manager asked for (`lifecycle._restart`)."""
 DEFAULT_MAX_ACTIONS = 1  # one recovery action per cycle, like one session at a time
 
 
@@ -140,7 +142,12 @@ def _plan_recovery(
 
 
 def _ledger_path(root: Path) -> Path:
-    return Path(root) / ".rite" / "recovery.json"
+    """Beside the publish records, under no path any Manager's profile grants
+    (SCRUM-59 review, measured): in `.rite/` a Manager could zero it and,
+    with `rite request restart`, restart its Worker without limit."""
+    from rite_ai.managers.mailbox import _checkout_key, _mail_home  # noqa: PLC2701
+
+    return _mail_home().parent / "recovery" / f"{_checkout_key(Path(root))}.json"
 
 
 def _read_ledger(root: Path) -> dict[str, LedgerEntry]:
@@ -232,7 +239,13 @@ def recover_stalled_workers(
         stalled_names = {r.worker for r in stalls}
         # A Worker that recovered on its own clears its backoff, so a later
         # stall starts from zero rather than from an exhausted budget.
-        for gone in [w for w in ledger if w not in stalled_names]:
+        # ⚠ Not the restarts a Manager asked for (`REQUESTED`, SCRUM-59): a
+        # Worker just restarted on request is never stalled at this point,
+        # so pruning those erased the cap the same cycle (review, measured:
+        # six requests, six restarts). They expire on their own instead.
+        for gone in [
+            w for w in ledger if w not in stalled_names and not w.startswith(REQUESTED)
+        ]:
             del ledger[gone]
 
         by_worker = {r.worker: r for r in stalls}

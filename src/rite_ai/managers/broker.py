@@ -243,18 +243,25 @@ def honour(root: Path, request: Request, timeout: int = 600) -> tuple[bool | Non
     return True, f"started Worker {request.worker!r} on ticket {request.ticket}"
 
 
-def requeue(path: Path, raw: str) -> None:
+def requeue(root: Path, manager: str, path: Path, raw: str) -> None:
     """Put a request back where `take_requests` found it, under the same
     name, so it keeps its place in the queue. Raises OSError, which the
-    caller says: a request that could not be put back is a lost one."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(raw, encoding="utf-8")
+    caller says: a request that could not be put back is a lost one.
+
+    Through `own_dir`, creating and never replacing, following no link."""
+    from rite_ai.managers import own_dir
+
+    own_dir.write_new(root, manager, REQUESTS_DIRNAME, path.name, raw)
 
 
 def queued(root: Path, manager: str) -> bool:
     """Whether any request is waiting, without taking it."""
-    where = requests_dir(root, manager)
-    return where.is_dir() and any(where.glob("*.json"))
+    from rite_ai.managers import own_dir
+
+    try:
+        return bool(own_dir.names(root, manager, REQUESTS_DIRNAME, ".json"))
+    except OSError:
+        return False
 
 
 def slot_free(root: Path) -> bool:
@@ -282,32 +289,29 @@ def take_requests(root: Path, manager: str) -> list[tuple[Path, str]]:
     """Every pending request, oldest first, removed as it is read.
 
     Removed rather than marked: a request that stays after being acted on is
-    a Worker started twice the next time the loop comes round.
+    a Worker started twice the next time the loop comes round. Read through
+    `own_dir`, which follows no link the Manager planted (SCRUM-59 review);
+    a `requests` that is one raises OSError for the caller to say.
     """
+    from rite_ai.managers import own_dir
+
     where = requests_dir(root, manager)
-    if not where.is_dir():
-        return []
-    found: list[tuple[Path, str]] = []
-    for path in sorted(where.glob("*.json")):
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        found.append((path, text))
-        try:
-            path.unlink()
-        except OSError:
-            pass
-    return found
+    return [
+        (where / name, text)
+        for name, text in own_dir.take(
+            root, manager, REQUESTS_DIRNAME, MAX_REQUEST_BYTES
+        )
+    ]
 
 
 def instructions(root: Path, manager: str) -> str:
     """What the Manager is told to do instead of `rite sandbox start`."""
+    from rite_ai import own_command
+
     return (
-        f"To start a Worker, write a JSON file into {requests_dir(root, manager)} "
-        f'containing exactly {{"worker": "<name>", "ticket": "<id>"}} — for '
-        f'example `echo \'{{"worker":"alpha","ticket":"ABC-12"}}\' > '
-        f"{requests_dir(root, manager)}/$(date +%s).json`.\n"
+        f"To start a Worker, run `{own_command()} request start <name> --ticket "
+        "<id>`: rite writes the request into your own directory, so nothing "
+        "reaches the shell (SCRUM-59).\n"
         "⚠ Do NOT run `rite sandbox start` yourself: you are inside a "
         "sandbox, and a sandbox cannot create another one. It would fail "
         "and the Worker would never start. rite starts it for you and "

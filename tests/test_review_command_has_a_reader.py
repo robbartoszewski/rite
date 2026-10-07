@@ -361,9 +361,10 @@ def test_a_single_item_is_not_reported_as_1_items(tmp_path, monkeypatch):
 
 
 def test_an_absolute_module_path_does_not_traceback(tmp_path, monkeypatch):
-    """`_source` called `relative_to(root)` unguarded, and `parse_modules`
-    does not forbid an absolute `path:`. The provenance line is a
-    convenience; it must not be what turns `rite review` into a traceback."""
+    """`_source` called `relative_to(root)` unguarded. Since SCRUM-59
+    `parse_modules` refuses an absolute `path:` (a Manager can write
+    `modules.yaml`, and git runs there on the host); the refusal must be a
+    sentence, not what turns `rite review` into a traceback."""
     project = tmp_path / "proj"
     (project / ".rite").mkdir(parents=True)
     (project / ".rite" / "review-checklist.md").write_text("## P\n\n- [ ] one\n")
@@ -374,9 +375,9 @@ def test_an_absolute_module_path_does_not_traceback(tmp_path, monkeypatch):
 
     result = CliRunner().invoke(cli, ["review", "--module", "ext"])
 
-    assert result.exit_code == 0, result.output
-    assert result.exception is None, result.exception
-    assert "one" in result.output
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert "must be a path inside the project" in result.output
 
 
 def test_a_file_that_exists_but_parses_to_nothing_is_not_called_absent(

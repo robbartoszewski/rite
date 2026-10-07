@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### A Manager can stop, restart, check and gate its Workers itself (SCRUM-59)
+
+When a Worker's sandbox died, its Manager could do nothing about it: stopping,
+restarting or destroying a sandbox, and seeing why the publish gate refused a
+delivery, all needed host commands, so you had to run them. A Manager now asks
+with `rite request stop|restart|destroy|status|gate <worker>`, and rite does
+it outside the sandbox when the Manager's turn ends and tells it what
+happened. It may act only on Workers rite started for it, and a destroy is
+never forced: a sandbox holding unpushed work or an unanswered question is
+kept. Starting and delivering a Worker are `rite request start|deliver <worker>
+--ticket <id>` too, so a Manager no longer has to write a request file with
+`echo … > $(date).json`, which its engine refused. A refused delivery now says
+what the gate found. A Worker you started yourself is yours: no Manager can act
+on it through `rite request`. A module's `branch` in `.rite/modules.yaml` must
+now be a plain branch name, and its `path` a path inside the project.
+
 ### A Manager's messages no longer depend on a heredoc (SCRUM-69)
 
 A Manager reached you with `rite reply` and `rite ask` through a shell

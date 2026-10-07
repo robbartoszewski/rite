@@ -717,6 +717,25 @@ def _commit_clause(report: GateReport) -> str:
     return f" and {n} commit(s) of history"
 
 
+def brief(report: GateReport, limit: int = 10) -> list[str]:
+    """The gate's findings in a few lines, for a NOTE to a Manager (SCRUM-59):
+    a refused delivery, or `rite request gate`. What and where, never the
+    match itself: a note is mail, and a real secret must not ride in it.
+    "" findings and no error is said as clean, never as nothing."""
+    if report.errors:
+        return [f"could not complete: {e}" for e in report.errors[:limit]]
+    lines = []
+    for f in report.findings[:limit]:
+        loc = f"{f.file}:{f.line}" if f.line else f.file
+        commit = f" ({f.commit[:8]})" if f.commit else ""
+        lines.append(f"[{f.rule_id}] {loc}{commit} — {f.description}")
+    if len(report.findings) > limit:
+        lines.append(f"… and {len(report.findings) - limit} more")
+    if not lines:
+        lines.append("no blocking findings")
+    return lines
+
+
 def format_report(report: GateReport) -> str:
     """Human-readable summary — used by both the standalone `__main__` CLI
     and (once wired) the `rite publish check` command."""

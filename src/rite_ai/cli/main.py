@@ -10741,6 +10741,93 @@ def route(manager_name: str, text: str, ticket: str, from_file: str) -> None:
     )
 
 
+@cli.command("request")
+@click.argument(
+    "op",
+    type=click.Choice(
+        ["start", "deliver", "stop", "destroy", "restart", "status", "gate"]
+    ),
+)
+@click.argument("worker")
+@click.option(
+    "--ticket",
+    default="",
+    help="The ticket: required for start and deliver; for gate, the ticket "
+    "branch to gate (default: the one the Worker was started on).",
+)
+def request_cmd(op: str, worker: str, ticket: str) -> None:
+    """Ask rite to start, deliver, stop, destroy, restart, report on or gate a
+    Worker — a Manager only (SCRUM-59).
+
+    A Manager's sandbox cannot reach a Worker's, so it asks, and its
+    supervisor does it on the host when the current turn ends; the outcome is
+    in the Manager's next instruction. rite writes the request itself, so
+    nothing reaches the shell: this replaces `echo '{…}' > …/$(date +%s).json`.
+
+    ⚠ This only ASKS, and only for a Worker rite started for this Manager. A
+    destroy is never forced: a sandbox holding unpushed work or an unanswered
+    question is refused.
+
+    Examples:
+      rite request start alpha --ticket RT-12
+      rite request status alpha
+      rite request gate alpha --ticket RT-12
+    """
+    import json
+
+    from rite_ai.managers import current_manager, lifecycle
+    from rite_ai.names import name_problem
+    from rite_ai.state import write_atomic
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite request` is how a Manager asks rite to act on a "
+            f"Worker. From your own shell, run `rite sandbox {op} {worker}` "
+            "(or `rite deliver`) directly.",
+            err=True,
+        )
+        raise SystemExit(1)
+    problem = name_problem(worker, kind="worker name")
+    if problem:
+        click.echo(f"refusing: {problem}.", err=True)
+        raise SystemExit(1)
+    if not (root / "workers" / worker / "worker.yml").is_file():
+        click.echo(
+            f"refusing: there is no Worker called {worker!r} in this project; "
+            "`rite status` lists the ones that exist.",
+            err=True,
+        )
+        raise SystemExit(1)
+    ticket = ticket.strip()
+    if op in ("start", "deliver") and not ticket:
+        click.echo(f"refusing: `rite request {op}` needs --ticket <ID>.", err=True)
+        raise SystemExit(1)
+    if ticket:
+        problem = lifecycle.ticket_problem(ticket)
+        if problem:
+            click.echo(f"refusing: {problem}.", err=True)
+            raise SystemExit(1)
+    if op in ("start", "deliver"):
+        # The two request kinds that already existed, in the shapes their
+        # honour steps read (`broker`, `publishing.requests`): only how the
+        # file gets written changed.
+        if op == "start":
+            from rite_ai.managers.broker import requests_dir
+        else:
+            from rite_ai.publishing.requests import requests_dir
+        path = requests_dir(root, speaking) / lifecycle.request_name()
+        write_atomic(path, json.dumps({"worker": worker, "ticket": ticket}) + "\n")
+    else:
+        lifecycle.request(root, speaking, op, worker, ticket)
+    click.echo(
+        f"asked: {op} {worker}" + (f" for {ticket}" if ticket else "") + ". rite "
+        "does it when this turn ends, and your next instruction says what "
+        "happened. Do not wait for it during this turn."
+    )
+
+
 @cli.command("chore")
 @click.argument("message_ids", nargs=-1, required=True)
 def chore(message_ids: tuple[str, ...]) -> None:

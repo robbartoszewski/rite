@@ -65,6 +65,10 @@ class Footprint:
     deliveries: tuple[str, ...] = ()
     """Delivery requests not yet honoured (PB1), read at the same moment and
     for the same reason: asking for a delivery is progress."""
+    lifecycle: tuple[str, ...] = ()
+    """Stop, destroy and restart requests not yet honoured (SCRUM-59): asking
+    rite to change a Worker is coordination too. Not `status` or `gate`,
+    which only look (`lifecycle.acting_requests`)."""
 
     def differs_from(self, other: Footprint) -> list[str]:
         """The names of the parts that changed, in a fixed order."""
@@ -77,6 +81,7 @@ class Footprint:
                 "routes",
                 "requests",
                 "deliveries",
+                "lifecycle",
             )
             if getattr(self, name) != getattr(other, name)
         ]
@@ -134,6 +139,7 @@ def _bytes(path: Path) -> str:
 def footprint(root: Path, manager: str) -> Footprint:
     """What `manager` could have changed, as it stands now."""
     from rite_ai.managers.broker import requests_dir
+    from rite_ai.managers.lifecycle import acting_requests
     from rite_ai.managers.mailbox import OUTBOX, mailbox_dir
     from rite_ai.managers.routing import routed_log
     from rite_ai.publishing.requests import requests_dir as deliveries_dir
@@ -146,4 +152,5 @@ def footprint(root: Path, manager: str) -> Footprint:
         routes=_bytes(routed_log(root, manager)),
         requests=_names(requests_dir(root, manager)),
         deliveries=_names(deliveries_dir(root, manager)),
+        lifecycle=acting_requests(root, manager),
     )

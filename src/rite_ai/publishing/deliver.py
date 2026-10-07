@@ -297,7 +297,7 @@ def _publish(
     """Push, or push and open a pull request, after the gate passes (PB1
     piece 4). Called only with the work already collected, so a refusal here
     loses nothing: it is on `branch` in the project's checkout."""
-    from rite_ai.gate.gate import EXIT_CLEAN, run_gate
+    from rite_ai.gate.gate import EXIT_CLEAN, brief, run_gate
 
     project = root / module.path
     home = f"committed locally on {branch} in {module.path}"
@@ -314,12 +314,25 @@ def _publish(
     # (🔴 SCRUM-60) or drops every suppression the project declared.
     rng = f"{module.branch}..{branch}"
     _record_scope_budget(root, worker, module, ticket, project, rng, config)
-    report = run_gate(project, rev_range=rng, config_root=root)
+    # Full ref names, so no tag or other ref of the same name is what is
+    # gated; the branch is a checked name (`parse.branch_problem`, SCRUM-59).
+    report = run_gate(
+        project,
+        rev_range=f"refs/heads/{module.branch}..refs/heads/{branch}",
+        config_root=root,
+    )
     if report.exit_code != EXIT_CLEAN:
+        # 🔴 SCRUM-59: the findings themselves, in the note. "Run `rite
+        # publish check`" was a host command a sandboxed Manager cannot run,
+        # so a refused delivery told it what to do and not what was wrong.
+        found = "; ".join(brief(report, 10))
         return no(
-            f"the publish gate did not pass (exit {report.exit_code})",
-            f"Run `rite publish check --rev-range {module.branch}..{branch}` in "
-            f"{module.path} and fix what it names",
+            f"the publish gate did not pass (exit {report.exit_code}): {found}",
+            "Have the Worker fix what it names and commit it, then ask for the "
+            "delivery again: the delivery collects the fix and gates it. "
+            f"`rite request gate {worker} --ticket {ticket}` re-reads what was "
+            f"last collected, on {branch} (from the host: `rite publish check "
+            f"--rev-range {rng}` in {module.path})",
         )
     env = _remote_environment(root, worker, module, config)
     if isinstance(env, str):
@@ -863,6 +876,10 @@ def deliver(
         released = _release_claims(root, worker)
     if outcomes and all(o.ok for o in outcomes):
         gone = destroy_worker(worker, root)
+        if gone.ok:
+            from rite_ai.managers.lifecycle import forget_owner
+
+            forget_owner(root, worker)
         sandbox = (
             f"sandbox removed; {worker} can start its next ticket"
             if gone.ok

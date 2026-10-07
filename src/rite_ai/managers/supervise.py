@@ -32,6 +32,7 @@ window is what actually limits duration, and §9.14.5 says so.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import time
@@ -516,15 +517,26 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
     """
     from rite_ai.managers.telling import tell_manager
 
-    pending = take_requests(root, manager)
-    if not pending:
-        return
-
     def tell(text: str) -> None:
         try:
             tell_manager(root, manager, "a Worker you asked for", text)
         except OSError as e:
             say(f"could not tell {manager!r} what happened to its request: {e}")
+
+    try:
+        pending = take_requests(root, manager)
+    except OSError as e:
+        # A `requests` the Manager replaced with a link (SCRUM-59 review):
+        # not followed, and said.
+        said = (
+            f"rite did not read {manager!r}'s Worker requests: its requests "
+            f"directory cannot be opened as rite's own ({e}). Nothing was started."
+        )
+        say(said)
+        tell(said)
+        return
+    if not pending:
+        return
 
     if broker is None:
         said = (
@@ -551,7 +563,7 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
             # when a slot frees (the waits wake for it), decided afresh each
             # time. Told once, so a Manager does not ask twice.
             try:
-                requeue(path, raw)
+                requeue(root, manager, path, raw)
             except OSError as e:
                 say(f"a Worker request could not be queued, so it is lost: {e}")
                 tell(
@@ -570,6 +582,8 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
                 )
             continue
         told.discard(raw)
+        if ok:
+            _record_owner(root, manager, raw, say)
         say(("started: " if ok else "") + message)
         tell(
             ("Started: " if ok else "NOT started: ")
@@ -580,6 +594,22 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
                 else " Nothing is running for this request; do not wait for "
                 "it. Fix what it names, or say so to the User."
             )
+        )
+
+
+def _record_owner(root: Path, manager: str, raw: str, say) -> None:
+    """Remember that rite started this Worker for `manager` (SCRUM-59), so
+    only `manager` may later stop, restart, destroy or gate it. The request
+    was decided valid, so its worker parses; anything else is said."""
+    from rite_ai.managers.lifecycle import record_owner
+
+    try:
+        record_owner(root, json.loads(raw)["worker"], manager)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        say(
+            f"started, but rite could not record that it was for {manager!r} "
+            f"({e}); no Manager may stop, restart, destroy or gate it through "
+            "rite until it is started again by request"
         )
 
 
@@ -1217,9 +1247,10 @@ def _queued_requests(root: Path, manager: str) -> bool:
     return queued(root, manager)
 
 
-COORDINATION = frozenset({"claims", "routes", "requests", "deliveries"})
+COORDINATION = frozenset({"claims", "routes", "requests", "deliveries", "lifecycle"})
 """The footprint parts that are a Manager's own progress: claiming work,
-routing it, asking for a Worker, delivering one's work (D-115)."""
+routing it, asking for a Worker, delivering one's work (D-115), and asking
+rite to stop, restart, destroy, inspect or gate a Worker (SCRUM-59)."""
 
 
 def _session_was_idle(changed: list[str]) -> bool:
@@ -1795,6 +1826,12 @@ def _supervise(
     tracking = pending.sync(root, manager)
     if tracking:
         say(tracking)
+    # SCRUM-59: requests left by a run that stopped mid-session, honoured now
+    # rather than after a session that may not come (the no-progress guard
+    # can hold one off indefinitely). An interrupted claim is said, not redone.
+    from rite_ai.managers import lifecycle
+
+    lifecycle.honour_requests(root, manager, say)
 
     # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
     # ended having made no progress (`_session_was_idle`); cleared by anything that
@@ -2560,6 +2597,13 @@ def _supervise(
             from rite_ai.publishing.merging import tick as watch_pull_requests
 
             watch_pull_requests(root, manager, say)
+            # SCRUM-59: stop, destroy, restart, status and gate, after the
+            # deliveries (a delivery may already have removed the sandbox a
+            # request names) and before Worker starts (a destroy frees the
+            # slot a start in this same cycle needs).
+            from rite_ai.managers import lifecycle
+
+            lifecycle.honour_requests(root, manager, say)
             _honour_worker_requests(root, manager, broker, say)
             if callable(chores):
                 # TR9: at the boundary with the Worker requests, and for the

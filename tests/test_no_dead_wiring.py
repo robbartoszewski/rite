@@ -50,6 +50,12 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    "lifecycle_dir": (
+        "Where `request`, in the same file, writes a Manager's lifecycle "
+        "requests and `honour_requests` names in what it says (SCRUM-59). "
+        "Public so tests name the directory from its one spelling, as "
+        "`drafts_dir` is for drafts."
+    ),
     "compose_policy": (
         "Landlock's half of `compose`, called by `write_profile` in the same "
         "file. Public for the same reason: it IS the boundary — the set of "

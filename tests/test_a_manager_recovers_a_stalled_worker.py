@@ -110,7 +110,9 @@ def test_the_ledger_round_trips(tmp_path):
 def test_a_corrupt_ledger_reads_as_empty(tmp_path):
     root = tmp_path
     (root / ".rite").mkdir()
-    (root / ".rite" / "recovery.json").write_text("{not json")
+    # Where the ledger lives since SCRUM-59: outside every Manager's grant.
+    R._ledger_path(root).parent.mkdir(parents=True, exist_ok=True)
+    R._ledger_path(root).write_text("{not json")
     assert R._read_ledger(root) == {}
 
 

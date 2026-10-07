@@ -79,21 +79,12 @@ def decide(raw: str) -> Request | str:
 
 def take(root: Path, manager: str) -> list[str]:
     """Every pending request, oldest first, removed as it is read: one left
-    behind would be delivered twice."""
-    where = requests_dir(root, manager)
-    if not where.is_dir():
-        return []
-    found: list[str] = []
-    for path in sorted(where.glob("*.json")):
-        try:
-            found.append(path.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            continue
-        try:
-            path.unlink()
-        except OSError:
-            pass
-    return found
+    behind would be delivered twice. Read through `own_dir`, which follows
+    no link the Manager planted (SCRUM-59 review); a `deliveries` that is
+    one raises OSError for the caller to say."""
+    from rite_ai.managers import own_dir
+
+    return [text for _, text in own_dir.take(root, manager, DIRNAME, MAX_REQUEST_BYTES)]
 
 
 def honour_deliveries(root: Path, manager: str, say) -> None:
@@ -107,10 +98,24 @@ def honour_deliveries(root: Path, manager: str, say) -> None:
         except OSError as e:
             say(f"could not tell {manager!r} what happened to a delivery: {e}")
 
-    for raw in take(root, manager):
+    try:
+        pending = take(root, manager)
+    except OSError as e:
+        said = (
+            f"NOT delivered: rite did not read your delivery requests, because "
+            f"{requests_dir(root, manager)} cannot be opened as rite's own "
+            f"directory ({e})"
+        )
+        say(f"{manager!r}: {said}")
+        tell(said)
+        return
+    for raw in pending:
         request = decide(raw)
         if isinstance(request, str):
-            said = f"NOT delivered: {request}. Write the request again as shown"
+            said = (
+                f"NOT delivered: {request}. Ask again with `rite request deliver "
+                "<worker> --ticket <ID>`"
+            )
             say(f"{manager!r}: {said}")
             tell(said)
             continue
@@ -130,14 +135,13 @@ def honour_deliveries(root: Path, manager: str, say) -> None:
 def instructions(root: Path, manager: str) -> str:
     """What the Manager is told about delivering, with the promise that it
     hears every outcome."""
-    where = requests_dir(root, manager)
+    from rite_ai import own_command
+
     return (
         "\n\n## Delivering a Worker's finished ticket — you ASK, rite does it\n\n"
         "When a Worker reports its ticket finished and committed, ask rite to "
         "deliver it:\n\n"
-        f"    mkdir -p {where}\n"
-        '    echo \'{"worker":"<name>","ticket":"<ID>"}\' > '
-        f"{where}/$(date +%s).json\n\n"
+        f"    {own_command()} request deliver <name> --ticket <ID>\n\n"
         "rite brings the Worker's commits out of its sandbox into the "
         "project under the project's publish strategy, which you do not "
         "choose, and removes the sandbox once everything is delivered, so the "
