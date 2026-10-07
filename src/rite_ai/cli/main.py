@@ -4903,6 +4903,18 @@ def _warn_summary(report) -> str:
 @publish.command("check")
 @click.option("--rev-range", default=None, help="Git revision range to scan")
 @click.option(
+    "--ci-range",
+    "ci_range",
+    is_flag=True,
+    help=(
+        "Scan only what this CI run introduces, instead of every commit the "
+        "repository can reach (SCRUM-39). For the per-pull-request check: "
+        "without it, a secret on any other fetched branch fails the gate on "
+        "every unrelated pull request. Falls back to the full scan, saying "
+        "so, whenever the range cannot be established."
+    ),
+)
+@click.option(
     "--strict",
     is_flag=True,
     help=(
@@ -4912,12 +4924,13 @@ def _warn_summary(report) -> str:
         "stopped; on for CI, where an unexamined finding is worth failing."
     ),
 )
-def publish_check(rev_range: str | None, strict: bool) -> None:
+def publish_check(rev_range: str | None, ci_range: bool, strict: bool) -> None:
     """Dry-run the publish gate — scan for secrets and local paths.
 
     Examples:
       rite publish check
       rite publish check --rev-range origin/main..HEAD
+      rite publish check --ci-range --strict
     """
     from rite_ai.gate import run_gate
     from rite_ai.gate.gate import _partial_lines, scanned_line
@@ -4926,6 +4939,23 @@ def publish_check(rev_range: str | None, strict: bool) -> None:
     config_root = _gate_config_root()
     from rite_ai.gate import suppression
     from rite_ai.gate.suppression import stale_hint
+
+    # ⚠ SCRUM-39. Refused rather than resolved in some order: `--rev-range`
+    # and `--ci-range` answer the same question, and silently preferring one
+    # would make the output a claim nobody can check from the command line.
+    if ci_range and rev_range is not None:
+        raise click.UsageError(
+            "pass --rev-range or --ci-range, not both: they would answer the "
+            "same question differently, and the output names only one."
+        )
+    if ci_range:
+        import os
+
+        from rite_ai.gate.ci_range import range_for_ci
+
+        chosen = range_for_ci(os.environ, root)
+        click.echo(f"range: {chosen.why}")
+        rev_range = chosen.rev_range
 
     report = run_gate(root, rev_range=rev_range, config_root=config_root)
 

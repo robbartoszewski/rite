@@ -71,9 +71,14 @@ jobs:
   publish-gate:
     runs-on: ubuntu-latest
     steps:
+      # ⚠ STILL `fetch-depth: 0`, for a DIFFERENT reason since SCRUM-39. It
+      # is no longer "the gate scans all of it": the scan is scoped to this
+      # run's own commits below. The full fetch is what puts the BASE branch
+      # in the checkout, and without it the gate cannot tell this pull
+      # request's commits from the trunk's and scans everything.
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history — the gate scans all of it, not just HEAD
+          fetch-depth: 0
 
       # Pinned AND checksummed. A release asset can be replaced under an
       # unchanged tag, and this binary is not a build tool here — it IS the
@@ -122,4 +127,23 @@ jobs:
         # nobody has looked at it. The pre-push hook deliberately does NOT
         # pass this, because stopping someone's unrelated push is the
         # behaviour the gate promises not to have.
-        run: rite publish check --strict
+        #
+        # 🔴 **--ci-range (SCRUM-39).** Without it the gate scans every
+        # commit the repository can reach, and the fetch above has fetched
+        # every ref — so a secret-shaped string on ANY open branch fails
+        # this gate on every unrelated pull request, and the suppression has
+        # to be landed on the trunk before anything can merge. Measured in
+        # rite's own repository on 2026-10-02. It narrows only when git
+        # resolved the base ref and scans everything otherwise, saying which
+        # it did.
+        #
+        # ⚠ **--strict and --ci-range together are not redundant.** --strict
+        # is about what counts as blocking; --ci-range is about which
+        # commits are looked at. A pre-existing finding inside this pull
+        # request's own range still fails the build.
+        env:
+          # Not a GitHub-provided variable: the default branch is only in
+          # the event payload. A push event carries no base ref, so this is
+          # how its own commits are told from the trunk's.
+          RITE_GATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: rite publish check --ci-range --strict

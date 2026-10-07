@@ -44,9 +44,65 @@ def _roots() -> tuple[Path, Path]:
     return _gate_root(), _gate_config_root()
 
 
+def _range_option(argv: list[str]) -> tuple[str | None, str | None]:
+    """`(rev_range, problem)` from `--range A..B`, or `(None, None)`.
+
+    Refused rather than guessed at: a range this cannot parse would silently
+    become a full scan, and a reader of the output would have no way to tell
+    which they got.
+    """
+    if "--range" not in argv:
+        return None, None
+    at = argv.index("--range")
+    if at + 1 >= len(argv):
+        return None, "--range needs a value, like --range origin/main..HEAD"
+    value = argv[at + 1].strip()
+    if not value or ".." not in value:
+        return None, (
+            f"--range {value!r} is not a revision range: it needs the "
+            "`A..B` form, as `git log` takes it"
+        )
+    return value, None
+
+
 def _cmd_check(argv: list[str]) -> int:
+    """Scan, by default the whole history (see `_run_gate`'s docstring).
+
+    ⚠ **`--ci-range` narrows it to the commits THIS run is responsible for
+    (SCRUM-39)**, which is what a per-pull-request required check should
+    judge. Without it, gitleaks scans every commit the repository can reach
+    and `fetch-depth: 0` has fetched every ref — so one branch's leak failed
+    the gate on every other open pull request (measured live, 2026-10-02,
+    #183 blocking #184). `rite_ai.gate.ci_range` decides the range and falls
+    back to the full scan whenever it cannot establish one, so a narrowed
+    scan is never a guess.
+
+    The chosen range is PRINTED either way. A green gate is a claim about
+    which commits were looked at, and a reader is entitled to see it.
+    """
     root, config_root = _roots()
-    report = run_gate(root, config_root=config_root)
+    rev_range, problem = _range_option(argv)
+    if problem:
+        print(f"rite publish gate: {problem}", file=sys.stderr)
+        return 2
+    if "--ci-range" in argv:
+        if rev_range is not None:
+            print(
+                "rite publish gate: pass --range or --ci-range, not both — "
+                "they would answer the same question differently",
+                file=sys.stderr,
+            )
+            return 2
+        import os
+
+        from rite_ai.gate.ci_range import range_for_ci
+
+        chosen = range_for_ci(os.environ, root)
+        print(f"rite publish gate: {chosen.why}")
+        rev_range = chosen.rev_range
+    elif rev_range is not None:
+        print(f"rite publish gate: scanning {rev_range}")
+    report = run_gate(root, rev_range=rev_range, config_root=config_root)
     print(format_report(report))
     return report.exit_code
 
@@ -96,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "usage: python -m rite_ai.gate {check|pre-push|install-hook}\n"
             "  check         scan full history, exit per the gate contract\n"
+            "    --range A..B  scan only that range\n"
+            "    --ci-range    scan only what this CI run introduces\n"
             "  pre-push      scan the range read from stdin (git pre-push protocol)\n"
             "  install-hook  install .git/hooks/pre-push",
             file=sys.stderr,
