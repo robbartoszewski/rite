@@ -686,6 +686,16 @@ class _Relayed(str):
 
 _QUESTION_IN_LABEL = re.compile(r"\bq[0-9a-f]{4}\b")
 
+MESSAGE_ID = re.compile(r"\A[0-9]{10,}\.[0-9]{6}\Z")
+"""The shape of a Slack message `ts`, which is the id rite shows a Manager
+beside an instruction and takes back on `rite reply --message` (SCRUM-21).
+
+Checked rather than trusted: the value reaches `chat.postMessage` as a
+`thread_ts`, and a Manager is a process that may be confused. The shape is
+Slack's own — seconds since the epoch, a dot, six digits (measured on every
+live message this relay has read) — and `rite reply` refuses anything else
+where the Manager can see the refusal, rather than posting into nowhere."""
+
 REFINEMENT_CHANNEL = "refinement channel"
 """The header's first part for a message relayed from the refinement
 channel (TR2, TRQ8). `delivered.classify` counts it as the User's words only
@@ -1574,8 +1584,21 @@ class Listener:
                     "context — not an instruction",
                 )
             else:
+                # ⚠ **THE ID IS IN THE HEADER (SCRUM-21).** Without it the
+                # Manager cannot answer in the thread the Owner asked in: the
+                # `ts` was captured here, used for the 👀, and dropped. So
+                # every answer surfaced as `Status · lead` in the flat feed —
+                # you ask in one place and the answer appears in another.
+                # Outside the `> ` quote, like the chore id below it, so
+                # typed text cannot forge one.
                 head = _header(
-                    "Owner's DM", when, *normalised, *thread, "addressed", "INSTRUCTION"
+                    "Owner's DM",
+                    when,
+                    *normalised,
+                    *thread,
+                    "addressed",
+                    "INSTRUCTION",
+                    f"message {message.get('ts')}",
                 )
                 # ⚠ Recorded HERE, in the one branch that decided this is the
                 # Owner addressing this Manager, and from the same facts the
@@ -2131,6 +2154,21 @@ class Listener:
         None means "nothing says this is an answer", which is the day's notes
         — the right place for a Manager that is reporting rather than
         replying. See `_awaiting` for what this does and does not claim.
+
+        ⚠ **WHAT THE MANAGER STATED BEATS WHAT RITE GUESSED (SCRUM-21).**
+        `rite reply --message <id>` is the Manager saying which message it
+        answers, which is a fact only it has; `_awaiting` is a correlation —
+        "the Owner addressed this Manager and it then spoke inside a window"
+        — and it is right only for the most recent message, so answering the
+        earlier of two questions threaded the answer under the later one.
+        A stated id is taken with no window: the Manager naming a message
+        from this morning means this morning's, and a stale guess is exactly
+        what the window exists to refuse.
+
+        ⚠ **THE CHANNEL IS NEVER THE MANAGER'S TO NAME.** The id is a `ts`
+        and the channel is always `self.dm`, read from config. A Manager that
+        could choose a channel could post the Owner's answer where the
+        workspace reads it.
         """
         if getattr(message, "by_rite", False):
             # ⚠ rite's own narration, not the Manager answering. `kind`
@@ -2140,6 +2178,25 @@ class Listener:
             # whatever the Owner last asked, and exempted from the check-in
             # hold along with it. See `mailbox.Message.by_rite`.
             return None
+        stated = str(getattr(message, "answers", "") or "")
+        if stated:
+            if not self.dm:
+                # No Owner DM is configured, so there is no thread to answer
+                # in and no person who asked. Not an error: the reply still
+                # reaches the reading pile, which is what the caller does
+                # with None.
+                return None
+            if not MESSAGE_ID.match(stated):
+                # Said, not silently dropped: a Manager answering into
+                # nowhere is the failure SCRUM-21 is about, and it must not
+                # fail quietly a second time.
+                self._problem(
+                    f"a reply from {self.manager!r} names message {stated!r}, "
+                    "which is not the shape of a message id — posted where "
+                    "replies are read instead of in its thread"
+                )
+                return None
+            return (self.dm, stated)
         awaiting = self._awaiting
         channel = str(awaiting.get("channel") or "")
         ts = str(awaiting.get("ts") or "")

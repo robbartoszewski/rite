@@ -11117,6 +11117,14 @@ def chore(message_ids: tuple[str, ...]) -> None:
     "defaults to that Manager and can be left out.",
 )
 @click.option(
+    "--message",
+    "message_id",
+    default="",
+    help="The message this answers, by the id in its header: `[Owner's DM · "
+    "… · message 1759000000.123456]`. The answer goes in that message's "
+    "thread, where it was asked. Without it, nothing changes.",
+)
+@click.option(
     "--from-file",
     "from_file",
     default="",
@@ -11124,7 +11132,7 @@ def chore(message_ids: tuple[str, ...]) -> None:
     "file-writing tool, not the shell. The form your instructions teach: "
     "nothing in it is expanded. It is removed once sent.",
 )
-def reply(text: str, manager: str, from_file: str) -> None:
+def reply(text: str, manager: str, message_id: str, from_file: str) -> None:
     """Say something to the User, from a Manager — read with `rite replies`.
 
     ⚠ **The Manager's half of what `rite message` did for the User (C5).**
@@ -11141,6 +11149,13 @@ def reply(text: str, manager: str, from_file: str) -> None:
     goes with `rite ask`. Anything that reads as one is refused here and
     redirected, erring toward refusing too much (`reads_as_action`).
 
+    ⚠ **ANSWER WHERE YOU WERE ASKED: `--message <id>` (SCRUM-21).** When
+    this answers a message, pass the id from that message's header and the
+    answer goes in its thread. Without it the answer goes to the reading
+    pile, which is right for a report and wrong for an answer: the Owner
+    asked in their DM and found the answer in a notes thread they had been
+    told nothing in needs them.
+
     ⚠ **THE TEXT IS A FILE: `--from-file <draft>` (SCRUM-69).** Write it
     with your file-writing tool, not the shell, in your drafts directory
     (your instructions name it), and rite sends it exactly as written. Text
@@ -11151,12 +11166,14 @@ def reply(text: str, manager: str, from_file: str) -> None:
 
     Examples:
       rite reply --manager planner --from-file <your drafts directory>/reply.md
+      rite reply --manager lead --message 1759000000.123456 --from-file a.md
     """
     import shlex
 
     from rite_ai.managers import current_manager
     from rite_ai.managers.mailbox import OUTBOX, REPLY, full_warning, prune, send
     from rite_ai.managers.reads_as_action import sign_of_action
+    from rite_ai.managers.slack import MESSAGE_ID
 
     root = _require_project_root()
     speaking = (manager or "").strip() or current_manager()
@@ -11221,8 +11238,24 @@ def reply(text: str, manager: str, from_file: str) -> None:
         )
         raise SystemExit(1)
 
+    answers = (message_id or "").strip()
+    if answers and not MESSAGE_ID.match(answers):
+        # ⚠ Refused HERE, where the Manager reads the refusal and can fix
+        # it, rather than accepted and dropped by the relay. The value ends
+        # up as a `thread_ts` on a Slack call; an id of the wrong shape is a
+        # reply posted into nowhere, which is the silence SCRUM-21 is about.
+        click.echo(
+            f"refusing to reply: --message {answers!r} is not the shape of a "
+            "message id. It is the id in the message's own header — "
+            "`[Owner's DM · … · message 1759000000.123456]` — not a ticket, "
+            "a question id or a mailbox filename. Leave it out to send this "
+            "to the reading pile instead.",
+            err=True,
+        )
+        raise SystemExit(1)
+
     try:
-        send(root, speaking, OUTBOX, text, kind=REPLY)
+        send(root, speaking, OUTBOX, text, kind=REPLY, answers=answers)
         _say_consumed(draft)
     except OSError as e:
         # ⚠ Said, not raised. `rite message` has caught this since v0.6.0
