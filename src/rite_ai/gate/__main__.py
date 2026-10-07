@@ -150,7 +150,10 @@ def _cmd_pre_push(argv: list[str]) -> int:
 def _cmd_install_hook(argv: list[str]) -> int:
     root = _find_root(Path.cwd())
     force = "--force" in argv
-    result = install_pre_push_hook(root, force=force)
+    # SCRUM-76: the hook carries the project whose rules it should trust,
+    # resolved the same way the gate resolves it (`_roots`).
+    _scan_root, config_root = _roots()
+    result = install_pre_push_hook(root, force=force, project_root=config_root)
     print(result.message)
     return 0 if result.ok else 1
 

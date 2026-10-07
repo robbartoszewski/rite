@@ -63,6 +63,50 @@ PRE_PUSH_HOOK_SCRIPT = f"""#!/bin/sh
 exec rite publish pre-push
 """
 
+# 🔴 **SCRUM-76. The trusted project root, BAKED IN at install time.**
+#
+# `PROJECT_MARKERS` are two ordinary files, so the walk that finds the gate's
+# config can be redirected by anything able to write a `.rite/` at or above
+# the scanned repository — which on a Worker is its own branch and its own
+# workspace. `RITE_PROJECT_ROOT` is the Owner's answer to that, and this hook
+# runs with **no environment of its own**: measured 2026-10-08, the same
+# planted marker plus suppression exits 2 with that variable set and 0
+# without it. So the hook carries the answer rather than hoping to inherit
+# it.
+#
+# ⚠ **It lives in `.git/`, which is NOT the scanned worktree** — a commit
+# cannot change it, and a checkout cannot either. A party that can write
+# `.git/hooks/` can of course delete the gate outright; that is a strictly
+# larger hole than this one and not what this closes. Said here rather than
+# implied.
+#
+# ⚠ **Baked, so it can go stale**, which the chained template deliberately
+# avoids for `core.hooksPath`. The difference: a stale hooks path silently
+# disarms another project's gate, while a stale project root is DETECTED —
+# `--project-root` naming a directory that is no longer a project falls back
+# to the walk and says so, rather than dropping every suppression.
+_ROOTED = "--project-root '__PROJECT_ROOT__'"
+
+
+def _rooted(script: str, project_root: Path | None) -> str:
+    """`script` with the trusted project root baked into its gate call.
+
+    None leaves the script exactly as it was, which is every pre-SCRUM-76
+    hook and any install that cannot tell which project it is in.
+    """
+    if project_root is None:
+        return script
+    # Single quotes, and a path containing one is refused rather than
+    # escaped: this string becomes a `sh` word, and a quote inside it would
+    # end the quoting and turn the rest of the path into arguments.
+    text = str(project_root)
+    if "'" in text:
+        return script
+    return script.replace(
+        "rite publish pre-push", f"rite publish pre-push {_ROOTED}"
+    ).replace("__PROJECT_ROOT__", text)
+
+
 # The chained form, for a repo where `core.hooksPath` sends git's hooks
 # somewhere else. See `install_pre_push_hook`: rite's gate runs AFTER whatever
 # that directory's own `pre-push` does, and this repo's `core.hooksPath` is
@@ -134,8 +178,16 @@ rite publish pre-push < "$refs_file"
 """
 
 
-def chained_pre_push_script(own_hooks: Path) -> str:
-    return CHAINED_PRE_PUSH_TEMPLATE.replace("__OWN_HOOKS__", str(own_hooks))
+def chained_pre_push_script(own_hooks: Path, project_root: Path | None = None) -> str:
+    return _rooted(
+        CHAINED_PRE_PUSH_TEMPLATE.replace("__OWN_HOOKS__", str(own_hooks)),
+        project_root,
+    )
+
+
+def pre_push_script(project_root: Path | None = None) -> str:
+    """The plain hook, with the trusted project root baked in (SCRUM-76)."""
+    return _rooted(PRE_PUSH_HOOK_SCRIPT, project_root)
 
 
 # NOT "$@" — git invokes pre-push as `pre-push <remote-name> <remote-url>`
@@ -482,8 +534,15 @@ def gate_hook_status(repo_root: Path) -> HookStatus:
     )
 
 
-def install_pre_push_hook(repo_root: Path, force: bool = False) -> InstallResult:
+def install_pre_push_hook(
+    repo_root: Path, force: bool = False, project_root: Path | None = None
+) -> InstallResult:
     """Write this repository's `pre-push` hook, and make sure git reads it.
+
+    `project_root` is the project whose rules the gate should trust, baked
+    into the hook (SCRUM-76 — see `_ROOTED` for why it is baked and what
+    that does and does not protect). None writes the pre-SCRUM-76 hook,
+    which falls back to walking for a project marker.
 
     Refuses to overwrite an existing hook this module didn't install, unless
     `force=True` — a silently clobbered hook is exactly the kind of surprise
@@ -556,9 +615,9 @@ def install_pre_push_hook(repo_root: Path, force: bool = False) -> InstallResult
             )
 
     script = (
-        chained_pre_push_script(own_hooks)
+        chained_pre_push_script(own_hooks, project_root)
         if upstream is not None
-        else PRE_PUSH_HOOK_SCRIPT
+        else pre_push_script(project_root)
     )
     try:
         own_hooks.mkdir(parents=True, exist_ok=True)

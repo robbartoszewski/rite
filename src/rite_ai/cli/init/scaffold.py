@@ -583,7 +583,10 @@ def install_pre_push_hooks(
     installed: list[str] = []
     refused: list[str] = []
     for repo_dir in [project_root, *(project_root / m.path for m in modules)]:
-        result = install_pre_push_hook(repo_dir)
+        # SCRUM-76: every hook `rite init` writes carries the project root
+        # it was written for, which is the one directory here that is
+        # certainly the Owner's.
+        result = install_pre_push_hook(repo_dir, project_root=project_root)
         if result.ok:
             installed.append(str(repo_dir))
         elif "is not a git repository" not in result.message:

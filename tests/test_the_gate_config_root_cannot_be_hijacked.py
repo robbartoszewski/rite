@@ -187,6 +187,168 @@ class TestWhatCountsAsInside:
         assert main_mod._inside(tmp_path / "x", tmp_path)
 
 
+class TestTheHookCarriesTheTrustedRoot:
+    """⚠ **The finding that showed the first fix did not hold where the
+    ticket says it matters.** The installed `pre-push` is `exec rite publish
+    pre-push` and runs with no environment of its own, so
+    `RITE_PROJECT_ROOT` reached it only if it happened to be exported.
+    Measured 2026-10-08: the planted marker plus a matching suppression
+    exits 2 with the variable set and **0 without it**. So the hook bakes
+    the answer in."""
+
+    def test_the_plain_hook_names_the_project(self, tmp_path):
+        from rite_ai.gate.hook import pre_push_script
+
+        script = pre_push_script(tmp_path / "proj")
+
+        assert f"--project-root '{tmp_path / 'proj'}'" in script
+
+    def test_the_chained_hook_does_too(self, tmp_path):
+        """The redirect form must not be the one that forgets."""
+        from rite_ai.gate.hook import chained_pre_push_script
+
+        script = chained_pre_push_script(tmp_path / "hooks", tmp_path / "proj")
+
+        assert f"--project-root '{tmp_path / 'proj'}'" in script
+        assert "rite publish pre-push --project-root" in script
+
+    def test_a_hook_written_without_one_is_unchanged(self, tmp_path):
+        """Every pre-SCRUM-76 hook, and any install that cannot tell which
+        project it is in: the old script, which falls back to the walk."""
+        from rite_ai.gate.hook import PRE_PUSH_HOOK_SCRIPT, pre_push_script
+
+        assert pre_push_script(None) == PRE_PUSH_HOOK_SCRIPT
+
+    def test_a_path_holding_a_quote_is_refused_not_escaped(self, tmp_path):
+        """⚠ The baked value becomes an `sh` word. A quote inside it would
+        end the quoting and turn the rest of the path into arguments, so
+        such a path gets the unrooted hook rather than a broken one."""
+        from rite_ai.gate.hook import PRE_PUSH_HOOK_SCRIPT, pre_push_script
+
+        assert pre_push_script(Path("/p/it's")) == PRE_PUSH_HOOK_SCRIPT
+
+    def test_the_installer_bakes_it(self, tmp_path, monkeypatch):
+        from rite_ai.gate.hook import install_pre_push_hook
+
+        project, module = _prepare_layout(tmp_path)
+        monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+
+        done = install_pre_push_hook(module, project_root=project)
+
+        assert done.ok, done.message
+        assert (
+            f"--project-root '{project}'"
+            in (module / ".git" / "hooks" / "pre-push").read_text()
+        )
+
+    def test_an_explicit_root_beats_every_marker(self, tmp_path, monkeypatch):
+        project, module = _prepare_layout(tmp_path)
+        _plant(module, ".rite/brief.yaml")
+
+        monkeypatch.chdir(module)
+        monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+
+        assert _gate_config_root(str(project)).resolve() == project.resolve()
+
+    def test_a_baked_root_that_is_no_longer_a_project_falls_back(
+        self, tmp_path, monkeypatch
+    ):
+        """⚠ Not obeyed. A project that moved or was renamed would
+        otherwise drop every suppression it declared, each coming back as a
+        blocking finding with a reason already written for it."""
+        project, module = _prepare_layout(tmp_path)
+        gone = tmp_path / "moved-away"
+
+        monkeypatch.chdir(module)
+        monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+
+        assert _gate_config_root(str(gone)).resolve() == project.resolve()
+
+
+class TestAMarkerBesideTheRepoDoesNotHijackEither:
+    """⚠ A Worker's repository lives at `<project>/workers/<name>/<module>`
+    and its boundary grants it the workspace above, so the marker need not
+    be committed at all — one `mkdir` beside the repo, which leaves
+    `git status` clean and SCRUM-62 with nothing to refuse."""
+
+    def _workspace(self, tmp_path: Path):
+        project = tmp_path / "proj"
+        (project / ".rite").mkdir(parents=True)
+        (project / ".rite" / "brief.yaml").write_text(
+            "project:\n  name: outer\n  role: owner\n"
+        )
+        workspace = project / "workers" / "alpha"
+        repo = workspace / "mod"
+        repo.mkdir(parents=True)
+        init_repo(repo)
+        write(repo, "a.py", "x = 1\n")
+        commit_all(repo, "base")
+        return project, workspace, repo
+
+    def test_an_uncommitted_marker_in_the_workspace_is_overruled(
+        self, tmp_path, monkeypatch
+    ):
+        project, workspace, repo = self._workspace(tmp_path)
+        (workspace / ".rite").mkdir()
+        (workspace / ".rite" / "brief.yaml").write_text(
+            "project:\n  name: mine\n  role: owner\n"
+        )
+
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+
+        assert _gate_config_root().resolve() == project.resolve()
+
+    def test_and_the_hooks_explicit_root_overrules_it_too(self, tmp_path, monkeypatch):
+        project, workspace, repo = self._workspace(tmp_path)
+        (workspace / ".rite").mkdir()
+        (workspace / ".rite" / "brief.yaml").write_text(
+            "project:\n  name: mine\n  role: owner\n"
+        )
+
+        monkeypatch.chdir(repo)
+        monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+
+        assert _gate_config_root(str(project)).resolve() == project.resolve()
+
+
+class TestANamedProjectOnlyGovernsItsOwnTree:
+    """⚠ The same "rules nobody chose" failure pointing the other way. The
+    named project overruled a marker ANYWHERE, so an ambient or stale
+    `RITE_PROJECT_ROOT` took an unrelated repository's own Owner-reviewed
+    suppressions away from it — measured 2026-10-08, the same tree going
+    from exit 0 to exit 2."""
+
+    def test_an_unrelated_repository_keeps_its_own_rules(self, tmp_path, monkeypatch):
+        project, _module = _prepare_layout(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        init_repo(elsewhere)
+        write(
+            elsewhere,
+            ".rite/brief.yaml",
+            "project:\n  name: own\n  role: owner\n",
+        )
+        write(elsewhere, "a.py", "x = 1\n")
+        commit_all(elsewhere, "base")
+
+        monkeypatch.chdir(elsewhere)
+        monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+
+        assert _gate_config_root().resolve() == elsewhere.resolve()
+
+    def test_but_a_repository_inside_it_does_not(self, tmp_path, monkeypatch):
+        """The control: containment must not re-open the hijack for the tree
+        the named project actually holds."""
+        project, module = _prepare_layout(tmp_path)
+        _plant(module, ".rite/brief.yaml")
+
+        monkeypatch.chdir(module)
+        monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+
+        assert _gate_config_root().resolve() == project.resolve()
+
+
 class TestTheLayoutsThatMustKeepWorking:
     """⚠ A fix that pinned the root by breaking `rite prepare` would be
     worse than the hole: every suppression the project declared would come

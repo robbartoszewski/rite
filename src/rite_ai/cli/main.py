@@ -292,7 +292,7 @@ def _gate_root() -> Path:
     return toplevel if toplevel is not None else Path.cwd()
 
 
-def _gate_config_root() -> Path:
+def _gate_config_root(explicit: str | Path | None = None) -> Path:
     """Where the gate reads `.rite/config.yaml`, `gitleaks.toml` and
     `gitleaksignore` from — the rite PROJECT, which is a different question
     from which tree to scan and was for a long time the same variable.
@@ -350,20 +350,49 @@ def _gate_config_root() -> Path:
     inner repository loses a convenience it cannot be trusted to assert, and
     the Owner keeps a way to grant it.
 
+    🔴 **AND THE HOOK CARRIES IT (`explicit`), because it has no
+    environment of its own.** The installed `pre-push` is `exec rite publish
+    pre-push`, so `RITE_PROJECT_ROOT` reached it only if it happened to be
+    exported — measured 2026-10-08, the planted marker plus a matching
+    suppression exits 2 with the variable set and **0 without it**, which is
+    the hijack on the very path the ticket is about. So the hook bakes
+    `--project-root` (`gate.hook._ROOTED`) and that answer wins over every
+    marker. A baked root that is no longer a project falls through to the
+    walk rather than being obeyed, because obeying it would drop every
+    suppression the project declared.
+
     The override still answers when there is no marker to find, which is the
     sandboxed case it was added for.
     """
     cwd = Path.cwd()
+    if explicit is not None:
+        told = Path(explicit).expanduser().resolve()
+        if _is_project(told):
+            return told
+        # ⚠ A baked root that is no longer a project is DETECTED rather than
+        # obeyed: the project moved, or was renamed. Obeying it would drop
+        # every suppression it declared and turn each into a blocking
+        # finding with a reason already written for it. Fall through to the
+        # walk, and `_gate_root_note` says which tree answered.
+        explicit = None
     override = os.environ.get(PROJECT_ROOT_ENV)
     named = Path(override).expanduser().resolve() if override else None
     scanned = _gate_root() if named is not None else None
+    # ⚠ The named project overrules a marker only inside the tree it
+    # actually CONTAINS. Without that, an ambient or stale
+    # `RITE_PROJECT_ROOT` took an unrelated repository's own Owner-reviewed
+    # suppressions away from it — measured 2026-10-08, the same tree going
+    # from exit 0 to exit 2 — which is the same "rules nobody chose"
+    # failure as the hijack, pointing the other way.
+    governs = named is not None and _inside(scanned, named)
     for parent in [cwd, *cwd.parents]:
         if not _is_project(parent):
             continue
-        if named is not None and _inside(parent, scanned):
-            # SCRUM-76: this marker is in the tree being scanned, so whoever
-            # can commit here wrote it. rite was told which project governs;
-            # that stands.
+        if governs:
+            # SCRUM-76: this marker is somewhere the named project's own
+            # parties can write — the scanned repository or a directory of
+            # the Worker's workspace above it. rite was told which project
+            # governs; that stands.
             return named
         return parent
     if named is not None:
@@ -4837,7 +4866,9 @@ def publish_install_hook(force: bool) -> None:
     """
     from rite_ai.gate.hook import install_pre_push_hook
 
-    result = install_pre_push_hook(_gate_root(), force=force)
+    result = install_pre_push_hook(
+        _gate_root(), force=force, project_root=_gate_config_root()
+    )
     # `install_pre_push_hook` already phrases both outcomes for a human
     # ("installed <path>" / the full reason it refused) — don't re-prefix it.
     click.echo(result.message, err=not result.ok)
@@ -4959,6 +4990,15 @@ def _warn_summary(report) -> str:
 @publish.command("check")
 @click.option("--rev-range", default=None, help="Git revision range to scan")
 @click.option(
+    "--project-root",
+    "project_root",
+    default="",
+    help="The project whose gate rules to trust (SCRUM-76). What the "
+    "installed pre-push hook passes, because a committed `.rite/brief.yaml` "
+    "could otherwise move the trusted suppression list onto the branch being "
+    "pushed. Wins over any project marker found by walking up.",
+)
+@click.option(
     "--ci-range",
     "ci_range",
     is_flag=True,
@@ -4980,7 +5020,9 @@ def _warn_summary(report) -> str:
         "stopped; on for CI, where an unexamined finding is worth failing."
     ),
 )
-def publish_check(rev_range: str | None, ci_range: bool, strict: bool) -> None:
+def publish_check(
+    rev_range: str | None, ci_range: bool, strict: bool, project_root: str
+) -> None:
     """Dry-run the publish gate — scan for secrets and local paths.
 
     Examples:
@@ -4992,7 +5034,7 @@ def publish_check(rev_range: str | None, ci_range: bool, strict: bool) -> None:
     from rite_ai.gate.gate import _partial_lines, scanned_line
 
     root = _gate_root()
-    config_root = _gate_config_root()
+    config_root = _gate_config_root(project_root or None)
     from rite_ai.gate import suppression
     from rite_ai.gate.suppression import stale_hint
 
@@ -5115,7 +5157,16 @@ def publish_check(rev_range: str | None, ci_range: bool, strict: bool) -> None:
 
 
 @publish.command("pre-push")
-def publish_pre_push() -> None:
+@click.option(
+    "--project-root",
+    "project_root",
+    default="",
+    help="The project whose gate rules to trust (SCRUM-76). What the "
+    "installed pre-push hook passes, because a committed `.rite/brief.yaml` "
+    "could otherwise move the trusted suppression list onto the branch being "
+    "pushed. Wins over any project marker found by walking up.",
+)
+def publish_pre_push(project_root: str) -> None:
     """Range-scoped scan for the `pre-push` git hook (reads stdin).
 
     Not meant to be typed by a human — this is what the installed
@@ -5130,7 +5181,7 @@ def publish_pre_push() -> None:
     from rite_ai.gate.hook import compute_pre_push_ranges
 
     root = _gate_root()
-    config_root = _gate_config_root()
+    config_root = _gate_config_root(project_root or None)
     lines = sys.stdin.read().splitlines()
 
     if not lines:
