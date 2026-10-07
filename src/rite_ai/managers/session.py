@@ -325,17 +325,12 @@ def _write_prompt(path: Path, prompt: str) -> None:
 
     🔴 SCRUM-69 round-3 review, measured: the Manager can replace
     `prompt.txt` with a link, and `write_text` then overwrote whatever it
-    pointed at (`~/.zshrc`, say) with the prompt. `O_NOFOLLOW` covers the
-    last component; the directory itself the Manager cannot replace. Raises
-    OSError (ELOOP for a link)."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    try:
-        os.fchmod(fd, 0o600)
-        data = prompt.encode("utf-8")
-        while data:
-            data = data[os.write(fd, data) :]
-    finally:
-        os.close(fd)
+    pointed at (`~/.zshrc`, say) with the prompt; and a FIFO there hung the
+    supervisor. An atomic replace (`own_dir.write_file`) replaces whatever
+    is at the name, link or FIFO, and never opens it."""
+    from rite_ai.managers import own_dir
+
+    own_dir.write_file(path, prompt, 0o600)
 
 
 def start(

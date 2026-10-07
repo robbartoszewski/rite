@@ -42,15 +42,11 @@ to hide a question can also simply not ask it.
 
 from __future__ import annotations
 
-import fcntl
 import json
-import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-
-from rite_ai.state import write_atomic
 
 LEDGER_FILENAME = "pending.json"
 FIRST_LINE_CHARS = 120
@@ -88,28 +84,25 @@ def _path(root: Path, manager: str) -> Path:
 def _locked(root: Path, manager: str):
     """One writer at a time: the relay, the check-in and `rite replies` all
     write, from different processes."""
+    # Through `own_dir`: the ledger and its lock are in the Manager's own
+    # directory, where it can plant a link or a FIFO (SCRUM-69 round 3).
+    from rite_ai.managers import own_dir
+
     path = _path(root, manager)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(
-        path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600
-    )
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    with own_dir.locked_file(path.with_suffix("")):
         yield _load(path)
-    finally:
-        os.close(fd)
 
 
 def _load(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    from rite_ai.managers import own_dir
+
+    return own_dir.load_json(path)
 
 
 def _save(root: Path, manager: str, data: dict) -> None:
-    write_atomic(_path(root, manager), json.dumps(data, indent=1) + "\n")
+    from rite_ai.managers import own_dir
+
+    own_dir.write_file(_path(root, manager), json.dumps(data, indent=1) + "\n")
 
 
 def _tracked(root: Path, manager: str, message) -> bool:

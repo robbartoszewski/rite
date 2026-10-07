@@ -166,7 +166,7 @@ def interrupted(root: Path, manager: str) -> list[str]:
 
 
 def _done(root: Path, manager: str, claim: str) -> None:
-    own_dir.unlink(root, manager, DIRNAME, claim)
+    own_dir.unlink_in(root, manager, DIRNAME, claim)
 
 
 ACTING = frozenset({STOP, DESTROY, RESTART})

@@ -522,11 +522,10 @@ def remembered_targets(project: Path, managers: list[str]) -> dict:
     for manager in managers:
         if not manager:
             continue
-        try:
-            path = manager_dir(project, manager) / "slack.json"
-            state = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
+        from rite_ai.managers import own_dir
+
+        # Through `own_dir`: a link or FIFO at it is never followed.
+        state = own_dir.load_json(manager_dir(project, manager) / "slack.json")
         known = state.get("known") if isinstance(state, dict) else None
         if isinstance(known, dict) and known:
             return known
@@ -1650,12 +1649,11 @@ class Listener:
         return manager_dir(self.project, self.manager) / "slack.json"
 
     def _state(self) -> dict:
+        from rite_ai.managers import own_dir
+
         path = self._state_path
-        try:
-            data = json.loads(path.read_text()) if path else {}
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
+        # Through `own_dir`: a link or FIFO at it is never followed.
+        return own_dir.load_json(path) if path else {}
 
     def posted(self) -> dict[str, dict]:
         """The relay's own record: outbox filename → where Slack put it.
@@ -1672,7 +1670,7 @@ class Listener:
         """Write the relay's state: what was posted, and how far each thread
         has been read — so a restart neither loses a thread nor re-delivers
         its replies."""
-        from rite_ai.state import write_atomic
+        from rite_ai.managers import own_dir
 
         path = self._state_path
         if path is None:
@@ -1685,7 +1683,6 @@ class Listener:
             for r in self.roots
         }
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
             state = {
                 "started": self._started,
                 "since": self.since,
@@ -1697,7 +1694,7 @@ class Listener:
                 "answered": dict(sorted(self._answered.items())[-POSTED_KEPT:]),
                 "ticked": dict(sorted(self._ticked.items())[-POSTED_KEPT:]),
             }
-            write_atomic(path, json.dumps(state, indent=1) + "\n")
+            own_dir.write_file(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
             self._problem(f"cannot record the relay's state: {e}")
 

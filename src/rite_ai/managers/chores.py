@@ -103,7 +103,7 @@ def take(root: Path, manager: str) -> list[tuple[Path, str]]:
 
 
 def _done(root: Path, manager: str, claim: Path) -> None:
-    own_dir.unlink(root, manager, CHORES_DIRNAME, claim.name)
+    own_dir.unlink_in(root, manager, CHORES_DIRNAME, claim.name)
 
 
 def _interrupted(root: Path, manager: str) -> list[Path]:

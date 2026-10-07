@@ -431,18 +431,18 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
         ";   away and put a link in its place, which rite (outside) and the next",
         ";   profile would then follow. Writes inside are unaffected.",
         f"(deny file-write* (literal {_quote(own)}))",
-        "; ...and no link is made in it, or in the outbox (SCRUM-69 round 3):",
+        "; ...and no link or FIFO is made in it, or in the outbox (SCRUM-69):",
         ";   rite reads both from outside, so what it finds there must be a",
         ";   file. Not the whole defence (a directory renamed in can carry one),",
         ";   which is why rite also opens everything there without following.",
         f"(deny file-write-create (require-all (subpath {_quote(own)})"
-        " (vnode-type SYMLINK)))",
+        " (require-any (vnode-type SYMLINK) (vnode-type FIFO))))",
         "; This Manager's mailbox, outside the project: its outbox only.",
         f"(allow file-read* (subpath {_quote(mail)}))",
         f"(allow file-read* file-write* (subpath {_quote(mail / OUTBOX)}))",
         f"(deny file-write* (literal {_quote(mail / OUTBOX)}))",
         f"(deny file-write-create (require-all (subpath {_quote(mail / OUTBOX)})"
-        " (vnode-type SYMLINK)))",
+        " (require-any (vnode-type SYMLINK) (vnode-type FIFO))))",
         f"(deny file-write* (subpath {_quote(mail / INBOX)}))",
     ]
 
@@ -468,14 +468,22 @@ def refuse_linked_manager_paths(root: Path, manager: str) -> None:
     from rite_ai.managers import manager_dir
     from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root, mailbox_dir
 
+    tmp = engine_tmp(root, manager)
+    # EVERY component of `engine_tmp`, not only its last: it sits in the
+    # project tree, which every Manager in the root can write, so a sibling
+    # could replace `.rite/user/enginetmp` itself with a link to a directory
+    # holding a `lead/` (SCRUM-69 follow-up review). On Linux the grant is
+    # made through a walk of the same components (`landlock.apply`).
+    tmp_chain = [
+        Path(root) / Path(*tmp.relative_to(root).parts[: i + 1])
+        for i in range(len(tmp.relative_to(root).parts))
+    ]
     for path in (
         manager_dir(root, manager),
         mail_root(root, manager),
         mailbox_dir(root, manager, OUTBOX),
         mailbox_dir(root, manager, INBOX),
-        # In `.rite/user/`, which every Manager in the root can write; on
-        # Linux a linked one would be granted (Landlock opens the path).
-        engine_tmp(root, manager),
+        *tmp_chain,
     ):
         if path.is_symlink():
             raise LinkedManagerPath(
@@ -787,11 +795,22 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
 def _own_subdirs(root: Path, manager: str) -> None:
     """Create a Manager's heredoc and drafts directories, outside its
     boundary (SCRUM-69). Shared with Landlock's `write_profile`."""
+    from rite_ai.managers import own_dir
     from rite_ai.managers.boundaries import heredoc_dir
     from rite_ai.managers.stdin_text import drafts_dir
 
     for path in (heredoc_dir(root, manager), drafts_dir(root, manager)):
-        path.mkdir(mode=0o700, exist_ok=True)
+        try:
+            # Through `own_dir`: one already there as a link is refused,
+            # never followed or created through.
+            with own_dir.directory(root, manager, path.name, create=True):
+                pass
+        except own_dir.NotARegularFile:
+            raise LinkedManagerPath(
+                f"refusing to start Manager {manager!r}: {path} is a link, "
+                "and rite never makes one there. Look at it, remove it, and "
+                "start again."
+            ) from None
 
 
 def limitations() -> tuple[str, ...]:

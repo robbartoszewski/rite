@@ -768,15 +768,15 @@ def _not_yet_reported(root: Path, manager: str, found: list[Refusal]) -> list[Re
         return found
     import json
 
-    from rite_ai.managers import manager_dir
-    from rite_ai.state import locked, write_atomic
+    from rite_ai.managers import manager_dir, own_dir
 
     path = manager_dir(root, manager) / REPORTED_FILE
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with locked(path):
+        # Through `own_dir`: in the Manager's own directory, where it can
+        # plant a link or a FIFO at this name (SCRUM-69 round 3).
+        with own_dir.locked_file(path):
             try:
-                seen = json.loads(path.read_text(encoding="utf-8"))
+                seen = json.loads(own_dir.read_file(path))
             except (OSError, ValueError):
                 seen = []
             seen = (
@@ -791,7 +791,7 @@ def _not_yet_reported(root: Path, manager: str, found: list[Refusal]) -> list[Re
             new_ids = [r.tool_use_id for r in fresh if r.tool_use_id]
             if new_ids:
                 kept = (seen + list(dict.fromkeys(new_ids)))[-REPORTED_KEPT:]
-                write_atomic(path, json.dumps(kept) + "\n")
+                own_dir.write_file(path, json.dumps(kept) + "\n")
             return fresh
     except OSError:
         # Cannot remember, so cannot dedupe: report rather than go silent. A

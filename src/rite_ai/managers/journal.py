@@ -74,7 +74,6 @@ capability is reachable and unannounced to the agent — the same class as
 
 from __future__ import annotations
 
-import os
 import string
 from dataclasses import dataclass
 from dataclasses import field as _field
@@ -477,22 +476,23 @@ def _write(root: Path, manager: str, kind: str, body: str) -> WriteResult:
     # ⚠ Appended AFTER redaction: this line is rite's own words, not pasted
     # output, and C7's redaction ate `RITE_MANAGER=planner` when it ran first.
     body = _redacted(body) + _section("recorded_from", _recorded_from(manager))
+    from rite_ai.managers import own_dir
+
     directory = journal_dir(root, manager)
-    directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     for attempt in range(50):
         suffix = "" if attempt == 0 else f"-{attempt}"
         path = directory / f"{stamp}{suffix}-{kind}.md"
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            # Through `own_dir`: a `journal/` that is a link (or holds one)
+            # is never written through (SCRUM-69 round 3).
+            own_dir.create(root, manager, f"{directory.name}/{path.name}", body)
         except FileExistsError:
             continue
         except OSError as e:
             return WriteResult(
                 False, f"could not write the journal entry to {path}: {e}"
             )
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(body)
         return WriteResult(True, path=path)
     return WriteResult(
         False,
@@ -630,14 +630,29 @@ def export(root: Path, manager: str, destination: Path) -> Exported:
     different content refuses the whole export, naming it, so nothing
     half-exported is left behind. An identical file is counted and skipped.
     """
-    import filecmp
-    import shutil
+    from rite_ai.managers import own_dir
 
+    # 🔴 Through `own_dir` (SCRUM-69 follow-up review, measured): a `journal/`
+    # moved in holding a link had `copy2` copy a file the Manager cannot read
+    # into the project, where it can. Only regular files are exported.
     source = journal_dir(root, manager)
-    entries = sorted(source.glob("*.md")) if source.is_dir() else []
+    texts: dict[str, str] = {}
+    try:
+        names = own_dir.names(root, manager, source.name, ".md")
+    except OSError:
+        names = []
+    for name in names:
+        try:
+            texts[name] = own_dir.read(root, manager, source.name, name, 1 << 24)
+        except OSError:
+            continue
+    entries = [source / name for name in texts]
     for entry in entries:
         there = destination / entry.name
-        if there.exists() and not filecmp.cmp(entry, there, shallow=False):
+        if (
+            there.exists()
+            and there.read_text(encoding="utf-8", errors="replace") != texts[entry.name]
+        ):
             return Exported(
                 source=source,
                 refused=(
@@ -653,6 +668,6 @@ def export(root: Path, manager: str, destination: Path) -> Exported:
         if there.exists():
             out.already_there.append(entry.name)
             continue
-        shutil.copy2(entry, there)
+        there.write_text(texts[entry.name], encoding="utf-8")
         out.copied.append(entry.name)
     return out

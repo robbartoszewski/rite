@@ -63,9 +63,11 @@ def test_the_prompt_is_never_written_through_a_link(project, victim):
     own.mkdir(parents=True)
     (own / PROMPT_FILE).symlink_to(victim)
     before = victim.read_text()
-    with pytest.raises(OSError):
-        _write_prompt(own / PROMPT_FILE, "the cycle's prompt")
+    _write_prompt(own / PROMPT_FILE, "the cycle's prompt")
     assert victim.read_text() == before
+    # The link was REPLACED by an atomic rename, never written through.
+    assert not (own / PROMPT_FILE).is_symlink()
+    assert (own / PROMPT_FILE).read_text() == "the cycle's prompt"
 
 
 def test_control_the_prompt_is_written_0600(project):
@@ -149,7 +151,8 @@ def test_a_planted_link_in_requests_is_set_aside_and_told(project, victim):
     assert any("not JSON" in line for line in told), told
     assert broker.queued(project, "lead") is False
     assert victim.exists()
-    assert (where / "1.json.refused").is_symlink()
+    (aside,) = where.glob("1.json.refused-*")
+    assert aside.is_symlink(), "kept, for a person to look at"
 
 
 def test_a_linked_engine_tmp_stops_the_launch(project, tmp_path):

@@ -91,11 +91,10 @@ def _ledger_path(root: Path, manager: str) -> Path:
 
 
 def _load(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    # Through `own_dir`: a link or FIFO at the ledger is never followed.
+    from rite_ai.managers import own_dir
+
+    return own_dir.load_json(path)
 
 
 def _store(path: Path, data: dict) -> str:
@@ -110,11 +109,10 @@ def _store(path: Path, data: dict) -> str:
     way and has the same hole — noted rather than changed here, because that
     is its module's call to make.
     """
-    from rite_ai.state import write_atomic
+    from rite_ai.managers import own_dir
 
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_atomic(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
+        own_dir.write_file(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
     except OSError as e:
         return f"{path.name} could not be written: {e}"
     return ""

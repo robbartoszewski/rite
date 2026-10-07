@@ -186,6 +186,14 @@ def abi() -> int:
     return result if result > 0 else 0
 
 
+MANAGER_OWNED_WITHHELD = (
+    A_MAKE_SYM | A_MAKE_FIFO | A_MAKE_CHAR | A_MAKE_BLOCK | A_MAKE_SOCK | A_REFER
+)
+"""Rights a Manager does not get in its own directory or outbox (SCRUM-69
+follow-up review): rite reads and writes there from outside every boundary,
+so only regular files and directories made there belong there."""
+
+
 def _handled(level: int) -> int:
     """Which access rights this kernel will take charge of.
 
@@ -500,6 +508,22 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
                 engine_tmp(root, manager),
             )
         ],
+        # ⚠ And in these two, no link, FIFO or device is made, and nothing is
+        # moved in from elsewhere (REFER): rite works there from outside every
+        # boundary (`own_dir`), and a directory moved in from the project
+        # could carry a link (SCRUM-69 follow-up review). The seatbelt
+        # profile refuses the same.
+        "manager_owned": [str(manager_dir(root, manager)), str(mail / OUTBOX)],
+        # Walked from the project, one component at a time without following
+        # a link, and granted through that walk's own descriptor: every
+        # component of `engine_tmp` sits in the project tree, which every
+        # Manager in the root can write.
+        "walked_from_project": [
+            [
+                str(engine_tmp(root, manager)),
+                str(engine_tmp(root, manager).relative_to(root)),
+            ],
+        ],
         # Read-only although they sit under a granted tree elsewhere: an agent
         # that can rewrite git config can change what every later commit
         # claims.
@@ -754,16 +778,47 @@ def why_it_was_refused(root: Path, manager: str) -> str:
 FILE_ONLY = A_EXECUTE | A_READ_FILE | A_WRITE_FILE | A_TRUNCATE
 
 
+def _walk_no_follow(base: str, rel: str) -> int:
+    """`base/rel` opened `O_PATH`, every component of `rel` without following
+    a link and required to be a directory. Raises OSError otherwise."""
+    fd = os.open(base, os.O_PATH | os.O_CLOEXEC | os.O_DIRECTORY)
+    try:
+        for part in Path(rel).parts:
+            nxt = os.open(
+                part,
+                os.O_PATH | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=fd,
+            )
+            os.close(fd)
+            fd = nxt
+            if not stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(
+                    f"refusing to grant {base}/{rel}: {part} is a link, not "
+                    "rite's directory"
+                )
+        return os.dup(fd)
+    finally:
+        os.close(fd)
+
+
 def _add_rule(
-    ruleset_fd: int, path: str, access: int, *, no_follow: bool = False
+    ruleset_fd: int,
+    path: str,
+    access: int,
+    *,
+    no_follow: bool = False,
+    opened: int | None = None,
 ) -> None:
-    if not os.path.isdir(path):
+    if opened is None and not os.path.isdir(path):
         access &= FILE_ONLY
     if access == 0:
         # Nothing this node can be granted; a zero-right rule is also EINVAL.
         return
-    flags = os.O_PATH | os.O_CLOEXEC | (os.O_NOFOLLOW if no_follow else 0)
-    fd = os.open(path, flags)
+    if opened is not None:
+        fd = opened
+    else:
+        flags = os.O_PATH | os.O_CLOEXEC | (os.O_NOFOLLOW if no_follow else 0)
+        fd = os.open(path, flags)
     try:
         if no_follow and not stat.S_ISDIR(os.fstat(fd).st_mode):
             raise OSError(
@@ -819,6 +874,9 @@ def apply(policy: dict) -> int:
     try:
         readonly = {str(p) for p in policy.get("readonly_overrides", ())}
         no_follow = {str(p) for p in policy.get("no_follow", ())}
+        owned = {str(p) for p in policy.get("manager_owned", ())}
+        project = str(policy.get("project", ""))
+        walked = {str(p): rel for p, rel in policy.get("walked_from_project", ())}
         for path in policy.get("readable", ()):
             if os.path.exists(path):
                 _add_rule(ruleset_fd, path, READ_ONLY & _handled(level))
@@ -831,6 +889,17 @@ def apply(policy: dict) -> int:
             # the only one that names it, and the writable trees above never
             # name these two directly.
             access = READ_ONLY if path in readonly else _handled(level)
+            if path in owned:
+                access &= ~MANAGER_OWNED_WITHHELD
+            if path in walked:
+                _add_rule(
+                    ruleset_fd,
+                    path,
+                    access,
+                    no_follow=True,
+                    opened=_walk_no_follow(project, walked[path]),
+                )
+                continue
             _add_rule(ruleset_fd, path, access, no_follow=path in no_follow)
         for path in readonly:
             if os.path.exists(path):

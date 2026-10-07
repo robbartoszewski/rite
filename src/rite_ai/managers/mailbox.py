@@ -71,17 +71,14 @@ delivered, because nothing can say who wrote it.
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import itertools
 import json
 import os
-import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rite_ai.managers.own_dir import NotARegularFile as _NotARegularFile
 from rite_ai.names import UnsafeName, require_safe_name
 from rite_ai.state import write_atomic
 
@@ -522,36 +519,6 @@ def _messages(root: Path, manager: str, box: str) -> list[Path]:
     return sorted(where.glob("*.json")) if where.is_dir() else []
 
 
-class _NotAMessage(_NotARegularFile):
-    """A box entry that is a link, a directory or not a regular file."""
-
-
-def _read_regular(path: Path) -> str:
-    """A message file's text, never through a link.
-
-    🔴 SCRUM-69 round-3 review, measured: the Manager can put a link in its
-    own outbox, and the supervisor, reading it outside every boundary,
-    relayed whatever JSON file the link named as the Manager's message. The
-    box itself cannot be replaced (the profile denies writing it), so
-    `O_NOFOLLOW` on the last component is enough; a link reads as nothing,
-    and is removed with the rest of what was taken."""
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError as e:
-        if e.errno in (errno.ELOOP, errno.EISDIR, errno.ENXIO):
-            raise _NotAMessage(str(path)) from None
-        raise
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise _NotAMessage(str(path))
-        chunks = []
-        while chunk := os.read(fd, 1 << 16):
-            chunks.append(chunk)
-        return b"".join(chunks).decode("utf-8", "replace")
-    finally:
-        os.close(fd)
-
-
 def read(root: Path, manager: str, box: str) -> list[Message]:
     """Everything waiting in a box, in send order. Never raises.
 
@@ -559,17 +526,25 @@ def read(root: Path, manager: str, box: str) -> list[Message]:
     read: this is called from the supervisor's wait loop, and one bad file
     must not stop a Manager from receiving the others or take the run down.
     """
+    from rite_ai.managers import own_dir
+
+    # 🔴 Through `own_dir` (SCRUM-69 round 3 and its follow-up, measured): a
+    # link in the outbox relayed any readable JSON file as the Manager's
+    # message, and a directory named `5.json` woke the loop for ever. A link,
+    # FIFO or directory is never opened: it is set aside, under a name no
+    # glob here matches, and kept for a person to look at.
+    area = {OUTBOX: own_dir.OUTBOX, INBOX: own_dir.INBOX}.get(box)
     out: list[Message] = []
     for path in _messages(root, manager, box):
         try:
-            data = json.loads(_read_regular(path))
-        except _NotAMessage:
-            # Removed, never followed: left, it would be met, and wake the
-            # loop (`waiting`), every two seconds for ever.
-            try:
-                path.unlink()
-            except OSError:
-                pass
+            if area is None:
+                raw = own_dir.read_file(path)
+            else:
+                raw = own_dir.read_text(root, manager, path.name, area=area)
+            data = json.loads(raw)
+        except own_dir.NotARegularFile:
+            if area is not None:
+                own_dir.set_aside(root, manager, path.name, area=area)
             continue
         except (OSError, ValueError):
             continue

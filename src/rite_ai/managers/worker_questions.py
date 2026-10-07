@@ -147,18 +147,17 @@ def _ledger_path(root: Path, manager: str) -> Path:
 
 
 def _load(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    # Through `own_dir`: a link or FIFO planted at the ledger is never
+    # followed (SCRUM-69 round 3).
+    from rite_ai.managers import own_dir
+
+    return own_dir.load_json(path)
 
 
 def _store(path: Path, data: dict) -> None:
-    from rite_ai.state import write_atomic
+    from rite_ai.managers import own_dir
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
+    own_dir.write_file(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
 
 
 def _ticket_of(root: Path, sandbox: str) -> str:
@@ -235,10 +234,7 @@ def _say_once(root: Path, manager: str, say, line: str) -> None:
     say(line)
     told["_last_problem"] = line
     try:
-        from rite_ai.state import write_atomic
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_atomic(path, json.dumps(told, indent=1, sort_keys=True) + "\n")
+        _store(path, told)
     except OSError:
         pass
 
