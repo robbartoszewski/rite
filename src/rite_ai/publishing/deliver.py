@@ -654,6 +654,26 @@ def _release_claims(root: Path, worker: str) -> str:
     return f"released {n} claim(s)"
 
 
+def _gate_suppression_verdict(repo: Path, base: str, branch: str):
+    """Which publish-gate files this branch changed (SCRUM-62), or a string
+    saying why that could not be established.
+
+    Read from the COLLECTED branch rather than from the sandbox's clone:
+    that is the history the push would publish, so it is the history the
+    question is about. A Worker that committed the change and then reverted
+    it still authored it, and `git log --name-only` over the range reports
+    both commits — which is the answer wanted here, because the entry was in
+    a published commit either way.
+    """
+    from rite_ai.gate import pattern_scan
+    from rite_ai.publishing import gate_suppression
+
+    touched = pattern_scan.files_touched_by(repo, f"{base}..{branch}")
+    if isinstance(touched, pattern_scan.ScanError):
+        return touched.message
+    return gate_suppression.inspect(touched)
+
+
 def _worker_modules(root: Path, worker: str, modules: list[Module]) -> list[Module]:
     from rite_ai.config.parse import ParseError, parse_worker
 
@@ -834,6 +854,50 @@ def deliver(
             outcomes.append(got)
             continue
         where = f"committed locally on {got} in {module.path}"
+
+        # 🔴 **SCRUM-62. A Worker may not edit the gate that governs it.**
+        # Checked AFTER the collect, deliberately, and on the same branch the
+        # push would use: the work must reach the host so the Owner can look
+        # at the change, and a refusal that lost it would teach a Worker to
+        # try again without the change — which is to say, to hide it. The
+        # shape is S31's host-measurement hold below: collected, not pushed.
+        suppression_verdict = _gate_suppression_verdict(
+            root / module.path, module.branch, got
+        )
+        if isinstance(suppression_verdict, str):
+            # The paths could not be listed, so rite cannot say whether the
+            # branch touches them. Not pushed: this is a governance control,
+            # and "could not check" is not "nothing to check".
+            outcomes.append(
+                Outcome(
+                    module.name,
+                    ticket,
+                    False,
+                    f"rite could not tell whether {worker} changed the publish "
+                    f"gate's own configuration on this branch "
+                    f"({suppression_verdict}); {where}, not pushed",
+                    "Look at the branch yourself, then deliver again",
+                )
+            )
+            continue
+        if suppression_verdict.refused:
+            from rite_ai.publishing import gate_suppression
+
+            outcomes.append(
+                Outcome(
+                    module.name,
+                    ticket,
+                    False,
+                    gate_suppression.refusal(
+                        suppression_verdict, worker=worker, ticket=ticket
+                    )
+                    + f" It is {where}.",
+                    gate_suppression.how_the_owner_decides(
+                        suppression_verdict, ticket=ticket
+                    ),
+                )
+            )
+            continue
         if diverged:
             was = then["strategy"] if isinstance(then, dict) else "unrecorded"
             is_now = now.strategy if now is not None else "unreadable"
