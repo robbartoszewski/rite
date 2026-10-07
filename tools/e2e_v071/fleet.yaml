@@ -1,0 +1,71 @@
+# The v0.7.1 acceptance gate's fleet and run settings (docs/design/V071_DOGFOOD_FIXES.md §4.2).
+# Everything the harness creates is named from `project_name` + the run id, so nothing it
+# touches can collide with the yoloAI dogfood, Bentora, or any other rite project.
+
+project_name: e2e-v071
+
+github:
+  owner: robbartoszewski
+  # The board (GitHub issues) AND the PR target: rite has no offline board, and
+  # `publish.strategy: pull_request` needs a GitHub origin. One private repo per run,
+  # created only by `harness.py setup --create-repo` (an outward-facing action).
+  repo_prefix: rite-e2e-v071-
+  # The GitHub App rite opens PRs with (the yoloAI dogfood's IDs). Its installation
+  # must include the run's new repo: add it in the App's installation settings, or
+  # install on all repositories. `rite doctor` (the last step of setup) checks it.
+  app_id: "5156044"
+  installation_id: "167030531"
+
+managers:
+  - name: lead            # Claude; the Owner (holds `route`) and the plan reviewer (plan-review)
+    preset: lead
+  - name: planner         # writes the GPU Worker's plans (decompose); §3.3/§3.3b
+    preset: planner
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+workers:
+  - name: alpha           # the Claude Worker
+    manager: lead
+  - name: gpu1            # the GPU Worker, driven by the local tier under a Claude Manager (SCRUM-72)
+    manager: lead
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+# Shortened so a stalled Worker is noticed in minutes, not the default 30.
+heartbeat:
+  interval_minutes: 2
+  stall_threshold: 2
+
+run:
+  deadline_minutes: 240        # the whole gate; past it, every unmet check FAILs
+  poll_seconds: 30
+  # Whether `planner` gets its own `rite start`. The plan (§3.3) says this is to be
+  # confirmed while building SCRUM-72: if the supervisor drives the planner's decompose
+  # step itself, set this false. Either way the harness records which it did.
+  start_planner_loop: true
+  kill_after_minutes: 3        # how long the Claude Worker works before its sandbox is killed
+  timezone: Europe/Warsaw
+
+yoloai:
+  # DF16: the Worker sandbox escape through a host tmux socket. The run uses the patched
+  # build ("-broad"), first on PATH; preflight also runs the WRITEUP #35 probe against it.
+  patched_bin_dir: ~/.local/opt/yoloai-0.11.0-broad
+  patched_version_marker: "-broad"
+
+# What the fixed build must offer before `run` will start (no partial fleet against
+# half-built fixes). Each is probed, not assumed. min_version: set it to the RC that
+# carries the merged fixes once it is cut.
+fixed_build:
+  min_version: ""
+  probes:
+    - {fix: SCRUM-69, argv: [reply, --help], expect: "--from-file"}
+    - {fix: SCRUM-59, argv: [request, --help], expect: "restart"}
+    - {fix: SCRUM-72, argv: [plan, --help], expect: "approve"}
+    - {fix: SCRUM-64, python: "import rite_ai.managers.reconcile"}
