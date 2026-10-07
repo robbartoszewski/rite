@@ -55,10 +55,25 @@ from dataclasses import dataclass
 
 RITE_DIR = ".rite"
 
-GOVERNING_FILES = frozenset({"gitleaksignore", "gitleaks.toml", "config.yaml"})
+SUPPRESSION_FILE = "gitleaksignore"
+RULESET_FILE = "gitleaks.toml"
+CONFIG_FILE = "config.yaml"
+
+GOVERNING_FILES = frozenset({SUPPRESSION_FILE, RULESET_FILE, CONFIG_FILE})
 """Names inside a `.rite/` directory that decide what the publish gate
 finds. See the module docstring for why each is here and why a repo-root
 `.gitleaks.toml` is not."""
+
+GATE_SECTION = "publish_gate"
+"""The only part of `config.yaml` this is about.
+
+⚠ **`config.yaml` is NOT refused whole-file**, and the first version of this
+was. That file carries the ticket backend, the publish strategy, the
+schedule and the credential namespace, so refusing any change to it meant a
+Worker given a ticket to change a scheduler window could never deliver —
+with no override, since `by_user` is deliberately not one. Found by review,
+2026-10-07. Only a change to `publish_gate` — `scan_patterns`, and
+`gitleaks_config`, which NAMES the ruleset file — is a change to the gate."""
 
 
 @dataclass(frozen=True)
@@ -72,30 +87,96 @@ class Verdict:
         return bool(self.files)
 
 
-def governs_the_gate(path: str) -> bool:
-    """Whether this repo-relative path is part of the gate's own
-    configuration.
+def _governing_name(path: str, ruleset: str = "") -> str:
+    """Which governing file this repo-relative path is, or "".
 
     Split on both separators: `git log --name-only` reports forward slashes
     on every platform, but a caller may hand over a path it built itself, and
     a check that silently stopped matching on Windows would be a governance
     control switched off by a path separator.
+
+    ⚠ **Compared case-INSENSITIVELY.** On a case-insensitive filesystem —
+    APFS by default, and NTFS — the gate opens `.RITE/gitleaksignore` as the
+    file it reads, while a case-sensitive comparison said it was not the
+    gate's. Measured on APFS, 2026-10-07: the gate parsed the entries and
+    this function answered False. The cost is refusing a `.RITE/` directory
+    that, on a case-sensitive filesystem, the gate genuinely would not read —
+    which is a Worker told to rename a directory nobody should have made,
+    against a governance control silently switched off by a capital letter.
+
+    `ruleset` is the project's configured ruleset path
+    (`publish_gate.gitleaks_config`) when it is known, since that key may
+    name any path and the gate reads whatever it names.
     """
-    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    cleaned = path.replace("\\", "/")
+    if ruleset and cleaned.casefold() == ruleset.replace("\\", "/").casefold():
+        return RULESET_FILE
+    parts = [p for p in cleaned.split("/") if p]
     for i, part in enumerate(parts[:-1]):
-        if part == RITE_DIR and parts[i + 1] in GOVERNING_FILES:
-            return True
-    return False
+        if part.casefold() != RITE_DIR:
+            continue
+        nxt = parts[i + 1].casefold()
+        for known in GOVERNING_FILES:
+            if nxt == known:
+                return known
+    return ""
 
 
-def inspect(paths) -> Verdict:
+def governs_the_gate(path: str, ruleset: str = "") -> bool:
+    """Whether this repo-relative path is part of the gate's own
+    configuration. See `_governing_name`."""
+    return bool(_governing_name(path, ruleset))
+
+
+def _gate_section(text: str | None):
+    """`publish_gate` as this `config.yaml` declares it, or None when the
+    file could not be read or parsed.
+
+    None is never treated as "unchanged": a config rite cannot parse is one
+    whose gate settings are unknown, and the caller refuses on it.
+    """
+    if text is None:
+        return None
+    try:
+        import yaml
+
+        loaded = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 - an unparseable config is "cannot tell"
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    return loaded.get(GATE_SECTION)
+
+
+def inspect(paths, *, ruleset: str = "", read_at=None) -> Verdict:
     """The gate-governing files among `paths`, sorted, as a `Verdict`.
 
     Takes paths rather than a git range so the policy is testable without a
     repository, the shape `broker.decide` uses for the same reason.
+
+    `ruleset` is `publish_gate.gitleaks_config` when known, so a project that
+    renamed or moved its ruleset is still covered.
+
+    `read_at(rev, path) -> str | None` reads one file at one revision, and is
+    what lets a `config.yaml` change be judged on its `publish_gate` section
+    rather than on the whole file. Without it a touched `config.yaml` is
+    refused, because "rite could not tell whether the gate's settings
+    changed" is not "they did not".
     """
-    found = sorted({p for p in paths or () if governs_the_gate(p)})
-    return Verdict(tuple(found))
+    found: set[str] = set()
+    for path in paths or ():
+        name = _governing_name(path, ruleset)
+        if not name:
+            continue
+        if name == CONFIG_FILE and read_at is not None:
+            before = _gate_section(read_at("base", path))
+            after = _gate_section(read_at("branch", path))
+            if before == after and before is not None:
+                # Some other key of the project config changed, which is
+                # ordinary work and none of this check's business.
+                continue
+        found.add(path)
+    return Verdict(tuple(sorted(found)))
 
 
 def refusal(verdict: Verdict, *, worker: str, ticket: str) -> str:

@@ -238,6 +238,162 @@ class TestTheDeliveryIsHeld:
         assert not got.ok
 
 
+class TestConfigYamlIsJudgedOnItsGateSection:
+    """⚠ **The first version refused `config.yaml` WHOLE-FILE**, so a Worker
+    given a ticket to change a scheduler window, the ticket backend or the
+    publish strategy could never deliver — with no override, since `by_user`
+    is deliberately not one. Found by review, 2026-10-07. Only
+    `publish_gate` is this check's business."""
+
+    def _reader(self, before: str | None, after: str | None):
+        return lambda which, _path: before if which == "base" else after
+
+    def test_an_unrelated_key_changing_is_not_a_gate_change(self):
+        verdict = gate_suppression.inspect(
+            [".rite/config.yaml"],
+            read_at=self._reader(
+                "publish_gate:\n  scan_patterns: []\nschedule:\n  timezone: UTC\n",
+                "publish_gate:\n  scan_patterns: []\nschedule:\n  timezone: CET\n",
+            ),
+        )
+
+        assert not verdict.refused
+
+    def test_a_scan_pattern_removed_is(self):
+        verdict = gate_suppression.inspect(
+            [".rite/config.yaml"],
+            read_at=self._reader(
+                "publish_gate:\n  scan_patterns: ['/Users/']\n",
+                "publish_gate:\n  scan_patterns: []\n",
+            ),
+        )
+
+        assert verdict.refused
+
+    def test_the_ruleset_being_pointed_elsewhere_is(self):
+        """`gitleaks_config` NAMES the ruleset file, so changing the key is
+        a suppression of everything the old ruleset found."""
+        verdict = gate_suppression.inspect(
+            [".rite/config.yaml"],
+            read_at=self._reader(
+                "publish_gate:\n  gitleaks_config: .rite/gitleaks.toml\n",
+                "publish_gate:\n  gitleaks_config: /dev/null\n",
+            ),
+        )
+
+        assert verdict.refused
+
+    @pytest.mark.parametrize("before,after", [(None, "x: 1\n"), ("x: 1\n", None)])
+    def test_a_config_it_cannot_read_is_refused(self, before, after):
+        """⚠ "could not tell whether the gate's settings changed" is not
+        "they did not"."""
+        verdict = gate_suppression.inspect(
+            [".rite/config.yaml"], read_at=self._reader(before, after)
+        )
+
+        assert verdict.refused
+
+    def test_with_no_reader_at_all_it_is_refused(self):
+        """A caller that cannot read the two ends has not answered the
+        question, and the half it answered is the one that lets it through."""
+        assert gate_suppression.inspect([".rite/config.yaml"]).refused
+
+    def test_the_other_two_files_need_no_reader(self):
+        """Any change to the suppression list or the ruleset is a change to
+        the gate; there is no section to compare."""
+        reader = self._reader("same\n", "same\n")
+        assert gate_suppression.inspect([SUPPRESSION], read_at=reader).refused
+        assert gate_suppression.inspect([".rite/gitleaks.toml"], read_at=reader).refused
+
+
+class TestItIsNotSwitchedOffByACapitalLetter:
+    """⚠ On a case-insensitive filesystem — APFS by default, and NTFS — the
+    gate opens `.RITE/gitleaksignore` as the file it reads, while the first
+    version of this said it was not the gate's. Measured on APFS,
+    2026-10-07: the gate parsed the entries and `governs_the_gate` answered
+    False."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".RITE/gitleaksignore",
+            ".rite/GitleaksIgnore",
+            ".Rite/GITLEAKS.TOML",
+            "YoloAI/.RITE/gitleaksignore",
+        ],
+    )
+    def test_the_case_does_not_matter(self, path):
+        assert gate_suppression.governs_the_gate(path)
+
+
+class TestARenamedRulesetIsStillTheRuleset:
+    """`publish_gate.gitleaks_config` may name any path, and the gate reads
+    whatever it names. Matching the basename alone left a project that
+    relocated its ruleset uncovered."""
+
+    def test_the_configured_path_counts(self):
+        assert gate_suppression.governs_the_gate(
+            "config/our-rules.toml", ruleset="config/our-rules.toml"
+        )
+
+    def test_and_the_default_still_does(self):
+        assert gate_suppression.governs_the_gate(
+            SUPPRESSION, ruleset="config/our-rules.toml"
+        )
+
+    def test_an_unrelated_toml_does_not(self):
+        assert not gate_suppression.governs_the_gate(
+            "pyproject.toml", ruleset="config/our-rules.toml"
+        )
+
+
+class TestWhatTheDeliveredHistoryHOLDS:
+    """⚠ The check sees the DELIVERED history, which is strategy-dependent.
+    An earlier docstring claimed add-then-revert was refused either way;
+    measured, `squash=True` delivers it. Both are pinned here, because the
+    divergence is real and the reason is sound: under squash the delivered
+    history is one commit carrying the branch TIP's tree, so a reverted
+    suppression is in nothing that gets published and there is nothing for
+    the Owner to approve."""
+
+    def _add_then_revert(self, tmp_path: Path, squash: bool):
+        p = Project(tmp_path, "commit", squash=squash)
+        p.start()
+        p.work(1)
+        _suppress(p.clone)
+        (p.clone / SUPPRESSION).unlink()
+        _git(p.clone, "add", "-A")
+        _git(p.clone, "commit", "-qm", "put it back")
+        return p, p.deliver()
+
+    def test_without_squash_the_intermediate_commit_is_published_so_it_counts(
+        self, tmp_path
+    ):
+        _p, got = self._add_then_revert(tmp_path, squash=False)
+
+        assert not got.ok
+
+    def test_with_squash_nothing_containing_it_is_delivered_so_it_does_not(
+        self, tmp_path
+    ):
+        _p, got = self._add_then_revert(tmp_path, squash=True)
+
+        assert got.ok, _notes(got)
+
+    def test_but_a_squashed_branch_that_KEEPS_it_is_still_refused(self, tmp_path):
+        """⚠ The control that matters most here: squash must not be a way
+        round the check, only a different delivered history."""
+        p = Project(tmp_path, "commit", squash=True)
+        p.start()
+        p.work(1)
+        _suppress(p.clone)
+
+        got = p.deliver()
+
+        assert not got.ok
+        assert SUPPRESSION in _notes(got)
+
+
 class TestTheControls:
     """⚠ Without these, "refuse every delivery" would pass this file."""
 

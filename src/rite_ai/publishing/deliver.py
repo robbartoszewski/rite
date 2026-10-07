@@ -654,16 +654,29 @@ def _release_claims(root: Path, worker: str) -> str:
     return f"released {n} claim(s)"
 
 
-def _gate_suppression_verdict(repo: Path, base: str, branch: str):
+def _gate_suppression_verdict(repo: Path, base: str, branch: str, config):
     """Which publish-gate files this branch changed (SCRUM-62), or a string
     saying why that could not be established.
 
     Read from the COLLECTED branch rather than from the sandbox's clone:
     that is the history the push would publish, so it is the history the
-    question is about. A Worker that committed the change and then reverted
-    it still authored it, and `git log --name-only` over the range reports
-    both commits — which is the answer wanted here, because the entry was in
-    a published commit either way.
+    question is about.
+
+    ⚠ **What it sees is the DELIVERED history, which is strategy-dependent,
+    and that is the honest answer rather than a leak in the check.** Under
+    `squash` the delivered history is one commit carrying the branch tip's
+    TREE, so a Worker that added a suppression and then reverted it delivers
+    nothing containing one — measured, 2026-10-07 — and there is nothing for
+    the Owner to approve and nothing to govern a later gate run. Without
+    squash every commit is published, so the intermediate one counts and the
+    same branch is refused. An earlier docstring here claimed both paths
+    refused, which was simply untrue; both behaviours are now pinned by
+    tests.
+
+    `config` supplies `publish_gate.gitleaks_config`, since that key may
+    name any path and the gate reads whatever it names, and lets a
+    `config.yaml` change be judged on its `publish_gate` section rather than
+    on the whole file.
     """
     from rite_ai.gate import pattern_scan
     from rite_ai.publishing import gate_suppression
@@ -671,7 +684,21 @@ def _gate_suppression_verdict(repo: Path, base: str, branch: str):
     touched = pattern_scan.files_touched_by(repo, f"{base}..{branch}")
     if isinstance(touched, pattern_scan.ScanError):
         return touched.message
-    return gate_suppression.inspect(touched)
+
+    ruleset = ""
+    gate_config = getattr(getattr(config, "publish_gate", None), "gitleaks_config", "")
+    if isinstance(gate_config, str):
+        ruleset = gate_config.strip()
+
+    def read_at(which: str, path: str) -> str | None:
+        """One file at one end of the range, or None when git cannot show
+        it. None is "cannot tell", never "unchanged" — `inspect` refuses on
+        it."""
+        rev = base if which == "base" else branch
+        shown = _run(["git", "show", f"{rev}:{path}"], repo)
+        return shown.stdout if shown.returncode == 0 else None
+
+    return gate_suppression.inspect(touched, ruleset=ruleset, read_at=read_at)
 
 
 def _worker_modules(root: Path, worker: str, modules: list[Module]) -> list[Module]:
@@ -862,7 +889,7 @@ def deliver(
         # try again without the change — which is to say, to hide it. The
         # shape is S31's host-measurement hold below: collected, not pushed.
         suppression_verdict = _gate_suppression_verdict(
-            root / module.path, module.branch, got
+            root / module.path, module.branch, got, config
         )
         if isinstance(suppression_verdict, str):
             # The paths could not be listed, so rite cannot say whether the
