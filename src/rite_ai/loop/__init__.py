@@ -112,6 +112,12 @@ class Cycle:
     workers: list[WorkerView] = field(default_factory=list)
     ready: list[str] = field(default_factory=list)
     """Ticket ids waiting on the board."""
+    finished: list[str] = field(default_factory=list)
+    """Tickets the board still labels as work but whose status says the work
+    is over (SCRUM-73), one line each. Said out loud and otherwise inert:
+    these are not `problems`, which make a cycle `unknown`, because a label
+    rite never removes is a board to tidy and not a board it failed to
+    read."""
     would_dispatch: list[tuple[str, str]] = field(default_factory=list)
     """(ticket, worker) this cycle would start, had it been allowed to."""
     contention: list[str] = field(default_factory=list)
@@ -534,16 +540,44 @@ def _ready(
 
     `refinement` is injectable for tests; None asks the predicate about
     `board` itself, one read per ticket.
+
+    ⚠ **A ticket in a terminal status is dropped before anything else looks
+    at it (SCRUM-73).** The labels a ticket carries cannot say the work is
+    over: `scheduled` and `ready-to-work` are only ever ADDED, so a Done
+    ticket keeps both for ever and this list offered KAN-28 twice after it
+    had been delivered and merged. The status is dropped here rather than
+    filtered further down so that nothing downstream sees it at all —
+    neither `cycle.ready`, nor `cycle.scheduled`, nor the refinement
+    predicate, which would otherwise read a round for finished work. Each
+    one is named in `cycle.finished` — **not** `cycle.problems`, which
+    `plan_cycle` reads as "the board could not be read" and answers
+    `unknown` to. A stale label is not an unreadable board, and a cycle that
+    went `unknown` over one would stop a run that has work to do.
+
+    This is the gate JIRA needs: a `TicketFilter(label=...)` read returns
+    every status there. On GitHub it is a belt — `gh issue list` defaults to
+    open issues, so a closed one never reaches this list — and it still
+    earns its place, because a GitHub status is read back as the name
+    `closed`, which `is_terminal` knows.
     """
     from rite_ai.coordination.ticket_labels import SCHEDULED
     from rite_ai.refinement import admit, rounds
     from rite_ai.refinement import status as refinement_status
     from rite_ai.tickets import BackendError, TicketFilter
+    from rite_ai.tickets.statuses import is_terminal
 
     result = board.list_tickets(TicketFilter(label=SCHEDULED))
     if isinstance(result, BackendError):
         cycle.problems.append(f"the board could not be read: {result.message}")
         return []
+    cycle.finished.extend(
+        f"{ticket.id} is {ticket.status or 'in a terminal status'} and still "
+        f"labelled `{SCHEDULED}`: not offered as ready. Its labels outlived "
+        "its work — rite only ever adds them."
+        for ticket in result
+        if is_terminal(ticket)
+    )
+    result = [ticket for ticket in result if not is_terminal(ticket)]
     cycle.scheduled = len(result)
     owner = _refiner_of(project, refiner)
     attempts = rounds.all_attempts(root, owner) if owner else {}
@@ -883,6 +917,9 @@ def format_cycle(cycle: Cycle) -> list[str]:
 
         lines.append("")
         lines.extend(suspect_lines(cycle.suspects))
+
+    for finished in cycle.finished:
+        lines.append(f"finished: {finished}")
 
     for problem in cycle.problems:
         lines.append(f"problem: {problem}")

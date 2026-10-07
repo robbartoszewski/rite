@@ -101,6 +101,8 @@ def decide(
     ticket_exists,
     running: int = 0,
     capacity: int = 0,
+    *,
+    read_ticket=None,
 ) -> Decision:
     """Whether this request may be honoured.
 
@@ -112,6 +114,14 @@ def decide(
     `known_worker` and `ticket_exists` are predicates rather than lookups so
     the policy can be tested without a board or a project on disk. The
     wiring supplies the real ones.
+
+    `read_ticket(id)` returns the board's ticket, so its STATUS can be read
+    (SCRUM-73). **None refuses every request**, the stance
+    `routing.decide` takes on the same value and for the same reason: a
+    Worker started on a ticket whose status nobody checked is how KAN-28 was
+    worked twice after it was Done. Existence alone cannot answer it — the
+    label a ticket carries is only ever added, so a finished ticket still
+    reads as scheduled for ever.
     """
     if len(raw.encode("utf-8", "replace")) > MAX_REQUEST_BYTES:
         return Decision(False, "the request is larger than a request needs to be")
@@ -178,6 +188,36 @@ def decide(
             f"ticket {ticket!r} is not on this project's board. Refused "
             "rather than started: a Worker launched against a ticket nobody "
             "can see does work nobody asked for.",
+        )
+
+    # ⚠ SCRUM-73. The ticket exists; whether its work is OVER is a separate
+    # question, and the one the a9 dogfood got wrong. Checked before the
+    # capacity bound so that a finished ticket is refused outright rather
+    # than queued for the next free slot.
+    if read_ticket is None:
+        return Decision(
+            False,
+            f"rite could not read the status of ticket {ticket!r}, so it "
+            "cannot tell whether that work is already finished. An "
+            "unreadable status is not a status that says 'not yet done'.",
+        )
+    found = read_ticket(ticket)
+    if found is None:
+        return Decision(
+            False,
+            f"ticket {ticket!r} could not be read back from the board, so "
+            "its status is unknown. Refused rather than started.",
+        )
+    from rite_ai.tickets.statuses import is_terminal
+
+    if is_terminal(found):
+        status = getattr(found, "status", "") or "a terminal status"
+        return Decision(
+            False,
+            f"ticket {ticket!r} is {status}: that work is finished, so no "
+            "Worker is started on it. A `ready-to-work` or `scheduled` "
+            "label does not say otherwise — rite only ever adds those, so a "
+            "delivered ticket keeps them.",
         )
 
     # ⚠ The bound is APPLIED here, not merely reported. A request that
@@ -353,25 +393,59 @@ def for_project(root: Path, board: object = None, capacity: int | None = None):
     def known_worker(worker: str) -> bool:
         return (Path(root) / "workers" / worker / "worker.yml").is_file()
 
-    def ticket_exists(ticket: str) -> bool:
+    def _read_from_board(ticket: str):
+        """The board's own entry for this id, or None.
+
+        ⚠ **One read answers both questions** — whether the ticket exists
+        and what its status is (SCRUM-73). Two reads could disagree, and the
+        pair "it exists" / "its status could not be read" is the shape that
+        would start a Worker on finished work.
+
+        ⚠ **Read with no filter, which means different things per backend,
+        and both of them refuse.** JIRA returns every status, so a Done
+        ticket is found here and refused *as finished*, by name. GitHub's
+        `issue list` defaults to open issues (measured: `list_tickets` adds
+        `--state` only for a filter), so a closed issue is not returned at
+        all and is refused as absent. A status filter is deliberately NOT
+        added to get a uniform answer: "all" is GitHub-only vocabulary, and
+        JIRA would turn it into `status = "all"` and fail the whole read.
+        """
         if board is None:
-            return False
+            return None
         lister = getattr(board, "list_tickets", None)
         if lister is None:
-            return False
+            return None
         try:
             found = lister()
         except Exception:
             # An error reaching the board is not an absent ticket. Refusing
-            # here reports it; returning True would start a Worker on a
-            # ticket nobody has confirmed exists.
-            return False
+            # here reports it; returning a ticket would start a Worker on
+            # one nobody has confirmed exists.
+            return None
         wanted = ticket.lstrip("#")
         for entry in found or ():
             given = getattr(entry, "id", None) or getattr(entry, "key", None)
             if given is not None and str(given).lstrip("#") == wanted:
-                return True
-        return False
+                return entry
+        return None
+
+    def _one_read():
+        """A reader whose answer is taken ONCE per request, and the
+        existence predicate that shares it.
+
+        Both questions `decide` asks — is it real, is it finished — are
+        answered from the same read. Built fresh for each request rather
+        than cached in this closure, which outlives many cycles: a board
+        answer held across cycles is a board answer that has gone stale.
+        """
+        seen: dict[str, object] = {}
+
+        def reader(ticket: str):
+            if ticket not in seen:
+                seen[ticket] = _read_from_board(ticket)
+            return seen[ticket]
+
+        return reader, lambda ticket: reader(ticket) is not None
 
     def running() -> int:
         """THIS project's running Workers, or -1 when they cannot be counted.
@@ -408,7 +482,15 @@ def for_project(root: Path, board: object = None, capacity: int | None = None):
                 "project is at its limit. An uncountable limit is not an "
                 "absent one."
             )
-        decision = decide(raw, known_worker, ticket_exists, live, bound)
+        reader, ticket_exists = _one_read()
+        decision = decide(
+            raw,
+            known_worker,
+            ticket_exists,
+            live,
+            bound,
+            read_ticket=reader,
+        )
         if decision.full:
             return NO_SLOT, decision.reason
         if not decision.ok or decision.request is None:

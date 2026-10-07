@@ -23,14 +23,20 @@ WATCHED_NAMES = {"start_worker", "distribute", "assign_to_manager"}
 KNOWN = {
     # --- readers of the backlog ------------------------------------------
     ("scheduler/__init__.py", "_assign_the_pool", "list_tickets"): (
-        "GATED: Rule 0 assigns only REFINED tickets and names the rest"
+        "GATED: Rule 0 assigns only REFINED tickets and names the rest; "
+        "Rule 1a (SCRUM-73) drops a ticket whose STATUS says the work is "
+        "over, whatever its labels say, and names it"
     ),
     ("loop/__init__.py", "_ready", "list_tickets"): (
         "GATED (TR2): only REFINED tickets are ready; the Owner's unrefined "
-        "ones are `refining` or `waiting-on-user`, never `idle`"
+        "ones are `refining` or `waiting-on-user`, never `idle`. GATED "
+        "(SCRUM-73): a ticket in a terminal status is dropped before any of "
+        "that and named in `cycle.finished`, so the brief cannot offer it"
     ),
     ("coordination/distribution.py", "distribute", "list_tickets"): (
-        "reads this Manager's own tickets; the handout below is gated"
+        "reads this Manager's own tickets; the handout below is gated, and "
+        "GATED (SCRUM-73) on the status before capacity, the module refusal "
+        "and the refinement check"
     ),
     ("refinement/instructions.py", "brief", "list_tickets"): (
         "the Owner's refinement brief (TR2): lists unrefined tickets to "
@@ -54,7 +60,8 @@ KNOWN = {
     ),
     ("refinement/view.py", "truth", "list_tickets"): (
         "`rite board list --ready` / `--needs-refinement`: reporting only, "
-        "from the predicate"
+        "from the predicate — which since SCRUM-73 answers False for a "
+        "ticket whose status says the work is over"
     ),
     # --- writes that give a ticket to someone ------------------------------
     ("scheduler/__init__.py", "_assign_the_pool", "assign_to_manager"): (
@@ -64,7 +71,8 @@ KNOWN = {
         "the Owner's label; its one caller is gated (Rule 0)"
     ),
     ("coordination/distribution.py", "distribute", "label"): (
-        "GATED: a Manager hands a Worker only a REFINED ticket"
+        "GATED: a Manager hands a Worker only a REFINED ticket, and "
+        "(SCRUM-73) never one whose status says the work is over"
     ),
     ("coordination/monitor.py", "_distribute", "distribute"): (
         "calls the gated handout; passes its injected check through"
@@ -87,7 +95,9 @@ KNOWN = {
     ),
     ("refinement/view.py", "reconcile_one", "label"): (
         "TR7: writes only `ready-to-work`, a view no gate reads; takes it off "
-        "an unrefined ticket and gives nothing to anyone"
+        "an unrefined ticket and gives nothing to anyone. Since SCRUM-73 it "
+        "also takes it off a ticket whose status says the work is over — the "
+        "one place in rite that REMOVES the label the a9 replay rode in on"
     ),
     ("cli/main.py", "board_label", "label"): (
         "`rite board label`: a hand write; nothing starts from a label, and "

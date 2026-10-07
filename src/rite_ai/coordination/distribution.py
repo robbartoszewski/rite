@@ -49,6 +49,7 @@ from rite_ai.coordination.ticket_labels import (
 )
 from rite_ai.schedule import current_moment, workers_at
 from rite_ai.tickets import BackendError, TicketFilter
+from rite_ai.tickets.statuses import is_terminal
 
 
 @dataclass
@@ -142,6 +143,20 @@ def distribute(
             f"could not read this Manager's tickets: {tickets.message}"
         )
     mine = [t for t in tickets if manager in (t.labels or [])]
+    # ⚠ **A ticket whose STATUS says the work is over is never handed out
+    # (SCRUM-73).** Before capacity, before the module refusal and before the
+    # refinement check, because none of those is the question: a Done ticket
+    # needs neither a Worker nor a return to the pool. A Manager's name can
+    # be put on a ticket by hand and a ticket can be finished after it was
+    # assigned, so the label alone cannot say. Held and said, never silent —
+    # this is the condition that had KAN-28 worked twice.
+    for ticket in mine:
+        if is_terminal(ticket):
+            result.held_back[ticket.id] = (
+                f"it is {ticket.status or 'in a terminal status'}: that work "
+                "is over, so no Worker is given it. Take the label off."
+            )
+    mine = [t for t in mine if not is_terminal(t)]
     if not mine:
         return result
 
