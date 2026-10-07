@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### rite runs no program a Worker's repository configures (host git hardening)
+
+rite runs git on the host inside repositories a Worker can write, and git
+runs programs those repositories configure — a filesystem-monitor command on
+`git status`, a diff program during a secret scan, commit hooks. A Worker
+could set one and have it run on your machine when rite next checked the
+repository. rite now forces those off for every git command it runs, whatever
+the repository's own settings say, while still committing under your identity.
+
 ### rite no longer follows links a Manager plants in its own directory
 
 rite reads and writes a Manager's directory and outbox from outside the

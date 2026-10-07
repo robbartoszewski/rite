@@ -449,8 +449,11 @@ def _looks_like_a_repo(root: Path) -> bool:
     import subprocess
 
     try:
+        from rite_ai.githost import hardened_git_env
+
         proc = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--git-dir"],
+            env=hardened_git_env(),
             capture_output=True,
             text=True,
             errors="replace",
@@ -529,9 +532,17 @@ def _count_commits(root: Path, rev_range: str | None) -> int | None:
 
     scope = rev_range_args(rev_range) if rev_range else publishable_scope(root)
     args = ["git", "rev-list", "--count", *scope]
+    from rite_ai.githost import hardened_git_env
+
     try:
         proc = subprocess.run(
-            args, cwd=root, capture_output=True, text=True, errors="replace", timeout=60
+            args,
+            cwd=root,
+            env=hardened_git_env(),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=60,
         )
     except (OSError, subprocess.SubprocessError):
         return None

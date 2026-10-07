@@ -140,7 +140,14 @@ def _run_gitleaks_json(
         default_config = Path(cfg.name)
         args = [*args, "--config", str(default_config)]
     # Nothing in the caller's environment chooses the ruleset either.
-    env = {k: v for k, v in os.environ.items() if k not in _IGNORED_ENV}
+    from rite_ai.githost import hardened_git_env
+
+    # gitleaks runs `git log -p` internally; fsmonitor and hooks off there
+    # too (SCRUM-75). The textconv a repo can define still runs under -p,
+    # which is why the gate scans a config-free copy, not the live repo.
+    env = hardened_git_env(
+        {k: v for k, v in os.environ.items() if k not in _IGNORED_ENV}
+    )
     try:
         full_args = [
             binary,
@@ -226,8 +233,14 @@ def scan_history(
     args = ["detect", "--source", str(root)]
     if config_path is not None:
         args += ["--config", str(config_path)]
-    if log_opts:
-        args += ["--log-opts", log_opts]
+    # 🔴 --no-textconv (SCRUM-75 follow-up, measured): gitleaks scans history
+    # with `git log -p`, which otherwise runs a diff `textconv` PROGRAM a
+    # repository can define in its own (Manager-writable) `.git/config` for a
+    # path its `.gitattributes` maps — code execution on the host. gitleaks
+    # forwards --log-opts to git log unchanged, so this disables it whether or
+    # not a range was given. Verified against the installed gitleaks by
+    # `tests/test_host_git_runs_no_repo_configured_program.py`.
+    args += ["--log-opts", f"{log_opts} --no-textconv" if log_opts else "--no-textconv"]
     result = _run_gitleaks_json(args, cwd=root, binary=binary)
     if isinstance(result, ScanError):
         return result

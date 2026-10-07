@@ -107,11 +107,15 @@ def _run(
     that prepends "git": `tests/test_blast_radius.py` finds git verbs by
     enumerating those lists, and a `["git", *args]` wrapper would hide every
     verb in this file from it."""
+    # Host-side git in a Manager-writable repo: fsmonitor and hooks forced
+    # off, whatever the repo's own config says (SCRUM-75; `githost`).
+    from rite_ai.githost import hardened_git_env
+
     return subprocess.run(
         args,
         cwd=cwd,
         input=stdin,
-        env=env,
+        env=hardened_git_env(env),
         capture_output=True,
         text=True,
         errors="replace",

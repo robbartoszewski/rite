@@ -100,13 +100,20 @@ def _git_state(root: Path) -> str:
     unchanged, and the guard falls back on the other parts. It never makes
     an unchanged project look changed."""
     try:
+        from rite_ai.githost import hardened_git_env
+
+        env = hardened_git_env()
         head = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
+            env=env,
             capture_output=True,
             timeout=10,
         )
+        # 🔴 A repo-set core.fsmonitor runs a program on `git status`, and
+        # this runs every cycle in a Manager-writable tree (SCRUM-75).
         status = subprocess.run(
             ["git", "-C", str(root), "status", "--porcelain=v1", "-z"],
+            env=env,
             capture_output=True,
             timeout=10,
         )
