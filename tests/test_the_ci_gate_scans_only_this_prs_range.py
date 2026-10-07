@@ -50,10 +50,17 @@ needs_gitleaks = pytest.mark.skipif(
 )
 
 
-def _resolver(*known: str):
-    """A stand-in for git that resolves only the refs named."""
+def _resolver(*known: str, commits: str = "3"):
+    """A stand-in for git that resolves only the refs named.
+
+    `commits` is what `rev-list --count` answers: non-zero by default, since
+    a range with nothing in it is refused and every test here that expects a
+    narrowed range needs one that is not empty.
+    """
 
     def run_git(_root, *args):
+        if args[0] == "rev-list":
+            return commits
         wanted = args[-1].removesuffix("^{commit}")
         return "c0ffee" if wanted in known else None
 
@@ -202,6 +209,73 @@ class TestItNeverNarrowsOnAGuess:
         assert got.rev_range is None
         assert "default branch" in got.why
 
+    def test_a_tag_push_does_not_narrow(self):
+        """⚠ **The vacuous pass this module exists to prevent, and it got
+        in anyway.** `on: [push]` is unfiltered and fires on tags;
+        `GITHUB_REF_NAME` is then the TAG's name, so the "is this the trunk?"
+        test never matched and a release tag cut on the trunk resolved to
+        `origin/main..HEAD` — zero commits. The gate would have scanned
+        nothing and reported green. This repository cuts release tags, so it
+        would have happened."""
+        got = range_for_ci(
+            {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "push",
+                "GITHUB_REF_NAME": "v0.7.0",
+                "GITHUB_REF_TYPE": "tag",
+                DEFAULT_BRANCH_ENV: "main",
+            },
+            REPO,
+            _resolver("refs/remotes/origin/main"),
+        )
+
+        assert got.rev_range is None
+        assert "tag push" in got.why
+
+    @pytest.mark.parametrize("count", ["0", "", "not a number", None])
+    def test_a_range_with_no_commits_in_it_is_refused(self, count):
+        """⚠ **The guard that does not depend on enumerating cases.** The
+        tag push above is a named case; this catches the next one nobody
+        thought of. A range holding nothing makes the gate scan nothing and
+        report green, which is invisible in a way the over-strict behaviour
+        never was."""
+
+        def run_git(_root, *args):
+            if args[0] == "rev-list":
+                return count
+            return "c0ffee"
+
+        got = range_for_ci(
+            {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_BASE_REF": "main",
+            },
+            REPO,
+            run_git,
+        )
+
+        assert got.rev_range is None
+        assert "whole history is scanned" in got.why
+
+    def test_a_range_with_commits_in_it_is_used(self):
+        """The control: the guard must not refuse every range."""
+
+        def run_git(_root, *args):
+            return "3" if args[0] == "rev-list" else "c0ffee"
+
+        got = range_for_ci(
+            {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_BASE_REF": "main",
+            },
+            REPO,
+            run_git,
+        )
+
+        assert got.rev_range == "refs/remotes/origin/main..HEAD"
+
     def test_every_answer_says_why(self):
         """The chosen range is printed by both callers, so a reader of a
         green gate can see which commits earned it."""
@@ -309,6 +383,105 @@ class TestAgainstRealGitAndRealGitleaks:
         report = self._run(where, "main..HEAD")
 
         assert report.findings
+
+
+class TestARangeDoesNotManufactureWarnings:
+    """⚠ **The fix for SCRUM-39 nearly shipped a worse regression than the
+    bug.** Suppression entries are pinned to commits. Under a range the scan
+    deliberately does not look at most of history, so every entry pinned
+    outside it matches nothing and was reported STALE — and `--strict`, which
+    the generated template passes, makes stale blocking.
+
+    Measured on rite's own repository, 2026-10-07: `rite publish check
+    --ci-range --strict` reported 10 stale suppressions and exited 1, where
+    the same command without a range exits 0. Shipped in the template, that
+    is a red required check on every pull request of every project rite
+    creates."""
+
+    def _report(self, where: Path, rev_range: str | None):
+        from rite_ai.gate.gate import run_gate
+
+        return run_gate(where, rev_range=rev_range)
+
+    def _repo_with_a_suppression_for_old_history(self, tmp_path: Path) -> Path:
+        where = _repo_with_a_leak_on_another_branch(tmp_path)
+        rite = where / ".rite"
+        rite.mkdir(exist_ok=True)
+        # An entry pinned to a commit this branch's range will never scan.
+        (rite / "gitleaksignore").write_text(
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef:old.txt:github-pat:"
+            "sha256-0000  # a decision somebody already took\n"
+        )
+        _git(where, "add", ".rite/gitleaksignore")
+        _git(where, "commit", "-qm", "the Owner's suppression")
+        return where
+
+    @needs_gitleaks
+    def test_a_scoped_run_does_not_call_them_stale(self, tmp_path):
+        where = self._repo_with_a_suppression_for_old_history(tmp_path)
+
+        report = self._report(where, "main..HEAD")
+
+        assert report.stale_suppressions == []
+        assert report.exit_code_for(strict=True) == 0, (
+            "a range-scoped run blocked on suppressions it never had the scope to judge"
+        )
+
+    @needs_gitleaks
+    def test_it_says_it_did_not_check_them(self, tmp_path):
+        """⚠ Not silence. Printing nothing would read as "every entry still
+        earns its place", which is the one thing a range cannot know."""
+        from rite_ai.gate.gate import format_report
+
+        where = self._repo_with_a_suppression_for_old_history(tmp_path)
+
+        report = self._report(where, "main..HEAD")
+
+        assert report.stale_unknown
+        assert "stale suppressions: not checked" in format_report(report)
+
+    @needs_gitleaks
+    def test_the_full_scan_still_judges_them(self, tmp_path):
+        """⚠ The control. Without it the fix could be "never report a stale
+        suppression again", which would lose a real warning."""
+        where = self._repo_with_a_suppression_for_old_history(tmp_path)
+
+        report = self._report(where, None)
+
+        assert report.stale_suppressions, (
+            "the full-history run must still say an entry matches nothing"
+        )
+        assert not report.stale_unknown
+
+
+class TestTheRangeOptionIsReadBothWays:
+    def test_the_joined_form_is_not_silently_dropped(self):
+        """⚠ `--range=A..B` matched nothing and fell through to a FULL scan
+        printing nothing, which is what `_range_option`'s own docstring
+        promises not to do. Measured: 1555 commits scanned under a flag
+        asking for 11."""
+        from rite_ai.gate.__main__ import _range_option
+
+        assert _range_option(["check", "--range=origin/main..HEAD"]) == (
+            "origin/main..HEAD",
+            None,
+        )
+        assert _range_option(["check", "--range", "origin/main..HEAD"]) == (
+            "origin/main..HEAD",
+            None,
+        )
+
+    def test_a_missing_or_malformed_value_is_refused_not_ignored(self):
+        from rite_ai.gate.__main__ import _range_option
+
+        for argv in (["check", "--range"], ["check", "--range", "HEAD"]):
+            value, problem = _range_option(argv)
+            assert value is None and problem, argv
+
+    def test_no_range_option_is_no_range(self):
+        from rite_ai.gate.__main__ import _range_option
+
+        assert _range_option(["check"]) == (None, None)
 
 
 class TestTheWorkflowsAskForIt:

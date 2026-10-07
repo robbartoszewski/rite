@@ -120,13 +120,29 @@ def range_for_ci(env, root: Path, run_git=None) -> CiRange:
                 "commits cannot be told apart: the whole history is scanned. "
                 "`fetch-depth: 0` on actions/checkout is what fetches it",
             )
-        return CiRange(
-            f"{resolved}..HEAD",
+        return _narrowed(
+            run_git,
+            root,
+            resolved,
             f"this pull request's own commits ({resolved}..HEAD), not every "
             "fetched branch's history",
         )
 
     if event == "push":
+        # ⚠ **A TAG PUSH NARROWS TO NOTHING, so it must not narrow at all.**
+        # `on: [push]` is unfiltered and fires on tags. `GITHUB_REF_NAME` is
+        # then the TAG's name, so the "is this the trunk?" test below never
+        # matches, and a release tag cut on the trunk resolved to
+        # `origin/main..HEAD` — zero commits. The gate would have scanned
+        # nothing and reported green, which is the one outcome this module
+        # exists to prevent. Found by review, 2026-10-07, and this repository
+        # cuts release tags, so it would have happened.
+        if (env.get("GITHUB_REF_TYPE") or "").strip() == "tag":
+            return CiRange(
+                None,
+                "this is a tag push, which has no branch of its own to "
+                "compare against: the whole history is scanned",
+            )
         default = (env.get(DEFAULT_BRANCH_ENV) or "").strip()
         branch = (env.get("GITHUB_REF_NAME") or "").strip()
         if not default:
@@ -156,8 +172,10 @@ def range_for_ci(env, root: Path, run_git=None) -> CiRange:
                 "this branch's own commits cannot be told apart: the whole "
                 "history is scanned",
             )
-        return CiRange(
-            f"{resolved}..HEAD",
+        return _narrowed(
+            run_git,
+            root,
+            resolved,
             f"this branch's own commits ({resolved}..HEAD), not every fetched "
             "branch's history",
         )
@@ -167,6 +185,44 @@ def range_for_ci(env, root: Path, run_git=None) -> CiRange:
         f"the event is {event or 'unnamed'}, which carries no base to scope "
         "to: the whole history is scanned",
     )
+
+
+def _narrowed(run_git, root: Path, base: str, why: str) -> CiRange:
+    """`base..HEAD`, unless that range holds no commits.
+
+    ⚠ **THE LAST GUARD, and the one that does not depend on enumerating
+    cases.** The tag-push branch above is a named case; this catches the
+    next one nobody thought of. A range with nothing in it makes the gate
+    scan nothing and report green — a pass that looked at no commits, which
+    is worse than the over-strict behaviour SCRUM-39 replaces and invisible
+    in a way it never was. An empty range is therefore not "nothing to
+    check": it is "this run cannot tell what it is responsible for", and the
+    whole history is scanned.
+    """
+    rev_range = f"{base}..HEAD"
+    count = run_git(root, "rev-list", "--count", rev_range)
+    if count is None:
+        return CiRange(
+            None,
+            f"git could not count the commits in {rev_range}, so what this "
+            "run introduces is unknown: the whole history is scanned",
+        )
+    try:
+        commits = int(count.strip())
+    except ValueError:
+        return CiRange(
+            None,
+            f"git answered {count.strip()!r} for the size of {rev_range}, "
+            "which is not a count: the whole history is scanned",
+        )
+    if commits == 0:
+        return CiRange(
+            None,
+            f"{rev_range} holds no commits, so there is nothing this run "
+            "introduces to scope to — scanning nothing would report green "
+            "having looked at nothing: the whole history is scanned",
+        )
+    return CiRange(rev_range, why)
 
 
 def _resolve(run_git, root: Path, candidates) -> str | None:

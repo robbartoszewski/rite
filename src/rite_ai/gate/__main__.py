@@ -51,12 +51,21 @@ def _range_option(argv: list[str]) -> tuple[str | None, str | None]:
     become a full scan, and a reader of the output would have no way to tell
     which they got.
     """
-    if "--range" not in argv:
+    # ⚠ BOTH SPELLINGS. Matching only the two-word form meant
+    # `--range=origin/main..HEAD` was dropped in silence and ran a FULL scan
+    # printing nothing — exactly what this function's docstring promises not
+    # to do. Found by review, 2026-10-07, measured: 1555 commits scanned under
+    # a flag asking for 11.
+    joined = [a for a in argv if a.startswith("--range=")]
+    if joined:
+        value = joined[0].split("=", 1)[1].strip()
+    elif "--range" in argv:
+        at = argv.index("--range")
+        if at + 1 >= len(argv):
+            return None, "--range needs a value, like --range origin/main..HEAD"
+        value = argv[at + 1].strip()
+    else:
         return None, None
-    at = argv.index("--range")
-    if at + 1 >= len(argv):
-        return None, "--range needs a value, like --range origin/main..HEAD"
-    value = argv[at + 1].strip()
     if not value or ".." not in value:
         return None, (
             f"--range {value!r} is not a revision range: it needs the "
@@ -85,7 +94,7 @@ def _cmd_check(argv: list[str]) -> int:
     if problem:
         print(f"rite publish gate: {problem}", file=sys.stderr)
         return 2
-    if "--ci-range" in argv:
+    if "--ci-range" in argv or any(a.startswith("--ci-range=") for a in argv):
         if rev_range is not None:
             print(
                 "rite publish gate: pass --range or --ci-range, not both — "

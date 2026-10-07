@@ -5002,6 +5002,15 @@ def publish_check(rev_range: str | None, ci_range: bool, strict: bool) -> None:
         over = " (of what could be scanned)" if report.errors else ""
         click.echo(f"\none entry covers {n} findings{over}: {entry.fingerprint}")
 
+    if report.stale_unknown:
+        # SCRUM-39: the same line `format_report` prints, for the same
+        # reason — a range-scoped run that said nothing here would read as a
+        # clean bill of health for every entry, which it cannot give.
+        click.echo(
+            "\nstale suppressions: not checked — this run scanned a range, "
+            "and an entry pinned outside it matches nothing for a reason "
+            "that says nothing about the entry."
+        )
     if report.stale_suppressions:
         click.echo(f"\n{len(report.stale_suppressions)} stale suppression(s):")
         for fp in report.stale_suppressions:
