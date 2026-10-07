@@ -64,7 +64,8 @@ class TestTheCommandOnlyAsks:
         """F14: in double quotes the shell runs backticks before rite sees
         them, and a round quotes tickets."""
         got = _ask(monkeypatch, "lead", "KAN-7", ROUND_1, on_stdin=False)
-        assert got.exit_code == 1 and "reads its text from a file or stdin" in got.output
+        assert got.exit_code == 1
+        assert "reads its text from a file or stdin" in got.output
 
     def test_a_round_in_the_wrong_shape_costs_no_turn(self, project, monkeypatch):
         got = _ask(monkeypatch, "lead", "KAN-7", "Which timeout?\n")
