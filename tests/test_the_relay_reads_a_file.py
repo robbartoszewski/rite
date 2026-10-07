@@ -158,6 +158,32 @@ class TestInsideTheRealManagerProfile:
         ]
         assert not path.exists()
 
+    def test_the_manager_cannot_swap_its_own_directory_or_outbox(self, project):
+        """🔴 SCRUM-69 re-review, measured: a subpath grant covers its own
+        path, so a Manager could rename its directory away and link
+        another's in its place. The profile now refuses renaming the
+        directory and the outbox themselves; inside them nothing changes."""
+        from rite_ai.managers import manager_dir
+        from rite_ai.managers.mailbox import mailbox_dir
+
+        self._profile(project)
+        own = manager_dir(project, "lead")
+        out = mailbox_dir(project, "lead", OUTBOX)
+        q = shlex.quote
+        done = self._inside(
+            project,
+            {},
+            f"mv {q(str(own))} {q(str(project / 'stolen'))}; echo state=$?; "
+            f"mv {q(str(out))} {q(str(project / 'stolen-out'))}; echo out=$?; "
+            f"mkdir {q(str(own / 'a'))} && mv {q(str(own / 'a'))} "
+            f"{q(str(own / 'b'))}; echo inside=$?",
+        )
+        assert "state=0" not in done.stdout, done.stdout
+        assert "out=0" not in done.stdout, done.stdout
+        assert own.is_dir() and not own.is_symlink() and out.is_dir()
+        assert "inside=0" in done.stdout, done.stderr  # control
+        assert (own / "b").is_dir()
+
     def test_another_manager_cannot_reach_its_heredocs(self, project):
         """🔴 Why `TMPPREFIX` is not `engine_tmp` (SCRUM-69 review): a sibling
         must not read or replace a Manager's heredoc. Measured from inside
@@ -582,13 +608,21 @@ class TestExactlyOnceWithNoWindow:
 
     def test_a_new_draft_of_the_same_name_is_not_removed_by_the_old_send(self, project):
         """Only the file that was READ is removed: a Manager that wrote a
-        new `reply.md` meanwhile keeps it."""
+        new `reply.md` meanwhile keeps it, and is told it was not sent."""
         path = _draft(project, "old")
         _, draft = stdin_text.read_draft(project, "lead", str(path))
         path.unlink()
         path.write_text("new")
+        said = draft.consume()
+        assert "NOT sent" in said
+        (kept,) = [p for p in path.parent.iterdir() if p.read_text() == "new"]
+        assert str(kept) in said
+
+    def test_control_the_draft_that_was_read_is_removed(self, project):
+        path = _draft(project, "old")
+        _, draft = stdin_text.read_draft(project, "lead", str(path))
         assert draft.consume() == ""
-        assert path.read_text() == "new"
+        assert list(path.parent.iterdir()) == []
 
 
 # --- a refusal after reading keeps the draft where it was written ----------------
@@ -638,18 +672,40 @@ def _undelimited(text: str) -> str:
     return re.sub(r"RITE_TEXT_[0-9a-f]+", "RITE_TEXT_X", text)
 
 
+# What 195d79d (before SCRUM-69) printed, pinned as text so a change to
+# `stdin_text.refusal` cannot pass by changing both sides.
+BEFORE_69_REPLY = (
+    "refusing: this command reads its text from stdin, never the command line. "
+    "In double quotes the shell runs anything in backticks or $( ) BEFORE rite "
+    "sees the text — and if yours had any, it already ran. Send it through a "
+    "quoted heredoc, where nothing is expanded:\nrite reply --manager lead - "
+    "<<'RITE_TEXT_X'\n<your message>\nRITE_TEXT_X\n"
+)
+BEFORE_69_WHILE = (
+    "refusing: --while takes `-`, and what you will do meanwhile is the first "
+    "line of stdin. In double quotes on the command line the shell runs anything "
+    "in backticks or $( ) BEFORE rite sees it — and if yours had any, it "
+    "already ran. Send both through one quoted heredoc, where nothing is "
+    "expanded:\nrite ask --manager lead --defer --while - - <<'RITE_TEXT_X'\n"
+    "<what you will do meanwhile, on this one line>\n<your question>\n"
+    "RITE_TEXT_X\n"
+)
+
+
 def test_a_person_at_the_host_gets_the_refusal_they_always_got(project, monkeypatch):
     """SCRUM-69 review: a person typing `rite reply --manager lead "hi"` was
     told to write into the Manager's drafts directory with "your Write
     tool". Without `RITE_MANAGER` the refusal is the heredoc one, word for
-    word as before."""
+    word as before: the command-line refusal and the `--while` one."""
     monkeypatch.delenv(MANAGER_ENV)
     got = CliRunner().invoke(cli, ["reply", "--manager", "lead", "hi"])
     assert got.exit_code == 1
-    assert _undelimited(got.output) == _undelimited(
-        stdin_text.refusal("rite reply --manager lead", "<your message>") + "\n"
+    assert _undelimited(got.output) == BEFORE_69_REPLY
+    got = CliRunner().invoke(
+        cli, ["ask", "--manager", "lead", "--defer", "--while", "x", "-"]
     )
-    assert "drafts" not in got.output
+    assert got.exit_code == 1
+    assert _undelimited(got.output) == BEFORE_69_WHILE
 
 
 def test_control_the_manager_itself_is_taught_the_file(project):
@@ -689,3 +745,117 @@ def test_each_manager_gets_its_own_heredoc_and_drafts_directories(project):
     for path in (heredoc_dir(project, "lead"), stdin_text.drafts_dir(project, "lead")):
         assert path.is_dir()
         assert path.stat().st_mode & 0o077 == 0, oct(path.stat().st_mode)
+
+
+# --- a Manager's directory that is a link is never followed ----------------------
+
+
+def _swap_for_a_link(project: Path, to: Path) -> Path:
+    from rite_ai.managers import manager_dir
+
+    own = manager_dir(project, "lead")
+    own.mkdir(parents=True, exist_ok=True)
+    own.rename(own.with_name("moved-away"))
+    own.symlink_to(to, target_is_directory=True)
+    return own
+
+
+def test_a_linked_manager_directory_is_not_read_through(project, monkeypatch):
+    """The swap the re-review measured, done before this fix (or on a
+    profile without the deny): rite run by a person at the host sent
+    helper's draft as lead's, and removed it."""
+    from rite_ai.managers import manager_dir
+
+    peer = _draft(project, "helper's words", manager="helper", name="reply.md")
+    own = _swap_for_a_link(project, manager_dir(project, "helper"))
+    monkeypatch.delenv(MANAGER_ENV)
+    got = _reply(own / "drafts" / "reply.md")
+    assert got.exit_code == 1 and "it is a link" in got.output, got.output
+    assert peer.read_text() == "helper's words"
+    assert read(project, "lead", OUTBOX) == []
+
+
+def test_a_linked_manager_directory_is_refused_at_start(project, tmp_path):
+    """And at the next start, where `.resolve()` would have granted the
+    link's target read-write (`$HOME`, say)."""
+    from rite_ai.managers.boundaries import boundary_for
+    from rite_ai.managers.enclosure import LinkedManagerPath, compose
+
+    target = tmp_path / "home-ish"
+    target.mkdir()
+    _swap_for_a_link(project, target)
+    try:
+        boundary = boundary_for()
+    except Exception:
+        pytest.skip("no boundary on this machine")
+    with pytest.raises(LinkedManagerPath, match="is a link"):
+        boundary.write_profile(project, "lead", project / "home")
+    assert not (target / "drafts").exists(), "created through the link"
+    if sys.platform == "darwin":
+        assert str(target.resolve()) not in compose(project, "lead")
+
+
+def test_the_launch_puts_zsh_heredocs_in_the_managers_own_directory(
+    project, monkeypatch
+):
+    """🔴 SCRUM-69 re-review: the wiring itself, not `temp_environment` with
+    the right argument passed by a test. Reverting the starter to
+    `temp_environment(engine_tmp)` left every test green."""
+    import rite_ai.managers.supervise as sup
+    from rite_ai.managers.boundaries import boundary_for, heredoc_dir
+    from rite_ai.managers.session import StartResult
+
+    try:
+        boundary = boundary_for()
+    except Exception:
+        pytest.skip("no boundary on this machine")
+    seen = {}
+
+    def fake_start(root, manager, **kwargs):
+        seen.update(kwargs)
+        return StartResult(False, "not starting anything in a test")
+
+    monkeypatch.setattr(sup, "start_session", fake_start)
+    sup._default_starter(
+        project,
+        "lead",
+        engine="claude",
+        resume_id="",
+        max_sessions=None,
+        window_seconds=None,
+        permission="",
+        prompt="go",
+        agent="",
+    )
+    prefix = seen["pane_env"]["TMPPREFIX"]
+    assert prefix.startswith(str(heredoc_dir(project, "lead")) + os.sep), prefix
+    assert not prefix.startswith(str(boundary.engine_tmp(project, "lead")))
+
+
+def test_a_deferred_question_is_consumed_before_it_is_asked_now(project, monkeypatch):
+    """With no check-in window to wait for, a deferral is queued and then
+    asked now. If asking now fails, the question is queued already: the
+    draft must be gone, or the retry queues it a second time."""
+    from rite_ai.managers import checkins
+
+    def fails(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(checkins, "ask_now", fails)
+    path = _draft(project, "tickets 14 and 15\nrename --out to --output?")
+    got = CliRunner().invoke(
+        cli,
+        [
+            "ask",
+            "--manager",
+            "lead",
+            "--defer",
+            "--while",
+            "-",
+            "--from-file",
+            str(path),
+        ],
+    )
+    assert got.exit_code != 0
+    assert not path.exists()
+    assert len(checkins._queued(project, "lead")) == 1

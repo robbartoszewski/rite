@@ -66,18 +66,6 @@ from pathlib import Path
 STDIN = "-"
 """The only value a text argument takes: read the text from stdin."""
 
-RULE = (
-    "Your text replaces the <…> line, exactly as written, on as many lines "
-    "as it needs, and the last line ends it: copy it exactly, at the start of "
-    "its line with nothing before it, ONCE, with nothing after it. A second "
-    "copy, or anything after it, is a new shell command, and it is refused. "
-    "⚠ Never put "
-    "the text in double quotes on the command line instead: the shell runs "
-    "anything in backticks or $( ) there before rite sees it, and text you "
-    "quote from a ticket, an issue or another Manager can contain them."
-)
-"""Said once beside the heredocs in a Manager's instructions."""
-
 
 def _delimiter() -> str:
     """A heredoc delimiter no ticket can contain by accident or design."""
@@ -213,13 +201,25 @@ class Draft:
     def consume(self) -> str:
         """Remove the draft, still under its lock; "" or what went wrong.
 
-        Only the file that was READ is removed: the name is unlinked
-        through the drafts directory's own descriptor, and only while it
-        still names the inode that was read."""
+        Only the file that was READ is removed, and never a newer one:
+        the name is first RENAMED, atomically, to a name of rite's own
+        that nothing else knows, and only that is checked and unlinked. A
+        stat-then-unlink of the name left a window in which a draft the
+        Manager wrote meanwhile was the one removed, unsent (review N1).
+        Through the drafts directory's own descriptor throughout."""
+        taken = f".sent-{secrets.token_hex(8)}"
         try:
-            now = os.stat(self._name, dir_fd=self._dir, follow_symlinks=False)
+            os.rename(self._name, taken, src_dir_fd=self._dir, dst_dir_fd=self._dir)
+            now = os.stat(taken, dir_fd=self._dir, follow_symlinks=False)
             if (now.st_dev, now.st_ino) == self._id:
-                os.unlink(self._name, dir_fd=self._dir)
+                os.unlink(taken, dir_fd=self._dir)
+            else:
+                kept = self.path.parent / taken
+                return (
+                    f"⚠ sent; but {self.path} had been replaced by a new file "
+                    f"meanwhile, which was NOT sent. It is kept, as {kept}: "
+                    "send it with that path if it is meant to go"
+                )
         except FileNotFoundError:
             pass
         except OSError as e:
@@ -242,38 +242,42 @@ def _refuse_open(what: Path, e: OSError) -> DraftRefused:
 
 
 def _open_drafts(root: Path, manager: str) -> int:
-    """The drafts directory, opened through the Manager's own directory with
-    no link followed at `drafts` itself.
+    """The drafts directory, opened with no link followed at the Manager's
+    own directory or at `drafts`.
 
-    🔴 **A link here was trusted (SCRUM-69 review).** The Manager can write
-    its own directory, so it can replace `drafts` with a link to anywhere
-    (`~/.ssh`). Inside its profile that reaches nothing; but a person at the
-    host running `rite reply --manager <m> --from-file <name>` runs rite
-    unconfined, and resolving the link would have read — and removed — a file
-    the Manager can never touch. `manager_dir` itself the Manager cannot
-    replace (its parent is not granted), so it is opened normally: links
-    ABOVE it are rite's own (a rite home through a link)."""
+    🔴 **Links here were trusted (SCRUM-69 reviews).** The Manager can write
+    inside its own directory, so it could replace `drafts` with a link to
+    anywhere (`~/.ssh`); and, measured under seatbelt, it could rename its
+    whole directory away and link another Manager's in its place. Inside its
+    profile neither reaches anything; but a person at the host running `rite
+    reply --manager <m> --from-file <name>` runs rite unconfined, and
+    following either link read, sent and removed a file that was not this
+    Manager's. The profile now refuses the rename (`enclosure`'s deny on the
+    directory itself), and this refuses to follow one anyway.
+
+    `O_NOFOLLOW` applies to a path's LAST component, which is exactly the
+    Manager's directory: everything above it is rite's own (a rite home
+    through a link) and the Manager can write none of it. Not opened from
+    the parent, which a Manager's profile does not let it read."""
     from rite_ai.managers import manager_dir
 
     own = drafts_dir(root, manager)
+    home = manager_dir(Path(root), manager)
+
+    def opened(name, shown: Path, dir_fd: int | None = None) -> int:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            return os.open(name, flags, dir_fd=dir_fd)
+        except FileNotFoundError:
+            raise DraftRefused(
+                f"there are no drafts yet: write your text to a file in {own} first"
+            ) from None
+        except OSError as e:
+            raise _refuse_open(shown, e) from None
+
+    base = opened(home, home)
     try:
-        base = os.open(manager_dir(Path(root), manager), os.O_RDONLY | os.O_DIRECTORY)
-    except OSError:
-        raise DraftRefused(
-            f"there are no drafts yet: write your text to a file in {own} first"
-        ) from None
-    try:
-        return os.open(
-            DRAFTS_DIRNAME,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=base,
-        )
-    except FileNotFoundError:
-        raise DraftRefused(
-            f"there are no drafts yet: write your text to a file in {own} first"
-        ) from None
-    except OSError as e:
-        raise _refuse_open(own, e) from None
+        return opened(DRAFTS_DIRNAME, own, dir_fd=base)
     finally:
         os.close(base)
 
@@ -290,7 +294,7 @@ def read_draft(root: Path, manager: str, given: str) -> tuple[str, Draft]:
     file with a second hard link or another owner, or one over `DRAFT_LIMIT`.
 
     🔴 **Exactly once, with no window (SCRUM-69 review).** Two `rite reply
-    --from-file reply.md` started together both read the file before either
+    --from-file <drafts>/reply.md` started together both read the file before either
     removed it, so the text went twice. The draft is now LOCKED (`flock`,
     exclusive, not waiting) from the moment it is read until `Draft.consume`
     has removed it, and after taking the lock rite checks that the name
@@ -368,7 +372,16 @@ def read_draft(root: Path, manager: str, given: str) -> tuple[str, Draft]:
                 f"{leaf} was sent and removed while this rite waited to read "
                 "it: it is sent once, so this one sends nothing"
             )
-        raw = os.read(fd, DRAFT_LIMIT + 1)
+        # Read to the end: one `read` may return less than the file.
+        chunks: list[bytes] = []
+        size = 0
+        while size <= DRAFT_LIMIT:
+            chunk = os.read(fd, DRAFT_LIMIT + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        raw = b"".join(chunks)
         if len(raw) > DRAFT_LIMIT:
             raise DraftRefused(f"{leaf} is over {DRAFT_LIMIT} bytes")
         draft = Draft(leaf, dir_fd, fd, name, info)

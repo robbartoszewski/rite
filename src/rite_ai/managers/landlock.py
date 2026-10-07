@@ -70,6 +70,7 @@ from rite_ai.managers.enclosure import (  # noqa: PLC2701
     _running_rite,
     _tool_paths,
     engine_tmp,
+    refuse_linked_manager_paths,
 )
 
 # ⚠ **SHARED WITH SEATBELT ON PURPOSE, NOT DUPLICATED.** These four carry
@@ -591,6 +592,9 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     Rewritten every run, for the reason the seatbelt profile is: a write-once
     file pins a project to whatever shipped the day it was created.
     """
+    # A Landlock rule names the inode the path opens to, so a linked
+    # Manager directory would grant its target (SCRUM-69 review).
+    refuse_linked_manager_paths(root, manager)
     path = policy_path(root, manager, home)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     _legacy_policy_path(root, manager).unlink(missing_ok=True)

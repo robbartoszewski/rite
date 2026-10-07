@@ -413,8 +413,12 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
     # left there.
     # Resolved, because seatbelt matches the path the kernel resolved: a
     # rite home reached through a symlink would otherwise grant nothing.
-    own = manager_dir(project, manager).resolve()
-    mail = mail_root(project, manager).resolve()
+    # 🔴 But only the PARENT is resolved (SCRUM-69 review): resolving the
+    # Manager's own directory itself follows a link the Manager may have put
+    # there, and grants wherever it points. `write_profile` refuses a linked
+    # one before this runs (`refuse_linked_manager_paths`).
+    own = _resolved_parent(manager_dir(project, manager))
+    mail = _resolved_parent(mail_root(project, manager))
     return [
         "; ⚠ MANAGERS ARE SEPARATED, and no Manager writes an inbox — see",
         ";   enclosure._manager_separation. Named after the project grant so",
@@ -422,11 +426,54 @@ def _manager_separation(project: Path, manager: str) -> list[str]:
         f"(deny file-read* file-write* (subpath {_quote(managers)}))",
         "; This Manager's own directory, outside the project (MM8).",
         f"(allow file-read* file-write* (subpath {_quote(own)}))",
+        "; ⚠ ...but not the directory ITSELF (SCRUM-69 review, measured): a",
+        ";   subpath grant covers its own path, so the Manager could rename it",
+        ";   away and put a link in its place, which rite (outside) and the next",
+        ";   profile would then follow. Writes inside are unaffected.",
+        f"(deny file-write* (literal {_quote(own)}))",
         "; This Manager's mailbox, outside the project: its outbox only.",
         f"(allow file-read* (subpath {_quote(mail)}))",
         f"(allow file-read* file-write* (subpath {_quote(mail / OUTBOX)}))",
+        f"(deny file-write* (literal {_quote(mail / OUTBOX)}))",
         f"(deny file-write* (subpath {_quote(mail / INBOX)}))",
     ]
+
+
+def _resolved_parent(path: Path) -> Path:
+    return path.parent.resolve() / path.name
+
+
+class LinkedManagerPath(RuntimeError):
+    """A Manager's own directory or mailbox is a link (SCRUM-69 review)."""
+
+
+def refuse_linked_manager_paths(root: Path, manager: str) -> None:
+    """Raise `LinkedManagerPath` when the Manager's own directory, or one of
+    its mail boxes, is a symbolic link.
+
+    🔴 Measured under seatbelt before the deny above: a Manager renamed its
+    own directory away and linked another Manager's in its place, and an
+    unconfined `rite reply --from-file` then sent that Manager's draft in its
+    name; at the next start, `.resolve()` granted wherever the link pointed
+    (`$HOME`, say) read-write. rite never makes these links, so one is
+    refused, said, and left for a person to look at, never followed."""
+    from rite_ai.managers import manager_dir
+    from rite_ai.managers.mailbox import INBOX, OUTBOX, mail_root, mailbox_dir
+
+    for path in (
+        manager_dir(root, manager),
+        mail_root(root, manager),
+        mailbox_dir(root, manager, OUTBOX),
+        mailbox_dir(root, manager, INBOX),
+    ):
+        if path.is_symlink():
+            raise LinkedManagerPath(
+                f"refusing to start Manager {manager!r}: {path} is a link "
+                f"(to {os.readlink(path)}), and rite never makes one there. "
+                "Something replaced it, possibly the Manager itself; nothing "
+                "is followed through it. Look at both, move the real directory "
+                "back, and start again."
+            )
 
 
 def _rite_home_denied(home: Path) -> list[str]:
@@ -702,6 +749,7 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     was created, so widening or narrowing the surface in a later release
     would reach new projects only.
     """
+    refuse_linked_manager_paths(root, manager)
     path = profile_path(root, manager, home)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     _legacy_profile_path(root, manager).unlink(missing_ok=True)

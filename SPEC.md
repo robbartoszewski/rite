@@ -7227,14 +7227,22 @@ its drafts directory (`stdin_text.drafts_dir`, under its own `manager_dir`,
 which no other Manager's profile grants) and runs `rite reply|ask|route|refine
 ask --from-file <draft>`. `read_draft` accepts only a regular file directly in
 that directory, with one hard link and owned by the user, and follows no link
-from the Manager's own directory down: not at the leaf, and not at `drafts`
-itself, which the Manager could otherwise point anywhere for a person at the
-host to read through. A relative path is from the current directory. So what
+from the Manager's own directory down: not at the leaf, not at `drafts`, and
+not at the Manager's directory itself, any of which the Manager could
+otherwise point anywhere for a person at the host to read through. The
+seatbelt profile also refuses a write to the Manager's directory and outbox
+THEMSELVES (`literal` beside the `subpath` grant: measured, a subpath grant
+let the Manager rename its directory away and link another's in its place,
+and the next profile's `.resolve()` would have granted the link's target);
+both boundaries' `write_profile` refuse to start a Manager whose directory or
+mail box is a link (`enclosure.refuse_linked_manager_paths`). A relative path is from the current directory. So what
 goes out in a Manager's name is only what that Manager wrote. A draft is
 LOCKED (`flock`) from reading until it is removed, and rechecked under the
 lock, so two sends of one draft at the same moment deliver it once; it is
 removed once its message is queued, so the same command cannot send it twice;
-a send that failed, or a refusal after reading, keeps it where it was written. The heredoc on stdin
+a send that failed, or a refusal after reading, keeps it where it was written.
+Removal renames the draft to a name of rite's own first and unlinks only the
+file that was read, so a newer draft written meanwhile is kept, and said. The heredoc on stdin
 is still accepted and no longer taught. Why: zsh writes every here-document to
 a file under `TMPPREFIX` (default `/tmp/zsh`), which the Manager profile stopped
 granting with SB8, so mid-session heredocs failed ("can't create temp file for
@@ -7244,8 +7252,10 @@ doubled end line made the engine refuse the whole call (SCRUM-45).
 for the heredocs a Manager writes for itself: in its own `heredoc_dir`, not
 `engine_tmp`, which every Manager in the root can write (a sibling could read
 or replace a heredoc there). A refusal teaches the file form to a Manager
-(`RITE_MANAGER` set) and the heredoc, word for word as before, to a person at
-the host.
+(`RITE_MANAGER` set) and the heredoc to a person at the host: the
+command-line and `--while` refusals word for word as before (pinned against
+195d79d); with no text at all a person now gets "refusing: no text" and the
+heredoc, where click's usage error was.
 **Not covered:** rite cannot stop a model putting a substitution into some
 other command (`gh issue comment --body "…"`); and the refusal cannot un-run a
 substitution the shell already ran, only keep its output from being sent.
@@ -8514,7 +8524,7 @@ Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
 
-**Changes in 0.24.88 — the relay reads a file, not a heredoc (SCRUM-69, absorbing SCRUM-45 and SCRUM-22's transport residual).** `rite reply`, `ask`, `route` and `refine ask` take `--from-file <draft>`; every Manager instruction teaches only that form (`stdin_text.file_form`, `FILE_RULE`), and the heredoc on stdin stays accepted. `stdin_text.drafts_dir`, `read_draft` (regular file directly in the Manager's own drafts directory, opened through directory descriptors with no link followed from `manager_dir` down, one hard link, the user's, at most `DRAFT_LIMIT`, `flock`ed and rechecked under the lock), `stdin_text.Draft.consume` (after the message is queued, only the inode that was read: deliver exactly once, a failed send keeps the draft). `routing.briefing` takes `root`. `boundaries.temp_environment` adds `TMPPREFIX`, in the Manager's own `boundaries.heredoc_dir` (created with the drafts directory by both `write_profile`s), because zsh's here-document temp file under `/tmp` is what SB8's profile refused, and `TMPPREFIX` joins `ALLOWED_ON_TMUX_ARGV`. The command-line refusal for a person at the host is unchanged (`_teach`). A deferred question's draft is consumed the moment it is queued, before it is asked now. Tickets are shell-quoted in a taught command. Tests: `tests/test_the_relay_reads_a_file.py` (the EPERM reproduced inside the real Manager profile and its carve-out; the taught file form delivering inside that profile; a sibling's profile unable to reach a Manager's heredocs; the file form delivering under bash and zsh where no heredoc can be made; every refusal of a path that is not this Manager's draft, a linked `drafts` and a hard link included; exactly-once, with a second process holding the draft and with the draft removed between open and lock; a refusal after reading keeping the draft), and F14's shell tests rewritten on the file form. Fifteen mutations, each red on its own tests.
+**Changes in 0.24.88 — the relay reads a file, not a heredoc (SCRUM-69, absorbing SCRUM-45 and SCRUM-22's transport residual).** `rite reply`, `ask`, `route` and `refine ask` take `--from-file <draft>`; every Manager instruction teaches only that form (`stdin_text.file_form`, `FILE_RULE`), and the heredoc on stdin stays accepted. `stdin_text.drafts_dir`, `read_draft` (regular file directly in the Manager's own drafts directory, opened through directory descriptors with no link followed from `manager_dir` down, one hard link, the user's, at most `DRAFT_LIMIT`, `flock`ed and rechecked under the lock), `stdin_text.Draft.consume` (after the message is queued, only the inode that was read: deliver exactly once, a failed send keeps the draft). `routing.briefing` takes `root`. `boundaries.temp_environment` adds `TMPPREFIX`, in the Manager's own `boundaries.heredoc_dir` (created with the drafts directory by both `write_profile`s), because zsh's here-document temp file under `/tmp` is what SB8's profile refused, and `TMPPREFIX` joins `ALLOWED_ON_TMUX_ARGV`. The command-line and `--while` refusals for a person at the host are unchanged (`_teach`, pinned as text). A second review measured that a subpath grant let a Manager rename its own directory away and link another's in its place: the seatbelt profile denies writes to the Manager's directory and outbox themselves, both `write_profile`s refuse a linked Manager directory or mail box (`enclosure.refuse_linked_manager_paths`, `LinkedManagerPath`), and the drafts are opened `O_NOFOLLOW` from the Manager's directory down. `Draft.consume` renames to a private name before unlinking, and the draft is read to its end. A deferred question's draft is consumed the moment it is queued, before it is asked now. Tickets are shell-quoted in a taught command. Tests: `tests/test_the_relay_reads_a_file.py` (the EPERM reproduced inside the real Manager profile and its carve-out; the taught file form delivering inside that profile; a sibling's profile unable to reach a Manager's heredocs; the file form delivering under bash and zsh where no heredoc can be made; every refusal of a path that is not this Manager's draft, a linked `drafts` and a hard link included; exactly-once, with a second process holding the draft and with the draft removed between open and lock; a refusal after reading keeping the draft; the swap refused inside the real profile, a linked Manager directory neither read through nor started; the starter's `TMPPREFIX`; a deferred question consumed before it is asked now), and F14's shell tests rewritten on the file form. Twenty-three mutations, each red on its own tests.
 
 **Changes in 0.24.87 — SCRUM-72's approval decided (design only).** A local `planner` Manager writes a GPU Worker's plan, and a Manager approves it whatever its engine (Robert, 2026-10-05): no engine-kind condition on the approval path, and the harness's automatic approval is withdrawn in favour of a real review through the reviewer's inbox, and plan state moves out of every Manager's write access (§9.14.14; `V071_DOGFOOD_FIXES.md` §3.3b). The local tier's stages become persisted, code-enforced states (§3.3a there). The §9.15 heading, dropped by 0.24.86, is restored.
 

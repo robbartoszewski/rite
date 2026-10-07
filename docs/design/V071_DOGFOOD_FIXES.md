@@ -314,7 +314,8 @@ is byte-unchanged:**
 8. end to end with stub agents: the log lists every stage once, in order.
 
 ### 3.4 Relay transport (SCRUM-69, absorbing 45 and 22)
-The Manager writes its text to a file with its own Write tool and runs
+The Manager writes its text to a file with its own file-writing tool (not the
+shell) and runs
 `rite reply|ask|route --manager <m> --from-file <path>`. There is no heredoc,
 no temp file the shell must create, and no end line to double. The heredoc
 form stays accepted while the prompt teaches only the file form. Paths are

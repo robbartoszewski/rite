@@ -11023,21 +11023,40 @@ def ask(
     # the question, BEFORE stdin is read and before anything is queued; the
     # shell has already run whatever it ran, but nothing it printed is sent.
     if meanwhile and meanwhile != stdin_text.STDIN:
-        click.echo(
-            "refusing: --while takes `-`, and what you will do meanwhile is "
-            "the first line of your text. In double quotes on the command line "
-            "the shell runs anything in backticks or $( ) BEFORE rite sees it "
-            "— and if yours had any, it already ran. Put both in one text, the "
-            "meanwhile on its first line:\n"
-            + _teach(
-                root,
-                asking,
-                f"rite ask --manager {asking} --defer --while -",
-                "ask.md",
-                "what you will do meanwhile, on the first line, then your question",
-            ),
-            err=True,
+        expanded = (
+            "In double quotes on the command line the shell runs anything in "
+            "backticks or $( ) BEFORE rite sees it — and if yours had any, it "
+            "already ran. "
         )
+        if current_manager():
+            told = (
+                "refusing: --while takes `-`, and what you will do meanwhile is "
+                "the first line of your text. "
+                + expanded
+                + "Put both in one file, the meanwhile on its first line:\n"
+                + stdin_text.file_form(
+                    root,
+                    asking,
+                    f"rite ask --manager {asking} --defer --while -",
+                    "ask.md",
+                    "<what you will do meanwhile, on the first line>, then "
+                    "<your question>",
+                )
+            )
+        else:
+            # A person at the host: word for word what it said before SCRUM-69.
+            told = (
+                "refusing: --while takes `-`, and what you will do meanwhile is "
+                "the first line of stdin. "
+                + expanded
+                + "Send both through one quoted heredoc, where nothing is "
+                "expanded:\n"
+                + stdin_text.heredoc(
+                    f"rite ask --manager {asking} --defer --while - -",
+                    "<what you will do meanwhile, on this one line>\n<your question>",
+                )
+            )
+        click.echo(told, err=True)
         raise SystemExit(1)
     question, draft = _manager_text(
         root,

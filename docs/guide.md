@@ -746,7 +746,8 @@ rite start lead --sessions 3 --minutes 90
 One without the other is refused: they catch different runaways and neither
 suffices alone, so rite will not guess the one you left out.
 
-The Owner hands work down with `rite route --ticket RT-12 helper -` (the text on stdin), and
+The Owner hands work down with `rite route --ticket RT-12 helper --from-file <draft>`
+(the text in a file it wrote, SCRUM-69), and
 `helper` answers with `rite reply`. Every route names the ticket the work is
 for, and rite refuses one whose ticket it cannot read on the board; work you
 asked for in a message becomes a chore ticket first (`rite chore`). The Owner cannot wait inside a session, so its

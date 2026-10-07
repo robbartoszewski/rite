@@ -288,7 +288,7 @@ declare its `context_window` (at least 32768): `rite start` refuses one that
 does not, and rite pins the window into the model it runs, so Ollama's own
 default does not decide it. Run each Manager in
 its own terminal (`rite start lead …`, `rite start helper …`). The Owner hands
-work down with `rite route --ticket RT-12 helper -`, the text on stdin (every route names its
+work down with `rite route --ticket RT-12 helper --from-file <draft>`, the text in a file it wrote (every route names its
 ticket; work you asked for in chat becomes a chore ticket first); while that work is unfinished its
 supervisor waits, spending no session, and starts the Owner's next session,
 within the same `rite start`, when the reply arrives. **A local model's report is not trusted:** in testing,
