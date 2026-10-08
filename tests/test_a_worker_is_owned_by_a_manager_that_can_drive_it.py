@@ -29,7 +29,6 @@ from pathlib import Path
 
 import pytest
 
-from rite_ai.config.managers import DECOMPOSE
 from rite_ai.managers import broker
 
 
@@ -62,13 +61,57 @@ _AUTHOR_AND_APPROVER = (
 )
 
 
-def test_a_manager_that_cannot_author_is_refused_the_worker(tmp_path):
-    """🔴 The defect, in one call."""
+def test_an_owner_that_can_DELEGATE_the_authoring_duty_may_own_the_worker(tmp_path):
+    """🔴 SCRUM-83 refined: HOLD **OR DELEGATE**.
+
+    The first shape of this rule required the owner to hold `decompose`
+    itself, which forced owner, Worker-starter and plan author to be one
+    Manager — and excluded the only fleet shape that works, because the
+    Manager measured to drive step 1 reliably cannot author (DD-2.4) and the
+    one that authors reaches step 1 only sometimes.
+    """
     root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine="local:small")
-    why = broker.may_own_worker(root, "lead", "gpu1")
-    assert why, "the Manager that cannot author its plan was given the Worker"
-    assert DECOMPOSE in why, why
-    assert "planner" in why, "the refusal does not say who CAN take it"
+    assert broker.may_own_worker(root, "lead", "gpu1") == "", (
+        "an owner that delegates authoring to the one Manager holding the duty "
+        "was refused the Worker"
+    )
+
+
+def test_the_delegation_does_not_reintroduce_the_deadlock(tmp_path):
+    """🔴 The control Robert asked for by name.
+
+    The deadlock was "the owner cannot author AND the author cannot touch the
+    Worker". Delegation breaks the FIRST half, so it is not enough that the
+    gate says yes — the authoring path must then actually produce a plan under
+    the owner's own driving cycle, attributed to the delegate.
+    """
+    from rite_ai.config.parse import parse_config
+    from rite_ai.local.decompose import author_for
+
+    root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine="local:small")
+    roles = parse_config(root / ".rite" / "config.yaml").coordination.manager_roles
+
+    # the gate lets `lead` own it...
+    assert broker.may_own_worker(root, "lead", "gpu1") == ""
+    # ...and the authoring path agrees who writes the plan, rather than
+    # refusing `lead` as it used to.
+    author, problem = author_for(roles, "lead")
+    assert problem == "", problem
+    assert author == "planner", author
+
+
+def test_the_gate_and_the_authoring_path_cannot_disagree(tmp_path):
+    """They ask the SAME function. A gate that accepted an arrangement the
+    authoring path refused is exactly how the deadlock arose."""
+    import ast
+    import inspect
+
+    src = inspect.getsource(broker.may_own_worker)
+    assert "author_for" in src, (
+        "the gate decides ownership by its own rule instead of the one the "
+        "decomposer uses"
+    )
+    del ast
 
 
 def test_the_manager_that_authors_may_own_it(tmp_path):
@@ -101,13 +144,34 @@ def test_an_unreadable_project_is_a_refusal(tmp_path):
 
 
 def test_nobody_holding_the_duty_is_a_refusal_that_says_so(tmp_path):
+    """Delegation needs somebody to delegate TO."""
     roles = (
         "  - name: lead\n    engine: claude\n    duties: [plan-review]\n"
         "  - name: other\n    engine: claude\n    duties: [board]\n"
     )
     root = _project(tmp_path, roles=roles, worker_engine="local:small")
     why = broker.may_own_worker(root, "lead", "gpu1")
-    assert "none" in why, why
+    assert why, "a Worker was handed over with nobody able to author its plan"
+    assert "no Manager in this project does" in why, why
+
+
+def test_several_holders_is_also_a_refusal_rather_than_a_guess(tmp_path):
+    """🔴 Fail closed on ambiguity. Picking one would make which model authored
+    a plan depend on iteration order, and RL-6 compares the author with the
+    approver — so the wrong pick silently changes what independence means."""
+    roles = (
+        "  - name: lead\n    engine: claude\n    duties: [plan-review]\n"
+        "  - name: p1\n    engine: local:small\n    model: qwen3:8b\n"
+        "    endpoint: http://localhost:11434\n    agent: goose\n"
+        "    context_window: 32768\n    duties: [decompose]\n"
+        "  - name: p2\n    engine: local:small\n    model: qwen3:14b\n"
+        "    endpoint: http://localhost:11434\n    agent: goose\n"
+        "    context_window: 32768\n    duties: [decompose]\n"
+    )
+    root = _project(tmp_path, roles=roles, worker_engine="local:small")
+    why = broker.may_own_worker(root, "lead", "gpu1")
+    assert why, "rite guessed which of two Managers should author"
+    assert "cannot tell which" in why, why
 
 
 # ---- provider agnosticism, which is the standing requirement ---------------
@@ -177,5 +241,81 @@ def test_the_supervisor_tells_the_broker_which_manager_is_asking():
 def test_every_local_class_needs_an_authored_plan(tmp_path, engine):
     """The capability must not be tied to one local CLASS either."""
     root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine=engine)
-    assert broker.may_own_worker(root, "lead", "gpu1") != ""
+    # Either Manager may own it now: `planner` holds the duty, `lead` delegates.
     assert broker.may_own_worker(root, "planner", "gpu1") == ""
+    assert broker.may_own_worker(root, "lead", "gpu1") == ""
+    # ...and the capability is what decides, for every local class.
+    from rite_ai.sandbox import worker_manifest
+
+    assert worker_manifest(root, "gpu1").needs_authored_plan
+
+
+def test_the_author_is_chosen_by_duty_alone():
+    """Robert's standing guideline, applied to the delegation too: the choice of
+    author must not look at an engine or a provider name. By AST, docstring
+    dropped — the docstring necessarily discusses Claude."""
+    import ast
+    import inspect
+
+    from rite_ai.local.decompose import author_for
+
+    tree = ast.parse(inspect.getsource(author_for))
+    fn = tree.body[0]
+    body_nodes = fn.body[1:] if ast.get_docstring(fn) else fn.body
+    body = "\n".join(ast.unparse(n) for n in body_nodes).lower()
+    for provider in ("claude", "goose", "ollama", "codex", "gemini", "cursor"):
+        assert provider not in body, f"the author is chosen by {provider!r}"
+    assert "is_local" not in body, "the author is chosen by engine kind"
+
+
+def test_a_delegated_plan_is_attributed_to_the_AUTHOR_not_the_driver(tmp_path):
+    """🔴 RL-6 depends on this and a mutation proved it was unguarded.
+
+    `decomposed_by` is the Manager RL-6 compares against the approver. Under
+    delegation the driver and the author differ, so writing the driver there
+    would compare the approver with a Manager that did not write the plan —
+    and a plan reviewed by its own author would pass a check meant to make
+    that impossible.
+    """
+    from rite_ai.coordination.local_backend import LocalStateLayer
+    from rite_ai.local import decomposition as dec
+    from rite_ai.local.decompose import Proposal, decompose_ticket
+
+    root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine="local:small")
+    # RL-63: a cite must RESOLVE, or the plan is refused for a reason that has
+    # nothing to do with delegation. Written through rite's own namer so the
+    # test does not encode a second spelling of where units live.
+    from rite_ai.spec.digest_files import unit_filename, units_dir
+
+    units = units_dir(root)
+    units.mkdir(parents=True, exist_ok=True)
+    (units / unit_filename("c1")).write_text("the agreed behaviour of the thing")
+
+    plan = (
+        '{"format_version": 1, "ticket": "T-1", "decomposed_by": "", "subtasks": ['
+        '{"id": "s1", "intent": "do the first half", "scope": ["a.py"],'
+        ' "verify": "python -m pytest -q t.py", "cites": ["c1"]},'
+        '{"id": "s2", "intent": "do the second half", "scope": ["b.py"],'
+        ' "verify": "python -m pytest -q t.py", "cites": ["c1"]}]}'
+    )
+
+    class _Stub:
+        def propose(self, prompt, workspace):
+            del prompt, workspace
+            return Proposal(bytes=plan.encode())
+
+    state = LocalStateLayer(tmp_path / "state")
+    # `lead` DRIVES; it holds no authoring duty and delegates to `planner`.
+    result = decompose_ticket(
+        root, "lead", "T-1", proposer=_Stub(), state=state, ticket_text="do it"
+    )
+    assert result.wrote, (
+        f"the delegated plan was not written: {result.problem} {result.reasons}"
+    )
+    written = dec.read(state, "T-1").plan
+    assert written is not None
+    assert written.decomposed_by == "planner", (
+        f"the plan is attributed to {written.decomposed_by!r}; under delegation "
+        "it must name the AUTHOR, because RL-6 compares that with the approver"
+    )
+    assert any("authored by 'planner'" in line for line in result.lines), result.lines

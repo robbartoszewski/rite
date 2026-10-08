@@ -403,7 +403,6 @@ def may_own_worker(root: Path, manager: str, worker: str) -> str:
     that looks healthy and advances nothing, and that is worse than a refusal
     somebody has to read.
     """
-    from rite_ai.config.managers import DECOMPOSE, effective_duties
     from rite_ai.config.parse import parse_config
 
     try:
@@ -439,18 +438,24 @@ def may_own_worker(root: Path, manager: str, worker: str) -> str:
             f"whether {manager!r} may author {worker!r}'s plan "
             f"({type(e).__name__})"
         )
-    declared = len(roles)
-    holders = {r.name for r in roles if DECOMPOSE in effective_duties(r, declared)}
-    if manager in holders:
-        return ""
-    return (
-        f"{worker!r} needs rite to author its plan, and {manager!r} does not "
-        f"hold the `{DECOMPOSE}` duty — holders: "
-        f"{', '.join(sorted(holders)) or 'none'}. Only a Worker's owner may "
-        "gate or step it, and only its owner's cycle drives its ticket, so the "
-        "Manager that owns this one has to be a Manager that can author its "
-        "plan. Ask from that Manager, or give this one the duty."
-    )
+    # 🔴 SCRUM-83 refined: HOLD **OR DELEGATE**. An owner with no authoring
+    # duty may still own and drive this Worker, provided exactly one other
+    # Manager holds `decompose` and authors for it. Asked of the same function
+    # the decomposer uses, so the gate cannot accept an arrangement the
+    # authoring path would then refuse — which is how the deadlock this
+    # replaces came about.
+    from rite_ai.local.decompose import author_for
+
+    author, problem = author_for(roles, manager)
+    if problem:
+        return (
+            f"{worker!r} needs rite to author its plan, and {problem}. Only a "
+            "Worker's owner may gate or step it, and only its owner's cycle "
+            "drives its ticket, so the Manager that owns this one must hold "
+            "the authoring duty or be able to delegate it."
+        )
+    del author
+    return ""
 
 
 def for_project(root: Path, board: object = None, capacity: int | None = None):

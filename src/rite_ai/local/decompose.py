@@ -119,12 +119,17 @@ def decompose_ticket(
             result.problem = problem
             return result
     holders = _decompose_holders(roles)
-    if manager not in holders:
-        result.problem = (
-            f"{manager!r} does not hold the decompose duty, so it cannot author a "
-            f"plan — holders: {', '.join(sorted(holders)) or 'none'}"
-        )
+    # SCRUM-83 refined: the driving Manager authors when it holds the duty, and
+    # otherwise DELEGATES to the one Manager that does.
+    author, problem = author_for(roles, manager)
+    if problem:
+        result.problem = problem
         return result
+    if author != manager:
+        result.lines.append(
+            f"{manager!r} holds no authoring duty, so the plan is authored by "
+            f"{author!r}, which does (SCRUM-83 delegation)"
+        )
 
     if state is None:
         from rite_ai.local.plan_state import layer
@@ -148,7 +153,9 @@ def decompose_ticket(
     version = read.version
 
     if proposer is None:
-        proposer, problem = _proposer_for(roles, manager)
+        # ⚠ The AUTHOR's engine, not the driver's: a delegated plan is written
+        # by the model whose role holds the duty.
+        proposer, problem = _proposer_for(roles, author)
         if problem:
             result.problem = problem
             return result
@@ -182,7 +189,10 @@ def decompose_ticket(
             # that names someone would misdirect RL-6's independence check once
             # `produced_by` is wired. Filling it here — the same way `ticket` is
             # filled — is what lets a prompt-compliant plan be written at all.
-            candidate = replace(parsed, ticket=ticket, decomposed_by=manager)
+            # ⚠ `decomposed_by` is the AUTHOR, which under delegation is not
+            # the driver. RL-6 compares the author with the approver, so
+            # recording the driver here would compare the wrong pair.
+            candidate = replace(parsed, ticket=ticket, decomposed_by=author)
             problems = candidate_problems(
                 candidate,
                 root=root,
@@ -192,7 +202,7 @@ def decompose_ticket(
             )
             if problems.ok:
                 return _write_pending(
-                    state, candidate, manager, version, result, problems.warnings
+                    state, candidate, author, version, result, problems.warnings
                 )
             reasons = problems.refusals
 
@@ -227,15 +237,24 @@ def decompose_ticket(
     return result
 
 
-def _write_pending(state, candidate, manager, version, result, warnings):
+def _write_pending(state, candidate, author, version, result, warnings):
     """Write the valid candidate as a PENDING plan and never as APPROVED."""
-    # `candidate.decomposed_by` is already the Manager rite asked (set before
-    # validation); pinned again here so the author recorded is never the model's.
+    # `candidate.decomposed_by` is already the AUTHOR rite asked (set before
+    # validation); pinned again here so the author recorded is never the
+    # model's.
+    #
+    # ⚠ **The AUTHOR, not the driving Manager.** This parameter was `manager`
+    # and re-pinned the driver here, which silently undid SCRUM-83's delegation
+    # one line after it was applied: a plan written by the delegate was filed
+    # as the driver's. RL-6 compares `decomposed_by` with the approver, so a
+    # plan could then be approved by the Manager that wrote it while the check
+    # meant to prevent exactly that still passed. Caught by a surviving
+    # mutation, not by review.
     plan = replace(
         candidate,
         approval=dec.PENDING,
         approved_by="",
-        decomposed_by=manager,
+        decomposed_by=author,
     )
     written = dec.write(state, plan, version)
     if type(written).__name__ != "Written":
@@ -409,6 +428,51 @@ def keep_rejected(
 def _decompose_holders(roles: list[ManagerRole]) -> set[str]:
     declared = len(roles)
     return {r.name for r in roles if DECOMPOSE in effective_duties(r, declared)}
+
+
+def author_for(roles: list[ManagerRole], manager: str) -> tuple[str, str]:
+    """(the Manager that authors a plan when `manager` drives, or a problem).
+
+    🔴 **SCRUM-83, refined: an owner may HOLD OR DELEGATE the authoring duty.**
+    The first shape of that rule required the Worker's owner to hold
+    `decompose` itself, which forced the owner, the Worker's starter and the
+    plan's author to be one Manager. That is satisfiable only by a Manager that
+    can author — and the one measured to drive step 1 RELIABLY cannot (its
+    decomposer adapter is unbuilt, DD-2.4), while the one that can author was
+    measured to reach step 1 only sometimes. The rule excluded the one fleet
+    shape that works.
+
+    So an owner that holds no authoring duty may still own and drive a Worker,
+    provided exactly one other Manager holds `decompose`: that Manager authors,
+    and the owner drives. ⚠ **This is what keeps the original deadlock from
+    returning** — the deadlock was "owner cannot author AND author cannot touch
+    the Worker", and delegation breaks the first half: the plan IS authored, by
+    the delegate, under the owner's own driving cycle.
+
+    ⚠ Fail closed and never guess between candidates. Nobody holding the duty
+    is a refusal; SEVERAL holding it is also a refusal, because picking one
+    would make which model authored a plan depend on dict order, and RL-6
+    compares the author with the approver.
+
+    ⚠ Duty only. No engine or provider is named here, and
+    `test_the_author_is_chosen_by_duty_alone` keeps it that way.
+    """
+    holders = _decompose_holders(roles)
+    if manager in holders:
+        return manager, ""
+    if not holders:
+        return "", (
+            f"{manager!r} does not hold the decompose duty and no Manager in "
+            "this project does, so no plan can be authored at all"
+        )
+    if len(holders) > 1:
+        return "", (
+            f"{manager!r} does not hold the decompose duty and {len(holders)} "
+            f"Managers do ({', '.join(sorted(holders))}), so rite cannot tell "
+            "which should author for it — give the duty to one, or to this "
+            "Manager"
+        )
+    return next(iter(holders)), ""
 
 
 def _rejection_addendum(reasons: tuple[str, ...]) -> str:
