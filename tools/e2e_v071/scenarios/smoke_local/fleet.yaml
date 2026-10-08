@@ -95,7 +95,15 @@ heartbeat:
   stall_threshold: 2
 
 run:
-  deadline_minutes: 120
+  # 🔴 **Sized from a measurement, not a guess.** One plan-authoring turn by
+  # the 17 GB model took 45 minutes on this machine and then failed with an
+  # infrastructure fault (a localhost "network error", the signature of the
+  # model being evicted mid-generation). The pipeline needs a turn per stage —
+  # author, approach, step, recompose — plus the approver's own cycles, and a
+  # 120-minute window could not fit the first stage twice. Robert, 2026-10-08:
+  # the point is to SEE pure-local deliver once, so the window is long enough
+  # that slowness cannot be mistaken for a wall.
+  deadline_minutes: 480
   poll_seconds: 20
   start_planner_loop: true
   timezone: Europe/Warsaw

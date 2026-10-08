@@ -74,6 +74,40 @@ print(json.dumps(out))
 """
 
 
+def stage_timeline(obs: Observer, tickets: dict) -> dict:
+    """{ticket key: [{stage, at, seconds_in_previous}]} from the persisted log.
+
+    The stage log carries each transition's own `at`, so how long a run SPENT
+    in each stage is a record rather than a stopwatch somebody held. That is
+    the throughput evidence for a local fleet: "it delivered" and "the author
+    stage took 45 minutes" are different facts and the bundle needs both.
+    """
+    ids = sorted({str(v) for v in tickets.values() if v})
+    if not ids:
+        return {}
+    raw = obs._ask_rite(_READ_PIPELINE % {"tickets": ids})  # noqa: SLF001
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[dict]] = {}
+    for key, board_id in tickets.items():
+        rows = (raw.get(str(board_id)) or {}).get("log") or []
+        timeline, previous = [], None
+        for row in rows:
+            at = float(row.get("at") or 0.0)
+            timeline.append(
+                {
+                    "stage": str(row.get("to") or ""),
+                    "at": at,
+                    "seconds_in_previous": (
+                        round(at - previous, 1) if previous and at else None
+                    ),
+                }
+            )
+            previous = at or previous
+        out[key] = timeline
+    return out
+
+
 def stage_log(obs: Observer, tickets: dict) -> dict | None:
     """{ticket key: [stage, ...]} in the order the records were written.
 

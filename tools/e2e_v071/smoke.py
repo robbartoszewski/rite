@@ -110,6 +110,7 @@ def judge(run, fleet: Fleet, obs) -> tuple[list[Result], dict]:
     events = obs.events()
     stages = hooks.stage_log(obs, {key: board_id}) or {}
     sequence = stages.get(key) or []
+    timeline = (hooks.stage_timeline(obs, {key: board_id}) or {}).get(key) or []
     handbacks = _handbacks(obs, [w["name"] for w in fleet.workers])
 
     results: list[Result] = []
@@ -277,6 +278,7 @@ def judge(run, fleet: Fleet, obs) -> tuple[list[Result], dict]:
         "board_id": board_id,
         "gpu_workers": sorted(gpu),
         "stages": sequence,
+        "timeline": timeline,
         "handbacks": handbacks,
         "delivered_events": delivered,
         "started_events": started,
@@ -321,6 +323,21 @@ def bundle(run, fleet: Fleet, results: list[Result], facts: dict) -> str:
         lines += [f"{i}. `{s}`" for i, s in enumerate(facts["stages"], 1)]
     else:
         lines.append("_none recorded_")
+    rows = facts.get("timeline") or []
+    if rows:
+        lines += [
+            "",
+            "### How long each stage took",
+            "",
+            "From the transition log's own timestamps, not a stopwatch.",
+            "",
+            "| transition | spent in the previous stage |",
+            "|---|---|",
+        ]
+        for row in rows:
+            spent = row.get("seconds_in_previous")
+            shown = "—" if spent is None else f"{spent / 60:.1f} min"
+            lines.append(f"| → `{row.get('stage')}` | {shown} |")
 
     pickup = facts.get("pickup") or {}
     lines += [
