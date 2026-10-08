@@ -119,25 +119,28 @@ def _slice_for(
     both: the spec says how this codebase does things, the definition says
     what done means for this ticket.
     """
-    from rite_ai.spec.digest_files import unit_filename, units_dir
+    from rite_ai.spec.slice import unit_text
 
     if not cites:
         return "", "the subtask cites no spec unit, so there is no slice to give"
-    where = units_dir(Path(root))
+    # 🔴 **SCRUM-92: the SAME resolver the plan validator uses.** This read the
+    # derived unit file only, and the validator did too — so relaxing one
+    # without the other would accept a plan here and refuse its subtask at
+    # execution, which is the gate/authoring divergence SCRUM-83 was bitten by.
+    # `unit_text` resolves a cite from the derived text or from a slice of the
+    # spec source, and both callers ask it.
     parts: list[str] = []
-    missing: list[str] = []
+    problems: list[str] = []
     for cite in cites:
-        path = where / unit_filename(cite)
-        try:
-            parts.append(path.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            missing.append(cite)
-    if missing:
+        got, problem = unit_text(Path(root), cite)
+        if problem:
+            problems.append(problem)
+        else:
+            parts.append(got)
+    if problems:
         return "", (
-            f"the derived spec text for {', '.join(missing)} is not in "
-            f"{where} — run `rite spec index` so the slice can be built, "
-            "because a subtask run without its slice is the free-form run "
-            "this path exists to replace"
+            f"{problems[0]} — a subtask run without its slice is the free-form "
+            "run this path exists to replace"
         )
     text = "\n\n".join(parts)
     if definition:

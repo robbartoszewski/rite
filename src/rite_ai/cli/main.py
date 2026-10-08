@@ -7940,47 +7940,13 @@ def spec_slice(unit: str, worker: str, depth: int | None) -> None:
         click.echo(str(e), err=True)
         raise SystemExit(2) from e
 
-    # A section's range covers the subsections inside it, and a slice can hold
-    # both. Printed once: a Worker reading the same paragraph twice under two
-    # headings has no way to tell it is one paragraph.
-    shown: set[tuple[str, int]] = set()
-    for unit_id in computed.units + computed.pinned:
-        found = graph.units.get(unit_id)
-        if found is None:
-            continue
-        lines = parsed.lines.get(found.source, [])
-        wanted = [
-            n
-            for n in range(found.start, found.end + 1)
-            if (found.source, n) not in shown
-        ]
-        if not wanted:
-            continue
-        shown.update((found.source, n) for n in wanted)
-        # Printed as the runs actually included, each labelled with its own
-        # range, with the gaps marked. A decision register whose rows are
-        # separate units is printed after those rows, so joining what is left
-        # under the register's full range would show a complete-looking table
-        # with a row missing from the middle — which a Worker would read as
-        # "that decision does not exist".
-        runs: list[list[int]] = []
-        for n in wanted:
-            if runs and n == runs[-1][-1] + 1:
-                runs[-1].append(n)
-            else:
-                runs.append([n])
-        spans = ", ".join(f"{r[0]}" if len(r) == 1 else f"{r[0]}-{r[-1]}" for r in runs)
-        click.echo(f"# {unit_id} ({found.source}:{spans})")
-        for i, run in enumerate(runs):
-            if i:
-                click.echo("# … part of this unit is printed elsewhere …")
-            click.echo("\n".join(lines[n - 1] for n in run).rstrip())
-        if wanted[0] != found.start or wanted[-1] != found.end or len(runs) > 1:
-            click.echo(
-                f"# (this is {unit_id}, lines {found.start}-{found.end}; the "
-                "rest of it is printed elsewhere in this slice)"
-            )
-        click.echo("")
+    # ⚠ Rendered by `slice.render`, which is also what plan-time cite
+    # validation and the Worker's slice use (SCRUM-92). This loop used to live
+    # here, and a second copy of it would be a second answer to "what does this
+    # unit say".
+    from rite_ai.spec.slice import render
+
+    click.echo(render(graph, parsed, computed), nl=False)
     record_retrieval(root, unit, worker=worker, slice_ratio=computed.ratio)
     # On stderr: the slice itself is what a Worker pipes or reads, and a
     # measurement inside it would read as part of the spec.

@@ -160,7 +160,7 @@ def decompose_ticket(
             result.problem = problem
             return result
 
-    base_prompt = _prompt_for(ticket, ticket_text)
+    base_prompt = _prompt_for(ticket, ticket_text, available_units(root))
     previous: tuple[str, ...] | None = None
     addendum = ""
 
@@ -484,10 +484,56 @@ def _rejection_addendum(reasons: tuple[str, ...]) -> str:
     )
 
 
-def _prompt_for(ticket: str, ticket_text: str) -> str:
+def available_units(root) -> tuple[str, ...]:
+    """Every spec unit id a cite may name, as rite's own parser derives them.
+
+    🔴 **The decomposer was told to cite "a spec unit that exists" and never
+    told which ones do.** It had to infer ids from the spec's prose, and a
+    heading that begins with a hex id makes that a trap: measured 2026-10-08,
+    a heading `## 978a36de0d0fbb2fba559f87 — slugify behavior` yields the unit
+    `978a36de0d0fbb2fba559f87-slugify-behavior`, and the model cited
+    `978a36de0d0fbb2fba559f87` — the refinement record id, which the same
+    document mentions by name. RL-63 refused both subtasks, correctly, for a
+    cite that was a reasonable misreading of text rite could simply have
+    quoted.
+
+    Empty for a project with no spec, or one whose spec cannot be parsed:
+    the prompt then says so rather than listing nothing as if it were a list.
+    """
+    from pathlib import Path
+
+    try:
+        from rite_ai.config.parse import parse_config
+        from rite_ai.spec.units import parse_paths
+
+        root = Path(root)
+        config = parse_config(root / ".rite" / "config.yaml")
+        paths = list(getattr(config.spec, "paths", ()) or ())
+        if not paths:
+            return ()
+        parsed = parse_paths(root, paths, getattr(config.spec, "extra_units", ()) or ())
+        return tuple(u.id for u in parsed.units)
+    except Exception:  # noqa: BLE001 - a prompt must not die on a bad spec
+        return ()
+
+
+def _prompt_for(ticket: str, ticket_text: str, units: tuple[str, ...] = ()) -> str:
     """The decomposer's instruction. The model emits BYTES — a JSON object — and
     `parse` + `candidate_problems` decide whether they are a plan (DD-2.2)."""
     body = ticket_text.strip() or "(no ticket text was supplied)"
+    if units:
+        shown = "\n".join(f"  - {u}" for u in units)
+        cites_help = (
+            "\n\nThe spec units you may cite, exactly as written — a cite that "
+            "is not one of these is refused (RL-63), and nothing else is a unit "
+            "id however it looks in the spec's text:\n" + shown
+        )
+    else:
+        cites_help = (
+            "\n\n⚠ This project registers no spec units, so no cite can "
+            "resolve and this ticket cannot be decomposed by this path. Say so "
+            "rather than inventing a cite."
+        )
     return (
         f"Decompose ticket {ticket} into independent subtasks. Emit ONE JSON "
         "object and nothing else, of the form:\n"
@@ -505,7 +551,7 @@ def _prompt_for(ticket: str, ticket_text: str) -> str:
         "repo; each subtask cites at least one spec unit that exists; no two "
         "subtasks share a scope path; the verify is a real command, never `true` "
         "or `:`. Do NOT set an approval — a plan-review holder approves the "
-        "plan.\n\nThe ticket:\n" + body
+        "plan.\n\nThe ticket:\n" + body + cites_help
     )
 
 

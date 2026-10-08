@@ -161,7 +161,7 @@ def _cites_problem(root: Path, sub: dec.Subtask) -> str:
     same reason `_slice_for` refuses it — an empty slice is the free-form run
     this path replaces.
     """
-    from rite_ai.spec.digest_files import unit_filename, units_dir
+    from rite_ai.spec.slice import unit_text
 
     if not sub.cites:
         return (
@@ -169,13 +169,22 @@ def _cites_problem(root: Path, sub: dec.Subtask) -> str:
             "gets instead of the spec, so a subtask with no cites is the "
             "free-form run this path replaces (RL-63)"
         )
-    where = units_dir(Path(root))
-    missing = [c for c in sub.cites if not (where / unit_filename(c)).exists()]
-    if missing:
+    # 🔴 **SCRUM-92: derived text OR a slice.** This asked only whether a
+    # DERIVED unit was on disk, and `rite spec index` refuses to derive one for
+    # a spec too small to decompose — so on such a project every cited subtask
+    # was refused, every uncited one was refused above, and the remedy this
+    # message used to name was a command that declines to help. `unit_text` is
+    # the same resolver `step._slice_for` uses, so a cite accepted here cannot
+    # be refused at execution.
+    unresolved = []
+    for cite in sub.cites:
+        _text, problem = unit_text(Path(root), cite)
+        if problem:
+            unresolved.append(problem)
+    if unresolved:
         return (
-            f"{sub.id}: the derived spec text for {', '.join(missing)} is not in "
-            f"{where} — run `rite spec index` so the cite resolves, because a "
-            "cite rite cannot resolve stalls the subtask after approval (RL-63)"
+            f"{sub.id}: {unresolved[0]} — a cite rite cannot resolve stalls the "
+            "subtask after approval (RL-63)"
         )
     return ""
 
