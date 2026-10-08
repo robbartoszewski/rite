@@ -84,17 +84,19 @@ class Observer:
     def decomposition(self, ticket: str) -> dict | None:
         """The ticket's plan as rite renders it, or None.
 
-        ⚠ STUB-PENDING SCRUM-72: today's reader is `LocalStateLayer(<project>/.rite)`.
-        Plan 3.3b moves plan state outside the project; when that lands, replace the
-        constructor below with the one 72 introduces. Until then a run on the fixed
-        build reads the OLD place and finds nothing, which `checks` reports as a
-        FAIL with this reason, never as a pass.
+        🔴 **SCRUM-72c moved plan state out of the project** — it is now under
+        `plan_state.home(root)`, beside the mailboxes, outside every Manager's
+        grant — and this read goes through `plan_state.layer`, which is the one
+        spelling every local-tier consumer binds to. It used to construct
+        `LocalStateLayer(<project>/.rite)` by hand: against the fixed build that
+        reads a place nothing writes any more and finds no plan, which `checks`
+        reports as a FAIL. Re-spelling the path here is exactly what that
+        docstring warned would rot, so it is not re-spelled.
         """
         return self._ask_rite(
             "import json; from pathlib import Path; "
-            "from rite_ai.local import decomposition as d; "
-            "from rite_ai.coordination.local_backend import LocalStateLayer; "
-            "r = d.read(LocalStateLayer(Path('.').resolve() / '.rite'), "
+            "from rite_ai.local import decomposition as d, plan_state; "
+            "r = d.read(plan_state.layer(Path('.').resolve()), "
             f"{ticket!r}); "
             "print(json.dumps(None if r.plan is None else "
             "json.loads(d.render(r.plan))))"
