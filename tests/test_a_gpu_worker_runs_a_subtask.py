@@ -604,7 +604,7 @@ class _Claims:
         pass
 
 
-def _approved(root: Path):
+def _approved(root: Path, *, with_approach: bool = True):
 
     plan = dec.Decomposition(
         ticket=TICKET,
@@ -624,7 +624,37 @@ def _approved(root: Path):
     state = plan_state.layer(root)
     written = dec.write(state, plan, dec.read(state, TICKET).version)
     assert type(written).__name__ == "Written", written
+    # The approval digests always: a step with none is refused before anything
+    # else, which would make every test here a test of that one refusal.
+    # The persisted APPROACH only when the test is not about producing it.
+    _clear_level2(state, plan, approach=with_approach)
     return state
+
+
+def _clear_level2(state, plan, steps="1. do the thing", approach=True) -> None:
+    """Record what approval recorded, and persist an approach per subtask —
+    what the real pipeline leaves behind by the time a step runs (SCRUM-72e).
+
+    ⚠ **Not a stub of the guard, a set-up of its inputs.** Level 2 is required
+    and persisted now, and `cleared_to_run` refuses a step without it; these
+    tests are about the EXECUTOR, so they arrive at it the way a driven
+    pipeline does. The guard's own refusals are tested where they belong.
+    """
+    from rite_ai.local import level2
+
+    recorded = level2.record_approval(
+        state,
+        plan.ticket,
+        plan.approved_by or "reviewer",
+        plan.subtasks,
+        expected=level2.approval_version(state, plan.ticket),
+    )
+    assert type(recorded).__name__ == "Written", recorded
+    if not approach:
+        return
+    for sub in plan.subtasks:
+        written = level2.write_approach(state, plan.ticket, sub, steps)
+        assert type(written).__name__ == "Written", written
 
 
 class TestAPlacedTurnNeverTouchesTheHostTree:
@@ -756,7 +786,7 @@ class TestAPlacedTurnNeverTouchesTheHostTree:
         a Claude Manager driving a GPU Worker produced no approach at all —
         which is the headline mixed-fleet configuration.
         """
-        state = _approved(project)
+        state = _approved(project, with_approach=False)
         asked: dict = {}
 
         def approach(subtask, spec_slice):
@@ -781,18 +811,41 @@ class TestAPlacedTurnNeverTouchesTheHostTree:
         )
         assert asked["subtask"] == "s1"
         assert "5.3" in asked["slice"] or asked["slice"]
+        # SCRUM-72e: and it is PERSISTED, so the stage can be shown to have
+        # happened rather than inferred from a turn that is over.
+        from rite_ai.local import level2
 
-    def test_a_level_2_that_could_not_run_does_not_stop_the_turn(self, project):
-        # Advisory, and fail-open by design (DD-2.4): an approach improves a
-        # turn, it is not a gate on one. A Level 2 that failed is REPORTED and
-        # the subtask runs exactly as it would have without one.
-        state = _approved(project)
+        stored = level2.read_approach(state, TICKET, "s1")
+        assert not isinstance(stored, str) and stored is not None, stored
+        assert stored.steps == "1. do the thing"
+        assert stored.digest == level2.digest(
+            dec.read(state, TICKET).plan.subtask("s1")
+        )
+
+    def test_a_level_2_that_could_not_run_DOES_stop_the_turn(self, project):
+        """🔴 **Inverted by SCRUM-72e** (Robert's §5.5: override DD-2.4).
+
+        This asserted the opposite — "advisory, and fail-open by design: a
+        Level 2 that failed is REPORTED and the subtask runs exactly as it
+        would have without one". That is what made a stage §3.3a names as
+        mandatory one any endpoint hiccup removed, so "the model cannot skip a
+        stage" was untrue of this one.
+
+        ⚠ **And it is still not a FAILED subtask** (RL-47). An endpoint that
+        was down did not produce a bad approach, it produced none: the step is
+        refused and reported, the subtask keeps its status, and no attempt is
+        burned. A refusal that spent an attempt would retire a subtask for an
+        outage.
+        """
+        state = _approved(project, with_approach=False)
+        before = dec.read(state, TICKET).plan.subtask("s1")
 
         def approach(subtask, spec_slice):
             return type(
                 "A", (), {"ok": False, "steps": "", "problem": "the endpoint was down"}
             )()
 
+        agent = _Agent()
         step = st.take_one_step(
             project,
             MANAGER,
@@ -802,12 +855,18 @@ class TestAPlacedTurnNeverTouchesTheHostTree:
             committer=_Committer(),
             claims=_Claims(),
             placement=Placement(
-                **{**self.PLACED, "agent": _Agent(), "approach": approach}
+                **{**self.PLACED, "agent": agent, "approach": approach}
             ),
         )
-        assert step.ran is True
-        assert step.accepted is True
-        assert any("the endpoint was down" in line for line in step.lines)
+        assert step.ran is False
+        assert step.accepted is False
+        assert "no persisted Level-2 approach" in step.problem
+        assert "the endpoint was down" in step.problem
+        # The subtask is untouched: same status, same attempts.
+        after = dec.read(state, TICKET).plan.subtask("s1")
+        assert (after.status, after.attempts) == (before.status, before.attempts)
+        # And no commit was asked for, so nothing was edited.
+        assert step.commit == "" and step.verify_output == ""
 
     def test_a_placement_problem_stops_the_subtask(self, project):
         state = _approved(project)

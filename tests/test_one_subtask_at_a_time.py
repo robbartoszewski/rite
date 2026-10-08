@@ -111,7 +111,33 @@ def _seed(root: Path, plan: dec.Decomposition):
     read = dec.read(state, plan.ticket)
     written = dec.write(state, plan, read.version)
     assert type(written).__name__ == "Written", written
+    if plan.approval == dec.APPROVED:
+        _clear_level2(state, plan)
     return state
+
+
+def _clear_level2(state, plan, steps="1. do the thing") -> None:
+    """Record what approval recorded, and persist an approach per subtask —
+    what the real pipeline leaves behind by the time a step runs (SCRUM-72e).
+
+    ⚠ **Not a stub of the guard, a set-up of its inputs.** Level 2 is required
+    and persisted now, and `cleared_to_run` refuses a step without it; these
+    tests are about the EXECUTOR, so they arrive at it the way a driven
+    pipeline does. The guard's own refusals are tested where they belong.
+    """
+    from rite_ai.local import level2
+
+    recorded = level2.record_approval(
+        state,
+        plan.ticket,
+        plan.approved_by or "reviewer",
+        plan.subtasks,
+        expected=level2.approval_version(state, plan.ticket),
+    )
+    assert type(recorded).__name__ == "Written", recorded
+    for sub in plan.subtasks:
+        written = level2.write_approach(state, plan.ticket, sub, steps)
+        assert type(written).__name__ == "Written", written
 
 
 def _approved(subtasks=None) -> dec.Decomposition:

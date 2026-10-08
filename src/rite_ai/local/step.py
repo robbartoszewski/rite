@@ -205,6 +205,7 @@ def take_one_step(
     committer=None,
     claims=None,
     placement=None,
+    approach_for=None,
 ) -> Step:
     """Run the next planned subtask of `ticket`, or say why nothing ran.
 
@@ -216,6 +217,10 @@ def take_one_step(
     claim identity all come from it, so a test that could only substitute the
     agent could not reach them. Left unset — and with no agent passed either —
     it is resolved from the project, which is the production path.
+
+    `approach_for` is Level 2's producer (SCRUM-72e), injectable for the same
+    reason: the approach is REQUIRED now, so a test that could not substitute
+    it could only ever test the refusal.
     """
     root = Path(root)
     step = Step(ticket=ticket)
@@ -327,26 +332,49 @@ def take_one_step(
             ticket=ticket,
         )
 
-    # Level 2 (DD-2.4, OL6): the unit's own steps, with its DECOMPOSITION model,
-    # before it edits anything. Advisory by design — a unit with no decomposition
-    # model, or a Level-2 turn that could not run, executes exactly as before.
-    approach, approach_note = _approach_for(
-        root, manager, subtask, spec_slice, placement if placed else None
-    )
+    # Level 2 (SCRUM-72e, overriding DD-2.4's fail-open per Robert's §5.5):
+    # the unit's own steps, with its DECOMPOSITION model, before it edits
+    # anything — REQUIRED and PERSISTED. Written here if it is not stored yet,
+    # then the guard decides whether this subtask may run at all.
+    from rite_ai.local import level2
 
-    # ⚠ The boundary, checked rather than trusted (DD-2.4). Level 2 runs between
-    # approval and execution, so a subtask it altered would be rewriting what
-    # plan review passed — and `scope` is the committer's allowlist while
-    # `verify` is the only thing RL-7 trusts. `_approach_for` is given no way to
-    # return a subtask, so this is belt and braces; the design asks for a check
-    # and not a convention, and a structural guarantee somebody can refactor
-    # away is a convention.
-    from rite_ai.local.approach import boundary_problem
+    approach_note = ""
+    stored = level2.read_approach(state, ticket, subtask.id)
+    if stored is None or (
+        not isinstance(stored, str) and stored.digest != level2.digest(subtask)
+    ):
+        # None yet, or written for a subtask this one is no longer — either
+        # way this turn produces one. ⚠ A failure here is NOT a failed
+        # subtask (RL-47): the guard below refuses the step and the caller
+        # reports it, keeping the subtask's status and burning no attempt. An
+        # endpoint that was down did not produce a bad approach.
+        produce = approach_for or _approach_for
+        produced, approach_note = produce(
+            root, manager, subtask, spec_slice, placement if placed else None
+        )
+        if produced:
+            written = level2.write_approach(state, ticket, subtask, produced)
+            if not isinstance(written, dec.Written):
+                approach_note = (
+                    f"its Level-2 approach could not be persisted: "
+                    f"{getattr(written, 'reason', 'it changed under this write')}"
+                )
 
-    drifted = boundary_problem(plan.subtask(subtask.id) or subtask, subtask)
-    if drifted:
-        step.problem = f"{ticket} {subtask.id}: {drifted}"
+    # ⚠ **The boundary, against APPROVAL TIME.** The old check was
+    # `boundary_problem(plan.subtask(subtask.id) or subtask, subtask)` — both
+    # sides from the one read, so it could only ever pass, and what it exists
+    # for is a subtask edited between approval and execution. `cleared_to_run`
+    # compares the executing subtask against the digest `approve_plan`
+    # recorded, and also refuses a step with no persisted approach. `scope` is
+    # the committer's allowlist and `verify` is the only thing RL-7 trusts, so
+    # a change to either turns the gates into decoration.
+    verdict = level2.cleared_to_run(state, ticket, subtask)
+    if isinstance(verdict, level2.Blocked):
+        step.problem = f"{ticket} {subtask.id}: {verdict.why}" + (
+            f" ({approach_note})" if approach_note else ""
+        )
         return step
+    approach = verdict.steps
 
     outcome = run_subtask(
         state=state,

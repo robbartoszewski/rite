@@ -291,4 +291,29 @@ def approve_plan(
             "ran, so the approval would have been given to a plan nobody read. "
             "Read it again and decide on what is there now"
         )
+    # SCRUM-72e: record a digest per subtask AT APPROVAL TIME, so the boundary
+    # check before a step compares the executing subtask against what was
+    # approved rather than against the plan rite just read (which is what it
+    # compared before, and so could only ever pass).
+    #
+    # ⚠ **After the plan write, and fail-closed if it fails.** The plan is
+    # APPROVED either way; with no digests recorded every step is REFUSED
+    # (`level2.cleared_to_run`), which is the safe direction and is said here
+    # rather than discovered at the first step. The other order would leave
+    # digests for an approval that did not happen.
+    from rite_ai.local import level2
+
+    recorded = level2.record_approval(
+        standing.state,
+        ticket,
+        reviewer,
+        plan.subtasks,
+        expected=level2.approval_version(standing.state, ticket),
+    )
+    if not isinstance(recorded, dec.Written):
+        return Refused(
+            f"{ticket} IS now approved, but what was approved could not be "
+            "recorded, so no subtask of it may run until the plan is reviewed "
+            f"again: {getattr(recorded, 'reason', 'the record changed under this')}"
+        )
     return Approved(ticket=ticket, by=reviewer, author=standing.author.name)
