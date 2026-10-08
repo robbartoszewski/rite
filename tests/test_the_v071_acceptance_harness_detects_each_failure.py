@@ -453,11 +453,20 @@ def test_the_add_commands_carry_the_local_engine_flags():
 # ---- the two scenarios ----
 
 
-def test_both_scenarios_exist_and_name_only_real_checks():
+FULL_GATE = ["all_local", "mixed"]
+SMOKES = ["smoke_local", "smoke_mixed"]
+
+
+def test_every_scenario_is_one_of_the_two_kinds():
+    """Named, not discovered: a scenario added without a guard for its kind
+    would otherwise be covered by neither of the two tests below."""
     from tools.e2e_v071.config import scenario_names
 
-    assert scenario_names() == ["all_local", "mixed"]
-    for name in scenario_names():
+    assert scenario_names() == sorted(FULL_GATE + SMOKES)
+
+
+def test_the_full_gate_scenarios_name_only_real_checks():
+    for name in FULL_GATE:
         fleet = load(name)
         assert set(fleet.check_names) <= set(checks.BY_NAME), name
         keys = {t.key for t in fleet.tickets}
@@ -467,6 +476,58 @@ def test_both_scenarios_exist_and_name_only_real_checks():
             fleet.worker(fleet.ticket(k).for_worker).get("engine")
             for k in fleet.pipeline_keys
         )
+
+
+def test_the_smoke_scenarios_are_one_gpu_ticket_and_no_inductions():
+    """The happy-path smoke's shape, asserted so "minimal" cannot drift into
+    "accidentally not testing the GPU Worker at all"."""
+    from tools.e2e_v071 import smoke
+
+    for name in SMOKES:
+        fleet = load(name)
+        assert fleet.smoke, name
+        assert set(fleet.check_names) == set(smoke.CHECK_NAMES), name
+        assert len(fleet.pipeline_keys) == 1, name
+        assert len(fleet.tickets) == 1, name
+        # No induced failure, so no kill and no stale-claim restart.
+        assert fleet.kill_worker == "", name
+        assert fleet.decoy_key is None, name
+        # The one ticket must go to a Worker with an engine — a GPU Worker.
+        key = fleet.pipeline_keys[0]
+        worker = fleet.worker(fleet.ticket(key).for_worker)
+        assert worker.get("engine"), name
+        assert worker["name"] in fleet.gpu_workers, name
+        # Delivery lands as a branch, so the app must have no remote.
+        assert fleet.board_only_repo, name
+        assert fleet.publish_strategy == "commit", name
+
+
+def test_each_smoke_can_actually_pass_its_plan_review():
+    """🔴 RL-6 by rite's own identity function, for the smokes too.
+
+    A plan must be approved by a Manager that did not write it, running a
+    DIFFERENT model where both are local. Get that wrong and the review stage
+    can never be reached — and the symptom is not an error, it is a run that
+    sits at `decomposed` until its two-hour deadline expires and reports a
+    FAIL that looks like the model's fault.
+    """
+    from rite_ai.config.managers import model_identity
+    from tools.e2e_v071.config import load as load_fleet
+
+    for name in SMOKES:
+        fleet = load_fleet(name)
+        roles = {m["name"]: m for m in fleet.managers}
+        author, approver = roles[fleet.planner], roles[fleet.owner]
+        assert fleet.planner != fleet.owner, name
+        author_engine = str(author.get("engine") or "claude")
+        approver_engine = str(approver.get("engine") or "claude")
+        if author_engine.startswith("local:") and approver_engine.startswith("local:"):
+            assert model_identity(author["model"]) != model_identity(
+                approver["model"]
+            ), f"{name}: the plan's author and approver run the same model"
+        else:
+            # One Claude, one local: different engines are different reviewers.
+            assert author_engine != approver_engine, name
 
 
 def test_the_all_local_fleet_has_no_claude_and_an_independent_reviewer():

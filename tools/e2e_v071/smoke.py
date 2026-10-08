@@ -48,6 +48,16 @@ FAIL = "FAIL"
 # subtask's own verify before accepting it; RL-8 is the recomposition verify.
 _GATES = (("plan_reviewed", "RL-6"), ("step_reviewed", "RL-7"), ("recomposed", "RL-8"))
 
+CHECK_NAMES = (
+    "dispatched_to_the_gpu_worker",
+    "went_through_the_review_gates",
+    "delivered_and_handed_back",
+    "the_manager_picked_it_up",
+)
+"""The four transitions, in the order `judge` appends them. Exported so a
+scenario naming a check that does not exist is caught by a test rather than at
+the end of a two-hour run."""
+
 
 @dataclass
 class Result:
