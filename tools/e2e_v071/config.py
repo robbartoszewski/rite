@@ -78,7 +78,29 @@ class Fleet:
 
     @property
     def kill_worker(self) -> str:
-        return self.scenario["kill_worker"]
+        """Whose sandbox the run kills, or "" for a scenario that induces no
+        failure. Optional because the happy-path smoke induces none, and a
+        KeyError here would have made that unexpressible."""
+        return self.scenario.get("kill_worker") or ""
+
+    @property
+    def smoke(self) -> bool:
+        """A reduced run: one ticket, no inductions, four checks. It finishes as
+        soon as that ticket is delivered rather than waiting for inductions that
+        will never happen."""
+        return bool(self.scenario.get("smoke"))
+
+    @property
+    def board_only_repo(self) -> bool:
+        """Create the run's repo for the BOARD alone — do not make it the app's
+        git origin. A remote-less app is the only shape whose Worker sandbox
+        starts without a GitHub token of its own."""
+        return bool(self.scenario.get("board_only_repo"))
+
+    @property
+    def publish_strategy(self) -> str:
+        """Override for `publish.strategy`, or "" to let the repo decide."""
+        return str(self.scenario.get("publish_strategy") or "")
 
     @property
     def check_names(self) -> tuple[str, ...]:

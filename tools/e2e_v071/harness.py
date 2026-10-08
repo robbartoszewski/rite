@@ -31,9 +31,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
-from tools.e2e_v071 import board_pickup, checks, demo, driver, hooks, preflight
+from tools.e2e_v071 import board_pickup, checks, demo, driver, hooks, preflight, smoke
 from tools.e2e_v071.config import HERE, Fleet, load, scenario_names
-from tools.e2e_v071.observe import Observer, delivered_prs, installed_rite_python
+from tools.e2e_v071.observe import (
+    Observer,
+    delivered_any,
+    delivered_prs,
+    installed_rite_python,
+)
 from tools.e2e_v071.runlog import RunDir, sh
 
 DEFAULT_RUNS_ROOT = Path(os.path.expanduser("~/AI/rite-e2e-runs"))
@@ -65,7 +70,9 @@ def _patch_config(project: Path, fleet: Fleet, repo: str) -> None:
     cfg = yaml.safe_load(path.read_text()) or {}
     cfg.setdefault("heartbeat", {}).update(fleet.heartbeat)
     cfg["publish"] = {
-        "strategy": "pull_request" if repo else "commit",
+        # The scenario may override: the smoke delivers as a branch into the
+        # project's checkout (`commit`) because its app has no remote.
+        "strategy": fleet.publish_strategy or ("pull_request" if repo else "commit"),
         "squash": False,
         "auto_merge": False,
     }
@@ -190,20 +197,28 @@ def setup(fleet: Fleet, runs_root: Path, *, offline: bool, create_repo: bool) ->
     repo = ""
     if create_repo:
         repo = f"{fleet.github_owner}/{fleet.repo_prefix}{run_id.lower()}"
-        p(
-            [
-                "gh",
-                "repo",
-                "create",
-                repo,
-                "--private",
-                "--source",
-                ".",
-                "--remote",
-                "origin",
-                "--push",
-            ]
-        )
+        if fleet.board_only_repo:
+            # The repo is the BOARD only. The app keeps no origin, which is what
+            # lets its Worker's sandbox start without a GitHub token of its own
+            # (`sandbox.start_problem` returns None when there are no remotes,
+            # and refuses a non-GitHub one outright). The host is what collects
+            # a Worker's branch in either case (OL5b §1.3).
+            p(["gh", "repo", "create", repo, "--private"])
+        else:
+            p(
+                [
+                    "gh",
+                    "repo",
+                    "create",
+                    repo,
+                    "--private",
+                    "--source",
+                    ".",
+                    "--remote",
+                    "origin",
+                    "--push",
+                ]
+            )
 
     preset = run.file("init-preset.yaml")
     preset.write_text(yaml.safe_dump(_preset(fleet, "github" if repo else "none")))
@@ -406,9 +421,12 @@ def run_gate(run: RunDir, fleet: Fleet, *, probe_df16: bool) -> int:
                 start_owner=lambda: sup.start(fleet.owner),
             )
             events = obs.events()
-            done = all(
-                delivered_prs(events, tickets[t.key]) for t in fleet.work_tickets
-            )
+            # ⚠ `delivered_prs` needs "; PR " in the outcome, which only the
+            # pull_request strategy writes. A smoke delivers as a branch, so
+            # judging it by PRs would wait out the whole deadline for something
+            # never written.
+            seen = delivered_any if fleet.smoke else delivered_prs
+            done = all(seen(events, tickets[t.key]) for t in fleet.work_tickets)
             if done and st.kill_done and st.restart_done:
                 # One more stretch so reconciliation and the journal can catch up.
                 for _ in range(4):
@@ -504,7 +522,24 @@ def report(run: RunDir, results: list[checks.Result]) -> str:
     return v
 
 
+def judge_smoke(run: RunDir, fleet: Fleet, obs: Observer) -> int:
+    """The happy-path smoke's four transitions, and its bundle.
+
+    Its own function rather than a `checks` entry: the smoke reads records the
+    full gate does not (a handback, and the project checkout's own branches),
+    and judging it through `Evidence` would mean teaching the full gate's
+    collector about a shape it never runs in.
+    """
+    results, facts = smoke.judge(run, fleet, obs)
+    text = smoke.bundle(run, fleet, results, facts)
+    print(text)
+    print(f"bundle: {run.file('smoke-bundle.md')}")
+    return 0 if all(r.ok for r in results) else 1
+
+
 def judge(run: RunDir, fleet: Fleet, obs: Observer) -> int:
+    if fleet.smoke:
+        return judge_smoke(run, fleet, obs)
     ev = collect(run, fleet, obs)
     results = checks.evaluate(ev, fleet.check_names)
     v = report(run, results)

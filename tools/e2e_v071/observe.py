@@ -159,6 +159,22 @@ class Observer:
         return out
 
 
+def delivered_any(events: list[dict], ticket: str) -> list[dict]:
+    """Every `delivered` event for `ticket`, PR or not.
+
+    ⚠ `delivered_prs` requires "; PR " in the outcome text, which only
+    `publish.strategy: pull_request` produces. Under `commit` the work is
+    delivered as a branch into the project's checkout and there is no PR, so a
+    run judged by `delivered_prs` would wait for ever for something that is
+    never written. The happy-path smoke uses this.
+    """
+    return [
+        e
+        for e in events
+        if e.get("event") == "delivered" and str(e.get("ticket")) == str(ticket)
+    ]
+
+
 def delivered_prs(events: list[dict], ticket: str) -> list[dict]:
     """[{worker, pr_url}] for each `delivered` event whose outcome says a PR exists.
 

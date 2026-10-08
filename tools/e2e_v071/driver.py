@@ -125,7 +125,11 @@ def maybe_kill(
 ) -> None:
     """Kill the scenario's `kill_worker`'s sandbox once, mid-ticket: after it has
     worked a few minutes on a ticket and before that ticket is delivered."""
-    if st.kill_done:
+    if st.kill_done or not fleet.kill_worker:
+        # No `kill_worker` means the scenario induces no failure (the happy-path
+        # smoke). Marked done so nothing downstream waits for an induction that
+        # was never going to happen.
+        st.kill_done = True
         return
     victim = fleet.kill_worker
     skip = {str(tickets[k]) for k in (fleet.owner_key, fleet.decoy_key) if k}
