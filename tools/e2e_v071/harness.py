@@ -315,6 +315,7 @@ class Supervisors:
     def __init__(self, run: RunDir, env: dict):
         self.run, self.env = run, env
         self.socket = f"rite-e2e-{run.path.name}"
+        self.started: set[str] = set()
         (run.path / "logs").mkdir(exist_ok=True)
 
     def _tmux(self, *args: str) -> subprocess.CompletedProcess:
@@ -324,9 +325,22 @@ class Supervisors:
 
     def start(self, manager: str) -> None:
         log = self.run.path / "logs" / f"{manager}.log"
+        # ⚠ **`--fresh` on a Manager's FIRST start in this run, and never
+        # after.** A bare `rite start <manager>` continues that Manager's last
+        # conversation. A re-run of a gate that had parked would resume the
+        # session which concluded "I am blocked, waiting for the User" — so a
+        # fix to the thing that blocked it would change nothing, and the re-run
+        # would report the same wall for a reason that no longer existed.
+        #
+        # Not unconditional, because the mid-run restart induction
+        # (`maybe_restart_with_stale_state`) deliberately stops and restarts the
+        # Owner, and there the point is that it comes back to work it already
+        # knows about. Resuming is right there and wrong on a first start.
+        fresh = "" if manager in self.started else " --fresh"
+        self.started.add(manager)
         cmd = (
             f"cd {self.run.project} && "
-            f"rite start {manager} --record-issues 2>&1 | tee -a {log}"
+            f"rite start {manager}{fresh} --record-issues 2>&1 | tee -a {log}"
         )
         exists = self._tmux("has-session", "-t", "e2e").returncode == 0
         if exists:
