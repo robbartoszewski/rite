@@ -8371,6 +8371,24 @@ def sandbox_start(
             "in your working directory, with what to do with your commits under "
             "Publishing. Cite the record id in your last commit message."
         )
+        # 🔴 **NO PROMPT FOR A LOCAL WORKER (SCRUM-72 §3.3).** A prompt starts
+        # a free-form turn, and a local Worker's turns are not free-form: the
+        # staged pipeline hands it ONE approved subtask at a time, with that
+        # subtask's spec slice and its Level-2 approach
+        # (`step.take_one_step`). Pasting a "work this ticket" prompt into its
+        # idle sandbox started a second, ungated worker on the same ticket —
+        # the one thing the whole pipeline exists to prevent — and it would
+        # have been doing it inside the sandbox the pipeline then places turns
+        # into.
+        if getattr(manifest, "is_local", False):
+            prompt = None
+            click.echo(
+                f"'{worker}' runs a local engine, so it is started IDLE and no "
+                "prompt is given: the staged pipeline drives it one approved "
+                "subtask at a time (spec session, plan, review, approach, "
+                "step, recomposition verify). Its Manager's supervise loop "
+                "advances it; nothing here starts a turn."
+            )
     result = start_worker(
         root,
         worker,
@@ -9970,7 +9988,7 @@ def _drive_local_tier(root, manager: str, board, say) -> None:
     """
     from rite_ai.local.loop import drive_local_tier
 
-    tickets, why = _local_tier_tickets(board, manager)
+    tickets, why = _local_tier_tickets(root, board, manager)
     if why:
         say(f"local tier: the board could not be read this cycle — {why}")
         return
@@ -9982,7 +10000,34 @@ def _drive_local_tier(root, manager: str, board, say) -> None:
         say(f"local tier: nothing advanced this cycle ({type(e).__name__}: {e})")
 
 
-def _local_tier_tickets(board, manager: str) -> tuple[list[str], str]:
+def _local_worker_holds(root, manager: str, ticket: str) -> bool:
+    """Whether a LOCAL Worker of `manager` is recorded as started on `ticket`.
+
+    ⚠ The SAME selector the executor and the delivery request use
+    (`loop._worker_for`, through `worker_step.placement_for`'s own comment):
+    it reads what `rite sandbox start` recorded, so the Worker whose ticket is
+    driven, the Worker that executes a subtask and the Worker named in the
+    delivery request are one by construction rather than by three functions
+    agreeing.
+
+    False for anything it cannot read. A ticket rite cannot place a Worker on
+    is not one to drive through a decomposer.
+    """
+    from pathlib import Path
+
+    from rite_ai.local.loop import _worker_for
+    from rite_ai.sandbox import worker_manifest
+
+    try:
+        worker = _worker_for(Path(root), manager, ticket)
+        if not worker:
+            return False
+        return bool(getattr(worker_manifest(Path(root), worker), "is_local", False))
+    except Exception:  # noqa: BLE001 - cannot tell is not a reason to drive
+        return False
+
+
+def _local_tier_tickets(root, board, manager: str) -> tuple[list[str], str]:
     """(the REFINED tickets assigned to `manager`, or why they could not be read).
 
     `TicketFilter(assignee=...)` is the board's own question, asked of the board
@@ -10012,6 +10057,18 @@ def _local_tier_tickets(board, manager: str) -> tuple[list[str], str]:
     for ticket in found:
         ident = getattr(ticket, "id", "")
         if not ident:
+            continue
+        # 🔴 **Held by a LOCAL WORKER of this Manager (SCRUM-72 §3.3).** The
+        # driver used to be wired only for a local MANAGER, which is this
+        # ticket's root cause; keying off the Manager's engine there and off
+        # nothing here would now drive a Claude Manager's own Claude Workers
+        # through a decomposer. The pipeline is for a local Worker's ticket
+        # and for no other, so the filter is the Worker.
+        #
+        # Silent, like the refinement filter below it and for the same
+        # reason: a Claude Worker's ticket is not a fault, and a line per
+        # ticket per cycle would bury the local tier's own notes.
+        if not _local_worker_holds(root, manager, ident):
             continue
         # `Status.refined` rather than comparing the state here: the predicate
         # owns what "refined" means, and there are five states (NOT REFINED,
@@ -10362,15 +10419,18 @@ def _start_a_manager(
             # sandbox is gone — at the cycle boundary, off the two-second poll.
             # Sits beside the local tier below, driving neither.
             recover=lambda say: recover_stalled_workers(root, role.name, say),
-            # L-6 (Robert, 2026-10-03): the local tier runs hands-off, driven by
-            # this same cycle. LOCAL ENGINES ONLY, like `engine_ready` above —
-            # a Claude Manager has no local pipeline, and None means "nothing to
-            # drive" rather than "a driver that does nothing".
-            local_tier=(
-                (lambda say: _drive_local_tier(root, role.name, board, say))
-                if role.is_local
-                else None
-            ),
+            # L-6 (Robert, 2026-10-03): the local tier runs hands-off, driven
+            # by this same cycle.
+            #
+            # 🔴 **`if role.is_local` WAS HERE, and it is SCRUM-72's root
+            # cause.** The local tier ran only under a local Manager, so in the
+            # headline mixed fleet — a Claude `lead` with a GPU Worker — no
+            # Manager drove the Worker and it sat idle holding its claim. The
+            # driver keys off WORKERS now, whatever this Manager's engine
+            # (§3.3): `_local_tier_tickets` filters to the tickets held by a
+            # LOCAL Worker of this Manager, so a Claude Manager's own Claude
+            # Workers are never decomposed and its GPU Worker is driven.
+            local_tier=lambda say: _drive_local_tier(root, role.name, board, say),
             # TR2: the rounds this Manager asks for, and what the User's
             # replies to them do, decided outside the boundary on this board.
             # Only the Manager that refines does anything (TRQ7).
