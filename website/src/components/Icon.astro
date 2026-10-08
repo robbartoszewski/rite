@@ -1,0 +1,33 @@
+---
+/** Every icon the site uses, inlined. No icon font, no icon library.
+ *  Path data from the brand book's Iconography section. */
+interface Props {
+  name: 'check' | 'warn' | 'dash' | 'copy' | 'lock' | 'chevron' | 'rss';
+  size?: number;
+  class?: string;
+}
+const { name, size = 20, class: cls } = Astro.props;
+
+const PATHS: Record<Props['name'], string> = {
+  check: '<path d="M4 10.5l4 4 8-9"/>',
+  warn: '<path d="M10 3l8 14H2z"/><path d="M10 8.5v4"/><path d="M10 15h.01"/>',
+  dash: '<path d="M5 10h10"/>',
+  copy: '<rect x="5" y="5" width="10" height="10" rx="1.5"/><path d="M3 12V4.5A1.5 1.5 0 0 1 4.5 3H12"/>',
+  lock: '<rect x="4" y="9" width="12" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/>',
+  chevron: '<path d="M5 8l5 5 5-5"/>',
+  rss: '<circle cx="5" cy="15" r="1.25" fill="currentColor" stroke="none"/><path d="M4 9a7 7 0 0 1 7 7"/><path d="M4 4a12 12 0 0 1 12 12"/>',
+};
+---
+<svg
+  viewBox="0 0 20 20"
+  width={size}
+  height={size}
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.75"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+  class={cls}
+  set:html={PATHS[name]}
+/>

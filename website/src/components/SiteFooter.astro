@@ -1,0 +1,20 @@
+---
+import { REPO, SPEC, GUIDE, CHANGELOG, LICENSE, url } from '../lib/site';
+---
+<footer class="rt-footer">
+  <div class="rt-container rt-footer-inner">
+    <div class="rt-footer-brand">
+      <img src={url('/brand/rite-mark.png')} alt="" width="14" height="32" />
+      <p class="rt-meta" style="margin: 0; color: var(--text-muted)">rite is MIT-licensed.</p>
+    </div>
+    <ul class="rt-footer-links">
+      <li><a href={REPO} rel="noopener">Repo ↗</a></li>
+      <li><a href={SPEC} rel="noopener">SPEC.md ↗</a></li>
+      <li><a href={GUIDE} rel="noopener">Guide ↗</a></li>
+      <li><a href={CHANGELOG} rel="noopener">Changelog ↗</a></li>
+      <li><a href={LICENSE} rel="noopener">Licence (MIT) ↗</a></li>
+      <li><a href={url('/blog')}>Blog</a></li>
+      <li><a href={url('/blog/rss.xml')}>RSS</a></li>
+    </ul>
+  </div>
+</footer>

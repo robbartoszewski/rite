@@ -1,0 +1,52 @@
+---
+import Site from '../../layouts/Site.astro';
+import PostCard from '../../components/PostCard.astro';
+import Icon from '../../components/Icon.astro';
+import { getCollection } from 'astro:content';
+import { url } from '../../lib/site';
+
+/* Drafts are excluded from every listing in production. In `astro dev` they
+   are built so they can be worked on. */
+const isDev = import.meta.env.DEV;
+const posts = (await getCollection('blog', (p) => isDev || !p.data.draft)).sort(
+  (a, b) => (b.data.date?.getTime() ?? 0) - (a.data.date?.getTime() ?? 0),
+);
+---
+
+<Site
+  title="rite — blog"
+  description="Changelog notes, design decisions and measurements about rite. Every post links to its sources."
+  current="blog"
+>
+  <main id="main" tabindex="-1" style="flex: 1 0 auto">
+    <header class="rt-container rt-page-head" style="padding-bottom: 32px">
+      <div class="rt-stack" style="max-width: var(--measure)">
+        <p class="rt-eyebrow">Blog</p>
+        <h1 class="rt-title">Notes on rite</h1>
+        <p class="rt-lead">
+          Every post lists its sources, so you can check it against the repository.
+        </p>
+        <p class="rt-body-sm" style="color: var(--text-muted)">Two more are in draft.</p>
+      </div>
+    </header>
+
+    <section class="rt-container" aria-label="Posts" style="padding-bottom: 96px">
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 8px">
+        <a class="rt-link rt-link-solo" href={url('/blog/rss.xml')}>
+          <Icon name="rss" size={16} />RSS feed
+        </a>
+      </div>
+      {
+        posts.length > 0 ? (
+          <ul class="rt-posts">
+            {posts.map((post) => (
+              <PostCard post={post} level={2} />
+            ))}
+          </ul>
+        ) : (
+          <p class="rt-lead">No posts yet.</p>
+        )
+      }
+    </section>
+  </main>
+</Site>

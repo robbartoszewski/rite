@@ -1,0 +1,120 @@
+---
+import Site from '../layouts/Site.astro';
+import Button from '../components/Button.astro';
+import StatusList from '../components/StatusList.astro';
+import Icon from '../components/Icon.astro';
+import { WORKS, GAPS } from '../data/status';
+import { SPEC, CHANGELOG, VERSION, STATUS_CHECKED } from '../lib/site';
+
+/* Counts are computed, so adding a row updates the intro. */
+const nWorks = WORKS.length;
+const nGaps = GAPS.length;
+
+const CAVEATS = [
+  {
+    lead: 'The sandbox bounds files, not capability.',
+    text: 'It is a guard rail against mistakes, not containment. Outbound network is not restricted — Seatbelt has no network isolation. <code>git</code> runs hooks and <code>python -c</code> runs anything. What it buys is that a mistake stays inside the project.',
+  },
+  {
+    lead: 'A session you open yourself is not sandboxed,',
+    text: 'whatever the setting says.',
+  },
+  {
+    lead: 'On Linux the sandbox is weaker',
+    text: 'and Workers are not sandboxed by default. Reaching the tmux server, which runs outside the sandbox, is closed on macOS and open on Linux.',
+  },
+  {
+    lead: 'A Manager has your file and network access.',
+    text: 'It runs behind a generous permission allowlist (77 command families) because a Manager that must stop and ask is not running unattended — measured: the gated modes refused a Manager the ability to run <code>rite</code> or <code>gh</code> at all. Treat a Manager as having your own access, because a determined one does.',
+  },
+  {
+    lead: 'Quota runs out abruptly.',
+    text: 'N Workers burn your Claude quota at roughly N times one session&rsquo;s rate, against a quota shared with the Claude apps on a rolling window; Pro exhausts sooner than Max. A Worker that runs out stops where it stands, claim still held until you release it.',
+  },
+  {
+    lead: 'A claim whose holder died is reported, never released.',
+    text: 'rite cannot tell a crashed session from one thinking hard, and releasing a path under a live Worker is worse than a stale claim. It names the claim, the holder and the command, and waits for you.',
+  },
+];
+---
+
+<Site
+  title="rite — what works, what doesn't"
+  description={`An honest account of what rite does today at ${VERSION}, what is measured, and what is not proven yet.`}
+  current="what-works"
+>
+  <main id="main" tabindex="-1">
+    <header class="rt-container rt-page-head">
+      <div class="rt-stack" style="max-width: var(--measure)">
+        <p class="rt-eyebrow">Checked against {STATUS_CHECKED.version} · {STATUS_CHECKED.date}</p>
+        <h1 class="rt-title">What works, what doesn&rsquo;t</h1>
+        <p class="rt-lead">
+          rite is at <code>{VERSION}</code> — pre-1.0, and moving. This page is the version of this
+          product that a careful reader would arrive at after reading the source, written down in
+          advance so you don&rsquo;t have to.
+        </p>
+        <p class="rt-body-sm" style="color: var(--text-muted)">
+          {nWorks} things work today. {nGaps} carry a label — <b style="color: var(--text)"
+            >Not proven</b
+          > (built, not yet shown end to end), <b style="color: var(--text)">Not built</b>, <b
+            style="color: var(--text)">Caveat</b
+          > (a limit you work around) or <b style="color: var(--text)">By design</b> (a decision, not
+          a gap): <a class="rt-link" href="#not-yet">jump to them</a>.
+        </p>
+      </div>
+    </header>
+
+    <section class="rt-section" aria-label="Status">
+      <div class="rt-container">
+        <div class="rt-status-cols">
+          <div>
+            <h2 class="rt-h2" id="works">Works today</h2>
+            <StatusList rows={WORKS} />
+          </div>
+          <div>
+            <h2 class="rt-h2" id="not-yet">Not there yet, and it matters</h2>
+            <StatusList rows={GAPS} />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="rt-section" aria-labelledby="caveats-h">
+      <div class="rt-container">
+        <div class="rt-section-head">
+          <p class="rt-eyebrow">Read before you run it</p>
+          <h2 class="rt-h2" id="caveats-h">Caveats that hold even when it works.</h2>
+        </div>
+        <div
+          style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 24px 64px; max-width: 1056px"
+        >
+          {
+            CAVEATS.map((c) => (
+              <p class="rt-caveat">
+                <Icon name="warn" size={16} />
+                <span>
+                  <b set:html={c.lead} /> <Fragment set:html={c.text} />
+                </span>
+              </p>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <section class="rt-section" aria-labelledby="need-h">
+      <div
+        class="rt-container"
+        style="display: flex; flex-direction: column; gap: 24px; align-items: flex-start"
+      >
+        <h2 class="rt-h2" id="need-h" style="margin: 0; max-width: 24ch">
+          If you run one session at a time, you do not need this.
+        </h2>
+        <div class="rt-btn-row">
+          <Button href={SPEC} variant="primary">Read the spec</Button>
+          <Button href={CHANGELOG} variant="secondary" external>Changelog</Button>
+        </div>
+      </div>
+    </section>
+  </main>
+</Site>

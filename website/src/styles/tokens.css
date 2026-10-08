@@ -1,0 +1,114 @@
+/* rite design tokens — generated from the design system tokens.json. Do not edit by hand. */
+:root, [data-theme="light"] {
+  --surface: #faf7f2;
+  --surface-raised: #f1eee9;
+  --surface-sunken: #edeae5;
+  --border: #e0ddd8;
+  --border-strong: #83807c;
+  --text: #211e1b;
+  --text-muted: #625f5c;
+  --accent: #b82d22;
+  --accent-hover: #922920;
+  --action: #b82d22;
+  --action-hover: #922920;
+  --on-action: #faf7f2;
+  --focus: #b82d22;
+  --crimson: #b82d22;
+  --ember: #e8743b;
+  --ember-glow: #e8743b24;
+  --brand-ink: #211e1b;
+  --brand-paper: #faf7f2;
+  --term-bg: #211e1b;
+  --term-ink: #faf7f2;
+  --term-muted: #a3a09c;
+  --term-accent: #e8743b;
+  --term-border: #3b3835;
+  --term-control: #787571;
+  --status-works: var(--text);
+  --status-gap: #b82d22;
+  --status-design: var(--text);
+}
+[data-theme="dark"] {
+  --surface: #211e1b;
+  --surface-raised: #2a2724;
+  --surface-sunken: #2e2b28;
+  --border: #3b3835;
+  --border-strong: #787571;
+  --text: #faf7f2;
+  --text-muted: #a3a09c;
+  --accent: #e8743b;
+  --accent-hover: #ed9b72;
+  --action: #e8743b;
+  --action-hover: #ed9b72;
+  --on-action: #211e1b;
+  --focus: #e8743b;
+  --ember-glow: #e8743b33;
+  --term-bg: #191614;
+  --status-works: var(--text);
+  --status-gap: #e8743b;
+  --status-design: var(--text);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface: #211e1b;
+    --surface-raised: #2a2724;
+    --surface-sunken: #2e2b28;
+    --border: #3b3835;
+    --border-strong: #787571;
+    --text: #faf7f2;
+    --text-muted: #a3a09c;
+    --accent: #e8743b;
+    --accent-hover: #ed9b72;
+    --action: #e8743b;
+    --action-hover: #ed9b72;
+    --on-action: #211e1b;
+    --focus: #e8743b;
+    --ember-glow: #e8743b33;
+    --term-bg: #191614;
+    --status-works: var(--text);
+    --status-gap: #e8743b;
+    --status-design: var(--text);
+  }
+}
+:root { color-scheme: light; } [data-theme="dark"] { color-scheme: dark; }
+html { background: var(--surface); }
+/* Logo swap when following the system theme (components.css handles data-theme="dark") */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rt-nav-brand .rt-logo-light { display: none; } :root:not([data-theme="light"]) .rt-nav-brand .rt-logo-dark { display: block; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; } }
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+  --space-10: 128px;
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+  --container: 1120px;
+  --measure: 64ch;
+  --narrow: 880px;
+  --nav-height: 64px;
+  --hairline: 1px;
+  --focus-width: 2px;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+.rt-display { font-family: var(--font-sans); font-size: 64px; line-height: 68px; font-weight: 600; letter-spacing: -0.025em; }
+.rt-display-sm { font-family: var(--font-sans); font-size: 40px; line-height: 44px; font-weight: 600; letter-spacing: -0.02em; }
+.rt-h2-sm { font-family: var(--font-sans); font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; }
+.rt-h2 { font-family: var(--font-sans); font-size: 32px; line-height: 40px; font-weight: 600; letter-spacing: -0.015em; }
+.rt-h3 { font-family: var(--font-sans); font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -0.005em; }
+.rt-lead { font-family: var(--font-sans); font-size: 20px; line-height: 32px; font-weight: 400; }
+.rt-body { font-family: var(--font-sans); font-size: 17px; line-height: 28px; font-weight: 400; }
+.rt-body-sm { font-family: var(--font-sans); font-size: 15px; line-height: 24px; font-weight: 400; }
+.rt-meta { font-family: var(--font-sans); font-size: 13px; line-height: 20px; font-weight: 500; letter-spacing: 0.01em; }
+.rt-code { font-family: var(--font-mono); font-size: 15px; line-height: 24px; font-weight: 400; }
+.rt-code-inline { font-family: var(--font-mono); font-size: 0.9em; line-height: 1.2; font-weight: 400; }
+.rt-eyebrow { font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: 0.08em; }
+.rt-figure { font-family: var(--font-mono); font-size: 40px; line-height: 44px; font-weight: 500; letter-spacing: -0.02em; }

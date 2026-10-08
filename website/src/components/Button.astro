@@ -1,0 +1,13 @@
+---
+/** rt-btn. Primary is reserved for "Read the spec" — one per viewport. */
+interface Props {
+  href: string;
+  variant?: 'primary' | 'secondary' | 'ghost';
+  external?: boolean;
+  class?: string;
+}
+const { href, variant = 'secondary', external = false, class: cls } = Astro.props;
+---
+<a class={`rt-btn rt-btn-${variant}${cls ? ' ' + cls : ''}`} href={href}>
+  <slot />{external && <span aria-hidden="true"> ↗</span>}
+</a>

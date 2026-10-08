@@ -1,0 +1,51 @@
+---
+/** Sits directly under the hero. Every point needs its conditions and a link
+ *  that lands on a LINE in the repository — a link to a file top is a weak
+ *  proof, and this audience clicks. */
+import { PROOF, SPEC } from '../lib/site';
+
+const PROOFS = [
+  {
+    figure: '132,321',
+    claim: 'claim grants, zero lost, zero held twice',
+    conditions: 'Four-minute soak, six concurrent Workers.',
+    href: PROOF.soak,
+    hrefLabel: 'README ↗',
+  },
+  {
+    figure: '309',
+    claim: 'lost updates from the lock it replaced',
+    conditions: 'Same harness, ten seconds.',
+    href: PROOF.soak,
+    hrefLabel: 'README ↗',
+  },
+  {
+    figure: '101',
+    claim: 'numbered design decisions',
+    conditions: 'Each with the question it answers and the reasoning, in SPEC.md.',
+    href: SPEC,
+    hrefLabel: 'SPEC.md ↗',
+  },
+];
+---
+<section class="rt-section rt-section-band" aria-labelledby="proof-h">
+  <div class="rt-container">
+    <h2 class="rt-h3" id="proof-h" style="margin: 0 0 24px">
+      Numbers, with their conditions, linked to source.
+    </h2>
+    <div class="rt-proofs">
+      {
+        PROOFS.map((p) => (
+          <div class="rt-proof">
+            <p class="rt-proof-figure">{p.figure}</p>
+            <p class="rt-proof-claim">{p.claim}</p>
+            <p class="rt-proof-cond">{p.conditions}</p>
+            <a class="rt-link rt-proof-src" href={p.href} rel="noopener">
+              {p.hrefLabel}
+            </a>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>

@@ -1,0 +1,25 @@
+---
+import { CATEGORY_LABEL, formatDate, url } from '../lib/site';
+import type { CollectionEntry } from 'astro:content';
+
+interface Props {
+  post: CollectionEntry<'blog'>;
+  /** h2 on the blog index, h3 in a "more from the blog" list. */
+  level?: 2 | 3;
+}
+const { post, level = 2 } = Astro.props;
+const { title, description, date, category } = post.data;
+const Heading = level === 2 ? 'h2' : 'h3';
+---
+<li class="rt-post">
+  <div class="rt-post-meta">
+    {date ? <time datetime={date.toISOString().slice(0, 10)}>{formatDate(date)}</time> : <time>Draft</time>}
+    <span class="rt-tag">{CATEGORY_LABEL[category]}</span>
+  </div>
+  <div>
+    <Heading class="rt-h3 rt-post-title">
+      <a href={url(`/blog/${post.id}`)}>{title}</a>
+    </Heading>
+    <p>{description}</p>
+  </div>
+</li>

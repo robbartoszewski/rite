@@ -1,0 +1,19 @@
+---
+import Site from '../layouts/Site.astro';
+import Button from '../components/Button.astro';
+import { url } from '../lib/site';
+---
+
+<Site title="rite — not found" description="That page does not exist." noindex>
+  <main id="main" tabindex="-1" style="flex: 1 0 auto">
+    <header class="rt-container rt-page-head">
+      <div class="rt-stack" style="max-width: var(--measure)">
+        <h1 class="rt-title">Not here.</h1>
+        <div class="rt-btn-row">
+          <Button href={url('/')} variant="secondary">Home</Button>
+          <Button href={url('/what-works')} variant="ghost">What works, what doesn&rsquo;t</Button>
+        </div>
+      </div>
+    </header>
+  </main>
+</Site>
