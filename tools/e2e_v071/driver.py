@@ -175,7 +175,23 @@ def maybe_restart_with_stale_state(
     then start the supervisor again."""
     if st.restart_done or not st.kill_done:
         return
+    # 🔴 **A scenario that induces no failure has nothing to restart from.**
+    # `maybe_kill` marks `kill_done` for such a scenario so nothing downstream
+    # waits for a kill that was never going to happen — and that let this
+    # function straight through to `kills[0]` on an empty list. It killed a
+    # mixed smoke run with an IndexError AFTER the Worker had started and the
+    # pipeline had reached `defined`: the loop was working and the harness
+    # crashed on top of it.
+    #
+    # Two guards, because they are two different facts: this scenario induces
+    # nothing (so it is done), and a kill has been recorded but not yet read
+    # back (so wait).
+    if not fleet.kill_worker:
+        st.restart_done = True
+        return
     kills = [i for i in run.read("inductions.jsonl") if i["kind"] == "kill-sandbox"]
+    if not kills:
+        return
     events = obs.events()
     recovered = any(came_back(e, kills[0]) for e in events)
     if not recovered:
