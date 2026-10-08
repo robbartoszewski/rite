@@ -116,6 +116,17 @@ def _started_worker(root, worker="alpha", manager="planner"):
     )
 
 
+def _pinned(root, manager: str = "planner") -> str:
+    """The refinement record this ticket's pipeline pins to (SCRUM-72d): the
+    `record_id` of the signed record its Worker was STARTED on. Read from the
+    real snapshot, not invented — the production path pins exactly this."""
+    from rite_ai.local.gates import definition_snapshot
+
+    got = definition_snapshot(root, manager, TICKET)
+    assert not isinstance(got, str), got
+    return str(got["record_id"])
+
+
 def _state(root):
     return plan_state.layer(root)
 
@@ -154,7 +165,11 @@ def _plan(root, **kw):
     from rite_ai.local.gates import gate_for
 
     st.adopt(
-        state, TICKET, st.DECOMPOSED, gate=gate_for(root, "planner", TICKET, state)
+        state,
+        TICKET,
+        st.DECOMPOSED,
+        gate=gate_for(root, "planner", TICKET, state),
+        definition=_pinned(root),
     )
     return plan
 

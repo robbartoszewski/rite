@@ -180,8 +180,15 @@ def advance_ticket(
             ticket, blocked=f"its stage record will not parse: {stage_read.error}"
         )
 
+    from rite_ai.local.gates import definition_snapshot
+
+    snapshot = definition_snapshot(root, manager, ticket)
+    pinned = "" if isinstance(snapshot, str) else str(snapshot.get("record_id", ""))
+
     def moved_to(to: str, *, why: str, note: str = "") -> Advance:
-        got = st.advance(state, ticket, to, why=why, gate=gate, now=now)
+        got = st.advance(
+            state, ticket, to, why=why, gate=gate, now=now, definition=pinned
+        )
         if isinstance(got, st.Refused):
             return Advance(ticket, blocked=got.why)
         return Advance(ticket, stage=to, note=note or why)
@@ -204,7 +211,9 @@ def advance_ticket(
     if stage_read.record is None:
         derived = _stage_from_artifacts(root, manager, ticket, plan)
         if derived:
-            adopted = st.adopt(state, ticket, derived, gate=gate, now=now)
+            adopted = st.adopt(
+                state, ticket, derived, gate=gate, now=now, definition=pinned
+            )
             if isinstance(adopted, st.Refused):
                 return Advance(ticket, blocked=adopted.why)
             return Advance(
@@ -215,7 +224,36 @@ def advance_ticket(
 
     stage = stage_read.stage
 
-    # 0. The plan may have been RETURNED to plan review from outside this loop
+    # 0a. 🔴 **STALE (SCRUM-72d): the definition of done moved under the
+    #     pipeline.** The definition is read from the Worker's publish-record
+    #     snapshot, and that snapshot is rewritten when the Worker is started
+    #     again — on a re-refined ticket, or on a different one. A plan
+    #     authored against one definition must not go on being reviewed,
+    #     stepped and delivered against another, so this HALTS and reports
+    #     rather than advancing. Nothing is undone and nothing is guessed: the
+    #     plan on disk is the plan that was approved, and which definition of
+    #     done it is now meant to satisfy is not rite's to decide.
+    if (
+        stage != st.UNSTARTED
+        and stage_read.definition
+        and pinned != stage_read.definition
+    ):
+        unreadable = snapshot if isinstance(snapshot, str) else "it names no record_id"
+        now_on = pinned or f"none rite can read ({unreadable})"
+        return Advance(
+            ticket,
+            blocked=(
+                f"its definition of done CHANGED since it reached {stage}: the "
+                f"pipeline is pinned to refinement record "
+                f"{stage_read.definition}, and its Worker is now started on "
+                f"{now_on}. Nothing advances against a definition the plan was "
+                "not authored for. Decide which it is: re-refine and start the "
+                "Worker again to re-author the plan, or put back the record it "
+                "was planned against"
+            ),
+        )
+
+    # 0b. The plan may have been RETURNED to plan review from outside this loop
     #    — a composition conflict, a recomposition failure, a rejection after
     #    approval (`decomposition.returned_to_plan_review` drops the approval).
     #    The artifact leads and the stage follows it back.
@@ -271,7 +309,16 @@ def advance_ticket(
         # Fixing that matcher to a word boundary is right and is NOT done here:
         # it uncovers four unrelated functions the loose match was masking, and
         # this branch must not merge on someone else's cleanup. Filed separately.
-        result = author_plan(root, manager, ticket)
+        # 🔴 **The definition of done IS the decomposer's input (SCRUM-72d).**
+        # `advance_ticket` called `author_plan` with no ticket text at all, so
+        # the decomposer saw "(no ticket text was supplied)" and sliced a
+        # ticket by its id. The refinement record's own rendering is passed —
+        # the SAME text the Worker's start prompt carries
+        # (`record.render_for_worker`), so the plan and the work are judged
+        # against one definition rather than two.
+        result = author_plan(
+            root, manager, ticket, ticket_text=_definition_text(snapshot)
+        )
         # `DecomposeResult.wrote` — the field name matters: `ok`/`written` do not
         # exist on it, and a getattr default of False would have read every
         # successful decomposition as a failure.
@@ -402,6 +449,25 @@ def advance_ticket(
         blocked="its delivery has been requested; rite honours that at the "
         "cycle boundary and the pipeline has nothing further to drive",
     )
+
+
+def _definition_text(snapshot) -> str:
+    """The agreed definition of done, as the decomposer is given it.
+
+    ⚠ **`record.render_for_worker`, not a second rendering.** That function is
+    deterministic and is exactly what the Worker's start prompt carries, so the
+    planner slices against the text the Worker will be held to. A second
+    wording here would be a second definition of done, which is the shape §3.3a
+    is about.
+    """
+    if isinstance(snapshot, str) or not snapshot:
+        return ""
+    from rite_ai.refinement import record as rec
+
+    try:
+        return rec.render_for_worker(rec.from_payload(snapshot))
+    except Exception:  # noqa: BLE001 - a payload that will not render is no text
+        return ""
 
 
 def _stage_from_artifacts(root: Path, manager: str, ticket: str, plan) -> str:

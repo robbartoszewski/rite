@@ -112,7 +112,12 @@ TRANSITIONS: dict[str, tuple[str, ...]] = {
 step before approval is not refused by a check somewhere, it is refused
 because `DEFINED -> STEPPING` is not in this table."""
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+"""⚠ **2 since SCRUM-72d**, which added `definition`. A version-1 record is
+REFUSED rather than read as this one (`parse`), `decomposition.parse`'s rule
+and for its reason: a record whose pinned definition rite cannot see is a
+pipeline rite cannot tell is stale, and reading it as "pinned to nothing"
+is the one reading that silently un-pins it."""
 
 
 def key_for(ticket: str) -> str:
@@ -135,6 +140,18 @@ class Record:
     ticket: str
     stage: str = UNSTARTED
     log: tuple[Transition, ...] = ()
+    definition: str = ""
+    """The `record_id` of the signed refinement record this pipeline is
+    pinned to, set once at DEFINED and carried unchanged afterwards
+    (SCRUM-72d).
+
+    🔴 **It is what makes STALE detectable.** The definition of done is read
+    from the Worker's publish-record snapshot, and that snapshot is rewritten
+    when the Worker is started again — on a re-refined ticket, or on another
+    one. Without the id pinned here, a plan authored against one definition
+    would go on being reviewed, stepped and delivered against a different
+    one, and nothing would say so. With it, the driver halts and reports.
+    """
     format_version: int = FORMAT_VERSION
 
 
@@ -145,6 +162,7 @@ def render(record: Record) -> bytes:
         "format_version": record.format_version,
         "ticket": record.ticket,
         "stage": record.stage,
+        "definition": record.definition,
         "log": [
             {"from": t.frm, "to": t.to, "at": t.at, "why": t.why} for t in record.log
         ],
@@ -210,7 +228,12 @@ def parse(raw: bytes) -> Record | str:
             "the stage and its history disagree, so neither says what this "
             "ticket has passed"
         )
-    return Record(ticket=str(body.get("ticket", "")), stage=stage, log=tuple(log))
+    return Record(
+        ticket=str(body.get("ticket", "")),
+        stage=stage,
+        log=tuple(log),
+        definition=str(body.get("definition", "")),
+    )
 
 
 @dataclass
@@ -226,6 +249,11 @@ class Read:
         `unavailable` are known empty: an unreadable record is NOT UNSTARTED,
         and a caller that treats it as one restarts a pipeline mid-flight."""
         return self.record.stage if self.record is not None else UNSTARTED
+
+    @property
+    def definition(self) -> str:
+        """The refinement record this pipeline is pinned to, or ""."""
+        return self.record.definition if self.record is not None else ""
 
 
 def read(state: StateLayer, ticket: str) -> Read:
@@ -285,6 +313,7 @@ def advance(
     why: str = "",
     gate=None,
     now: float | None = None,
+    definition: str = "",
 ) -> Advanced | Refused:
     """Move `ticket` to `to`, or say why it may not — **the one guard**.
 
@@ -321,10 +350,25 @@ def advance(
                 f"{ticket} stays at {frm or 'unstarted'}: it cannot enter {to} — {shut}"
             )
     existing = got.record.log if got.record is not None else ()
+    # ⚠ **Pinned once, then CARRIED.** `definition` is accepted only on the
+    # move into DEFINED, which is the move that pins it; every later move
+    # keeps what is already there. A transition that could re-pin it would be
+    # a transition that could silently re-point a plan at a definition nobody
+    # authored it against, which is the staleness this field exists to catch.
+    pinned = got.definition
+    if to == DEFINED:
+        if not definition:
+            return Refused(
+                f"{ticket} cannot enter {DEFINED} with no refinement record "
+                "pinned: the definition of done is what the plan is authored "
+                "and judged against"
+            )
+        pinned = definition
     record = Record(
         ticket=ticket,
         stage=to,
         log=(*existing, Transition(frm=frm, to=to, at=now, why=why)),
+        definition=pinned,
     )
     written = state.write_state(key_for(ticket), render(record), got.version)
     if isinstance(written, Written):
@@ -342,7 +386,13 @@ def advance(
 
 
 def adopt(
-    state: StateLayer, ticket: str, stage: str, *, gate=None, now: float | None = None
+    state: StateLayer,
+    ticket: str,
+    stage: str,
+    *,
+    gate=None,
+    now: float | None = None,
+    definition: str = "",
 ) -> Advanced | Refused:
     """Write a first stage record for a ticket whose artifacts already exist.
 
@@ -379,9 +429,16 @@ def adopt(
                 f"{ticket} cannot be adopted at {stage}: its artifacts do not "
                 f"say it reached there — {shut}"
             )
+    if not definition:
+        return Refused(
+            f"{ticket} cannot be adopted at {stage} with no refinement record "
+            "pinned: a pipeline whose definition of done rite cannot name is "
+            "one it cannot tell has gone stale"
+        )
     record = Record(
         ticket=ticket,
         stage=stage,
+        definition=definition,
         log=(
             Transition(
                 frm=UNSTARTED,

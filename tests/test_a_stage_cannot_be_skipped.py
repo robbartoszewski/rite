@@ -50,13 +50,21 @@ def _bytes(tmp_path) -> bytes:
     return path.read_bytes() if path.exists() else b""
 
 
-def _put(state, ticket: str, stage: str, log=None) -> None:
+PINNED = "rec-0000000000000001"
+"""The refinement record a pipeline is pinned to (SCRUM-72d). A literal here:
+this file tests the MACHINE, with no project and no Worker, and the real
+pinning is tested where there is a real snapshot to pin to."""
+
+
+def _put(state, ticket: str, stage: str, log=None, definition=PINNED) -> None:
     """A stage record written directly, so a test can start anywhere."""
     log = log or (st.Transition(frm=st.UNSTARTED, to=stage, at=1.0, why="set up"),)
     got = state.read_state(st.key_for(ticket))
     state.write_state(
         st.key_for(ticket),
-        st.render(st.Record(ticket=ticket, stage=stage, log=tuple(log))),
+        st.render(
+            st.Record(ticket=ticket, stage=stage, log=tuple(log), definition=definition)
+        ),
         got.version,
     )
 
@@ -86,7 +94,7 @@ def test_every_transition_the_table_does_not_hold_is_refused(tmp_path, frm, to):
         _put(state, TICKET, frm)
     before = _bytes(tmp_path)
 
-    got = st.advance(state, TICKET, to, gate=_open_gate, now=2.0)
+    got = st.advance(state, TICKET, to, gate=_open_gate, now=2.0, definition=PINNED)
     assert isinstance(got, st.Refused), f"{frm} -> {to} was allowed: {got}"
     assert _bytes(tmp_path) == before, "a refusal rewrote the record"
     assert st.read(state, TICKET).stage == frm
@@ -103,7 +111,7 @@ def test_every_transition_the_table_holds_is_allowed(tmp_path, frm, to):
     if frm != st.UNSTARTED:
         _put(state, TICKET, frm)
 
-    got = st.advance(state, TICKET, to, gate=_open_gate, now=2.0)
+    got = st.advance(state, TICKET, to, gate=_open_gate, now=2.0, definition=PINNED)
     assert isinstance(got, st.Advanced), f"{frm} -> {to} was refused: {got}"
     assert st.read(state, TICKET).stage == to
 
@@ -114,7 +122,7 @@ def test_a_step_before_approval_is_refused(tmp_path):
     _put(state, TICKET, st.DEFINED)
     before = _bytes(tmp_path)
 
-    got = st.advance(state, TICKET, st.STEPPING, gate=_open_gate)
+    got = st.advance(state, TICKET, st.STEPPING, gate=_open_gate, definition=PINNED)
     assert isinstance(got, st.Refused)
     assert "cannot go to 'stepping'" in got.why
     assert _bytes(tmp_path) == before
@@ -128,7 +136,9 @@ def test_a_delivery_before_recomposition_is_refused(tmp_path):
     _put(state, TICKET, st.STEPPING)
     before = _bytes(tmp_path)
 
-    got = st.advance(state, TICKET, st.DELIVERY_REQUESTED, gate=_open_gate)
+    got = st.advance(
+        state, TICKET, st.DELIVERY_REQUESTED, gate=_open_gate, definition=PINNED
+    )
     assert isinstance(got, st.Refused)
     assert _bytes(tmp_path) == before
 
@@ -139,7 +149,7 @@ def test_nothing_follows_the_end_of_the_pipeline(tmp_path):
     before = _bytes(tmp_path)
 
     for target in st.STAGES:
-        got = st.advance(state, TICKET, target, gate=_open_gate)
+        got = st.advance(state, TICKET, target, gate=_open_gate, definition=PINNED)
         assert isinstance(got, st.Refused), target
     assert _bytes(tmp_path) == before
 
@@ -179,16 +189,16 @@ def test_a_stage_with_no_gate_is_refused_not_waved_through(tmp_path):
     "value, expected",
     [
         (
-            b'{"format_version": 1, "ticket": "T-1", "stage": "shipped", "log": []}',
+            b'{"format_version": 2, "ticket": "T-1", "stage": "shipped", "log": []}',
             "not one of",
         ),
         (
-            b'{"format_version": 1, "ticket": "T-1", "stage": "approved", "log": []}',
+            b'{"format_version": 2, "ticket": "T-1", "stage": "approved", "log": []}',
             "carries no transition log",
         ),
         # The log and the stage disagree: one of them was edited.
         (
-            b'{"format_version": 1, "ticket": "T-1", "stage": "stepping", "log": '
+            b'{"format_version": 2, "ticket": "T-1", "stage": "stepping", "log": '
             b'[{"from": "", "to": "defined", "at": 1.0, "why": ""}]}',
             "disagree",
         ),
@@ -215,7 +225,7 @@ def test_an_illegal_stage_write_is_refused_and_nothing_advances(
     assert expected in read.error, read.error
     assert read.record is None
 
-    moved = st.advance(state, TICKET, st.DEFINED, gate=_open_gate)
+    moved = st.advance(state, TICKET, st.DEFINED, gate=_open_gate, definition=PINNED)
     assert isinstance(moved, st.Refused)
     assert "will not parse" in moved.why
     assert _bytes(tmp_path) == before
@@ -255,7 +265,13 @@ def test_the_log_only_ever_grows_and_keeps_its_order(tmp_path):
     ):
         assert isinstance(
             st.advance(
-                state, TICKET, target, gate=_open_gate, why=f"n={n}", now=float(n)
+                state,
+                TICKET,
+                target,
+                gate=_open_gate,
+                why=f"n={n}",
+                now=float(n),
+                definition=PINNED,
             ),
             st.Advanced,
         )
@@ -288,8 +304,15 @@ def test_a_return_to_plan_review_is_recorded_and_the_log_keeps_both(tmp_path):
     returns, and a count with no history is a number nobody can check."""
     state = _state(tmp_path)
     for target in (st.DEFINED, st.DECOMPOSED, st.APPROVED, st.STEPPING):
-        st.advance(state, TICKET, target, gate=_open_gate)
-    st.advance(state, TICKET, st.DECOMPOSED, gate=_open_gate, why="RL-8 failed")
+        st.advance(state, TICKET, target, gate=_open_gate, definition=PINNED)
+    st.advance(
+        state,
+        TICKET,
+        st.DECOMPOSED,
+        gate=_open_gate,
+        why="RL-8 failed",
+        definition=PINNED,
+    )
 
     log = st.read(state, TICKET).record.log
     assert [t.to for t in log] == [
@@ -341,6 +364,7 @@ def test_adoption_cannot_claim_a_stage_the_artifacts_do_not_support(tmp_path):
         TICKET,
         st.APPROVED,
         gate=lambda s: "its plan's approval is 'pending'",
+        definition=PINNED,
     )
     assert isinstance(got, st.Refused)
     assert "do not say it reached there" in got.why
@@ -352,7 +376,7 @@ def test_adoption_only_happens_when_there_is_no_record(tmp_path):
     _put(state, TICKET, st.DEFINED)
     before = _bytes(tmp_path)
 
-    got = st.adopt(state, TICKET, st.RECOMPOSED, gate=_open_gate)
+    got = st.adopt(state, TICKET, st.RECOMPOSED, gate=_open_gate, definition=PINNED)
     assert isinstance(got, st.Refused)
     assert "already has a stage record" in got.why
     assert _bytes(tmp_path) == before
@@ -360,7 +384,9 @@ def test_adoption_only_happens_when_there_is_no_record(tmp_path):
 
 def test_an_adopted_record_says_so_in_its_log(tmp_path):
     state = _state(tmp_path)
-    got = st.adopt(state, TICKET, st.APPROVED, gate=_open_gate, now=7.0)
+    got = st.adopt(
+        state, TICKET, st.APPROVED, gate=_open_gate, now=7.0, definition=PINNED
+    )
     assert isinstance(got, st.Advanced)
     log = st.read(state, TICKET).record.log
     assert len(log) == 1
@@ -512,6 +538,81 @@ def test_the_byte_unchanged_helper_is_not_vacuous(tmp_path):
     assert st.key_for(TICKET).encode() in stored
     # And it changes when the stage does, or it could not detect a rewrite.
     assert isinstance(
-        st.advance(state, TICKET, st.DECOMPOSED, gate=_open_gate), st.Advanced
+        st.advance(state, TICKET, st.DECOMPOSED, gate=_open_gate, definition=PINNED),
+        st.Advanced,
     )
     assert _bytes(tmp_path) != stored
+
+
+# --- 9. the pinned definition of done (SCRUM-72d) -------------------------------
+
+
+def test_defined_cannot_be_entered_with_nothing_pinned(tmp_path):
+    """The definition of done is what the plan is authored and judged
+    against, so a pipeline that cannot name its own is one nothing can tell
+    has gone stale."""
+    state = _state(tmp_path)
+    before = _bytes(tmp_path)
+
+    got = st.advance(state, TICKET, st.DEFINED, gate=_open_gate)
+    assert isinstance(got, st.Refused), got
+    assert "no refinement record pinned" in got.why
+    assert _bytes(tmp_path) == before
+    assert st.read(state, TICKET).record is None
+
+
+def test_adoption_cannot_happen_with_nothing_pinned(tmp_path):
+    """The same rule on the other door in. An adopted pipeline whose
+    definition rite cannot name would be permanently un-stale-able."""
+    state = _state(tmp_path)
+    before = _bytes(tmp_path)
+
+    got = st.adopt(state, TICKET, st.APPROVED, gate=_open_gate)
+    assert isinstance(got, st.Refused), got
+    assert "no refinement record pinned" in got.why
+    assert _bytes(tmp_path) == before
+
+
+def test_a_later_move_cannot_RE_PIN_the_definition(tmp_path):
+    """🔴 Pinned once, at `defined`, and carried. A transition that could
+    re-pin would be one that could silently re-point a plan at a definition
+    nobody authored it against — which is exactly the staleness the pin
+    exists to catch, performed by rite itself."""
+    state = _state(tmp_path)
+    assert isinstance(
+        st.advance(state, TICKET, st.DEFINED, gate=_open_gate, definition=PINNED),
+        st.Advanced,
+    )
+    assert st.read(state, TICKET).record.definition == PINNED
+
+    # A later move offering a DIFFERENT definition keeps the pinned one.
+    assert isinstance(
+        st.advance(
+            state,
+            TICKET,
+            st.DECOMPOSED,
+            gate=_open_gate,
+            definition="rec-somethingelse",
+        ),
+        st.Advanced,
+    )
+    record = st.read(state, TICKET).record
+    assert record.stage == st.DECOMPOSED
+    assert record.definition == PINNED, "the pin is carried, never replaced"
+
+    # And every stage after it, however many moves.
+    for target in (st.APPROVED, st.STEPPING, st.RECOMPOSED):
+        st.advance(state, TICKET, target, gate=_open_gate, definition="rec-another")
+        assert st.read(state, TICKET).record.definition == PINNED
+
+
+def test_the_pin_survives_a_round_trip_through_the_stored_bytes(tmp_path):
+    """It is rendered and parsed, not held in memory: a restart reads the pin
+    back or the pipeline comes up un-pinned."""
+    state = _state(tmp_path)
+    st.advance(state, TICKET, st.DEFINED, gate=_open_gate, definition=PINNED)
+    raw = state.read_state(st.key_for(TICKET)).value
+    parsed = st.parse(raw)
+    assert not isinstance(parsed, str), parsed
+    assert parsed.definition == PINNED
+    assert st.render(parsed) == raw, "render and parse are inverses"

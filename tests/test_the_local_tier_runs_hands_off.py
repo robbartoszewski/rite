@@ -145,6 +145,17 @@ def _subtasks(status=dec.PLANNED):
     )
 
 
+def _pinned(root: Path, manager: str = "planner") -> str:
+    """The refinement record this ticket's pipeline pins to (SCRUM-72d): the
+    `record_id` of the signed record its Worker was STARTED on. Read from the
+    real snapshot, not invented — the production path pins exactly this."""
+    from rite_ai.local.gates import definition_snapshot
+
+    got = definition_snapshot(root, manager, TICKET)
+    assert not isinstance(got, str), got
+    return str(got["record_id"])
+
+
 def _state(root: Path):
     return plan_state.layer(root)
 
@@ -171,7 +182,13 @@ def _write_plan(root: Path, manager="planner", **kw):
 
     derived = _stage_from_artifacts(root, manager, TICKET, plan)
     if derived:
-        st.adopt(state, TICKET, derived, gate=gate_for(root, manager, TICKET, state))
+        st.adopt(
+            state,
+            TICKET,
+            derived,
+            gate=gate_for(root, manager, TICKET, state),
+            definition=_pinned(root, manager),
+        )
     return plan
 
 
@@ -216,9 +233,16 @@ class _Driver:
     def __init__(self, root: Path):
         self.root = root
         self.calls: list[str] = []
+        self.texts: list[str] = []
 
-    def decompose(self, root, manager, ticket):
+    def decompose(self, root, manager, ticket, *, ticket_text=""):
         self.calls.append(f"decompose:{manager}")
+        # ⚠ **Kept, and asserted on (SCRUM-72d).** `advance_ticket` called the
+        # decomposer with NO ticket text, so it saw "(no ticket text was
+        # supplied)" and sliced a ticket by its id while the agreed definition
+        # of done sat in a record nothing read. A stub that silently accepted
+        # `ticket_text` and dropped it would hide that coming back.
+        self.texts.append(ticket_text)
         _write_plan(self.root, decomposed_by=manager)
         return type("R", (), {"wrote": True, "problem": "", "reasons": ()})()
 
@@ -528,7 +552,7 @@ def test_a_rejected_plan_goes_back_rather_than_round(tmp_path):
 def test_a_decomposer_that_produced_nothing_is_reported_not_retried_blindly(tmp_path):
     root = _project(tmp_path)
 
-    def failed(root_, manager, ticket):
+    def failed(root_, manager, ticket, *, ticket_text=""):
         return type(
             "R", (), {"wrote": False, "problem": "", "reasons": ("no cites",)}
         )()
@@ -677,13 +701,14 @@ def test_the_pipeline_cannot_be_driven_round_from_the_middle(tmp_path):
     other = _project(tmp_path / "second")
     _write_plan(other, approval=dec.PENDING)
     assert st.read(_state(other), TICKET).record.stage == DECOMPOSED
+    from rite_ai.local.gates import gate_for
+
     refused = st.adopt(
         _state(other),
         TICKET,
         APPROVED,
-        gate=__import__("rite_ai.local.gates", fromlist=["gate_for"]).gate_for(
-            other, "planner", TICKET, _state(other)
-        ),
+        gate=gate_for(other, "planner", TICKET, _state(other)),
+        definition=_pinned(other),
     )
     assert isinstance(refused, st.Refused)
 
@@ -699,7 +724,7 @@ def test_a_decomposer_that_claims_it_wrote_a_plan_but_did_not_does_not_advance(
     root = _project(tmp_path)
     _define(root)
 
-    def claims_it_wrote(root_, manager, ticket):
+    def claims_it_wrote(root_, manager, ticket, *, ticket_text=""):
         return type("R", (), {"wrote": True, "problem": "", "reasons": ()})()
 
     got = advance_ticket(root, "planner", TICKET, author_plan=claims_it_wrote)
@@ -741,3 +766,142 @@ def test_a_plan_returned_to_review_takes_the_stage_back_with_it(tmp_path):
     # And the log keeps both: RL-10 counts returns.
     log = [t.to for t in st.read(_state(root), TICKET).record.log]
     assert log == [DEFINED, DECOMPOSED, APPROVED, STEPPED, DECOMPOSED]
+
+
+def test_the_decomposer_is_given_the_agreed_definition_of_done(tmp_path):
+    """🔴 SCRUM-72d. `advance_ticket` called `author_plan` with no ticket text
+    at all, so the decomposer saw "(no ticket text was supplied)" — it sliced
+    a ticket by its ID while the signed definition of done sat in a record
+    nothing read. §3.3a's "the refinement record gates the start but is never
+    an input to the work", in one line of code.
+
+    ⚠ It is `record.render_for_worker`'s text, not a second wording: the SAME
+    text the Worker's start prompt carries, so the plan is sliced against what
+    the Worker will be held to rather than against a paraphrase."""
+    root = _project(tmp_path)
+    d = _Driver(root)
+    _define(root)
+    _advance(root, d)
+
+    assert len(d.texts) == 1
+    text = d.texts[0]
+    assert text, "the decomposer must not be asked to slice a ticket by its id"
+    assert "Agreed definition of done for T-1" in text
+    assert "a.txt says the thing" in text
+    assert "b.txt says the other thing" in text
+    assert "In scope:" in text and "a.txt" in text
+    assert "no ticket text was supplied" not in text
+
+    # And it is exactly what the Worker's own start prompt carries.
+    from rite_ai.refinement import record as rec
+
+    assert text == rec.render_for_worker(rec.from_payload(_refinement_payload()))
+
+
+def test_a_definition_that_changed_under_the_pipeline_halts_it(tmp_path):
+    """🔴 SCRUM-72d, the STALE halt. The definition of done is read from the
+    Worker's publish-record snapshot, and that snapshot is REWRITTEN when the
+    Worker is started again — on a re-refined ticket, or on a different one.
+    A plan authored against one definition must not go on being reviewed,
+    stepped and delivered against another."""
+    from rite_ai.config.parse import parse_config, parse_modules
+    from rite_ai.publishing import record
+    from rite_ai.refinement import record as rec
+
+    root = _project(tmp_path)
+    d = _Driver(root)
+    _define(root)
+    _advance(root, d)  # decomposed, against the first definition
+    first = st.read(_state(root), TICKET).record.definition
+    assert first
+
+    # The ticket is re-refined and the Worker started again: a NEW record.
+    renewed = rec.build(
+        ticket=TICKET,
+        board={"type": "none", "project": "acme"},
+        title=f"{TICKET}: the thing",
+        description="Do the thing, but differently.",
+        definition_of_done=["c.txt says something else entirely"],
+        verify=["pytest -q"],
+        provenance={"kind": rec.ACCEPTED, "answered_by": {"owner_user": "robert"}},
+        supersedes=None,
+        key=b"k" * 32,
+    ).payload()
+    assert renewed["record_id"] != first
+    record.write(
+        root,
+        "alpha",
+        TICKET,
+        parse_config(root / ".rite" / "config.yaml"),
+        parse_modules(root / ".rite" / "modules.yaml"),
+        refinement=renewed,
+    )
+
+    before = st.read(_state(root), TICKET).record
+    got = _advance(root, d)
+    assert not got.moved, got
+    assert "definition of done CHANGED" in got.blocked
+    assert first in got.blocked and renewed["record_id"] in got.blocked
+    # Nothing is undone and nothing is guessed: which definition it is now
+    # meant to satisfy is not rite's to decide.
+    assert st.read(_state(root), TICKET).record == before
+    assert _stored(root).approval == dec.PENDING
+    assert d.calls == ["decompose:planner"], "no further work ran"
+
+
+def test_the_pinned_definition_is_carried_not_re_pinned(tmp_path):
+    """Pinned once, at `defined`, and carried unchanged. A later transition
+    that could re-pin it would be one that could silently re-point a plan at a
+    definition nobody authored it against."""
+    root = _project(tmp_path)
+    d = _Driver(root)
+    _define(root)
+    pinned = st.read(_state(root), TICKET).record.definition
+    assert pinned
+
+    _advance(root, d)
+    _advance(root, d)  # the review is asked for
+    _review(root)
+    _advance(root, d)  # approved
+    for entry in st.read(_state(root), TICKET).record.log:
+        assert entry.to in (DEFINED, DECOMPOSED, APPROVED)
+    assert st.read(_state(root), TICKET).record.definition == pinned
+
+
+def test_the_subtask_slice_carries_the_definition_of_done_too(tmp_path):
+    """§3.3a: the snapshot is fed "to the decomposer AND the slice". Without
+    it a subtask ran against spec units and its own one-line intent, while the
+    signed definition of done — the thing `deliver` later holds the work
+    against — sat in a record nothing in that path read."""
+    from rite_ai.local.step import _slice_for
+
+    root = _project(tmp_path)
+    _spec_units(root, "5.1")
+    text, problem = _slice_for(root, ("5.1",), "AGREED DEFINITION HERE")
+    assert not problem
+    assert text.startswith("AGREED DEFINITION HERE"), text[:80]
+    assert "Section 5.1: the rule." in text
+    assert "how this codebase does the thing above" in text
+
+    # With no definition the slice is exactly what it was: the spec alone.
+    plain, problem = _slice_for(root, ("5.1",))
+    assert not problem
+    assert plain == "Section 5.1: the rule.\n"
+
+
+def test_the_executor_asks_for_the_definition_it_is_given(tmp_path):
+    """Wired, not only written — `test_no_dead_wiring`'s lesson. `take_one_step`
+    must pass the definition into the slice, or the paragraph above is a
+    function nothing calls with its third argument."""
+    import inspect
+
+    from rite_ai.local import step as step_module
+
+    src = inspect.getsource(step_module.take_one_step)
+    wanted = (
+        "_slice_for(\n"
+        "        root, subtask.cites, "
+        "_definition_for(root, manager, ticket)\n"
+        "    )"
+    )
+    assert wanted in src

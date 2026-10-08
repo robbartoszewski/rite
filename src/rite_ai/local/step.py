@@ -85,12 +85,39 @@ class Step:
     which is a result and not a problem with asking."""
 
 
-def _slice_for(root: Path, cites: tuple[str, ...]) -> tuple[str, str]:
+def _definition_for(root: Path, manager: str, ticket: str) -> str:
+    """The ticket's agreed definition of done, as the slice carries it, or "".
+
+    ⚠ **"" rather than a refusal, and that is not a hole.** The stage machine
+    will not let a ticket reach a step without having passed `defined`
+    (`stage.TRANSITIONS`, `gates.gate_for`), so a step with no definition can
+    only be one driven by hand through `rite local step`. Refusing here would
+    put a second copy of that gate in the executor, where it would be the one
+    somebody later changes; the pipeline's guard is the guard.
+    """
+    from rite_ai.local.gates import definition_snapshot
+    from rite_ai.local.loop import _definition_text
+
+    return _definition_text(definition_snapshot(Path(root), manager, ticket))
+
+
+def _slice_for(
+    root: Path, cites: tuple[str, ...], definition: str = ""
+) -> tuple[str, str]:
     """(the cited spec text, or a problem). Never a silent empty slice.
 
     The slice IS the context the model gets instead of the spec, so sending
     nothing would quietly reproduce the free-form run this replaces. A cite
     rite cannot resolve is a refusal, not a shrug.
+
+    🔴 **The agreed definition of done comes FIRST (SCRUM-72d, §3.3a: the
+    snapshot is fed "to the decomposer and the slice").** Without it a subtask
+    ran against spec units and its own one-line intent, with the signed
+    definition of done — the thing `deliver` later holds the work against —
+    sitting in a record nothing in this path read. The ticket's definition and
+    the subtask's spec are different kinds of context and the model needs
+    both: the spec says how this codebase does things, the definition says
+    what done means for this ticket.
     """
     from rite_ai.spec.digest_files import unit_filename, units_dir
 
@@ -112,7 +139,14 @@ def _slice_for(root: Path, cites: tuple[str, ...]) -> tuple[str, str]:
             "because a subtask run without its slice is the free-form run "
             "this path exists to replace"
         )
-    return "\n\n".join(parts), ""
+    text = "\n\n".join(parts)
+    if definition:
+        text = (
+            f"{definition}\n\n"
+            "The spec units this subtask cites, which are how this codebase "
+            "does the thing above:\n\n" + text
+        )
+    return text, ""
 
 
 @dataclass
@@ -227,7 +261,9 @@ def take_one_step(
         )
         return step
 
-    spec_slice, slice_problem = _slice_for(root, subtask.cites)
+    spec_slice, slice_problem = _slice_for(
+        root, subtask.cites, _definition_for(root, manager, ticket)
+    )
     if slice_problem:
         step.problem = f"{ticket} {subtask.id}: {slice_problem}"
         return step
