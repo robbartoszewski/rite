@@ -9,16 +9,24 @@ const { current = null } = Astro.props;
 ---
 <nav class="rt-nav" aria-label="Main">
   <div class="rt-container rt-nav-inner">
+    {/* Two SVG lockups, swapped by theme in CSS. The dark one carries an
+        off-white wordmark; the light one the ink wordmark from the logo.
+        Both are the real lockup, so there is no text span to keep aligned. */}
     <a class="rt-nav-brand" href={url('/')} aria-label="rite home">
       <img
         class="rt-logo-light"
-        src={url('/brand/rite-logo-horizontal.png')}
+        src={url('/brand/rite-logo-horizontal.svg')}
         alt="rite"
-        width="55"
-        height="30"
+        width="64"
+        height="32"
       />
-      <img class="rt-logo-dark" src={url('/brand/rite-mark.png')} alt="" width="13" height="30" />
-      <span class="rt-wordmark">rite</span>
+      <img
+        class="rt-logo-dark"
+        src={url('/brand/rite-logo-horizontal-dark.svg')}
+        alt="rite"
+        width="64"
+        height="32"
+      />
     </a>
     <VersionChip />
     <ul class="rt-nav-links">

@@ -53,62 +53,16 @@ const ogImage = new URL(url('/og.png'), Astro.site).href;
     <meta name="twitter:image" content={ogImage} />
 
     <meta name="theme-color" content="#FAF7F2" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#211E1B" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#222221" media="(prefers-color-scheme: dark)" />
 
-    {/* Brand pack favicons. The .ico carries no `media` and is listed first, so
-        a browser that ignores `media` on rel=icon still gets the real mark.
-        The tile-* variants are the pack's "dark-tab-safe coloured version" —
-        its README recommends them where the flame goes muddy on a dark tab. */}
+    {/* Icons, all generated from public/brand/rite-mark.svg. The flame alone,
+        without the wordmark: a 16px icon carrying "rite" is illegible. The SVG
+        is offered first, so a browser that supports it gets the vector. */}
+    <link rel="icon" href={url('/brand/rite-flame.svg')} type="image/svg+xml" />
     <link rel="icon" href={url('/favicon.ico')} sizes="any" />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="16x16"
-      href={url('/favicon-16.png')}
-      media="(prefers-color-scheme: light)"
-    />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="32x32"
-      href={url('/favicon-32.png')}
-      media="(prefers-color-scheme: light)"
-    />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="48x48"
-      href={url('/favicon-48.png')}
-      media="(prefers-color-scheme: light)"
-    />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="64x64"
-      href={url('/favicon-64.png')}
-      media="(prefers-color-scheme: light)"
-    />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="16x16"
-      href={url('/favicon-tile-16.png')}
-      media="(prefers-color-scheme: dark)"
-    />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="32x32"
-      href={url('/favicon-tile-32.png')}
-      media="(prefers-color-scheme: dark)"
-    />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="48x48"
-      href={url('/favicon-tile-48.png')}
-      media="(prefers-color-scheme: dark)"
-    />
+    <link rel="icon" type="image/png" sizes="16x16" href={url('/favicon-16.png')} />
+    <link rel="icon" type="image/png" sizes="32x32" href={url('/favicon-32.png')} />
+    <link rel="icon" type="image/png" sizes="48x48" href={url('/favicon-48.png')} />
     <link rel="apple-touch-icon" sizes="180x180" href={url('/apple-touch-icon.png')} />
     <link rel="manifest" href={url('/site.webmanifest')} />
 

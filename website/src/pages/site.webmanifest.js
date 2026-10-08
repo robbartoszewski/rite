@@ -10,13 +10,14 @@ export function GET() {
     start_url: url('/'),
     scope: url('/'),
     icons: [
+      { src: url('/brand/rite-flame.svg'), sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
       { src: url('/icon-192.png'), sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: url('/icon-512.png'), sizes: '512x512', type: 'image/png', purpose: 'any' },
       { src: url('/maskable-512.png'), sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
     /* Crimson stays for installed-app chrome; the page's own theme-color meta
        follows light/dark. */
-    theme_color: '#B82D22',
+    theme_color: '#AC1E1C',
     background_color: '#FAF7F2',
     display: 'standalone',
   };

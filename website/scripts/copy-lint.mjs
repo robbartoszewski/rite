@@ -25,9 +25,16 @@ const FORBIDDEN = [
   "production-ready", "production ready", "battle-tested", "generally available", "stable",
   // social proof
   "trusted by", "developers love", "join thousands", "customers", "testimonial", "github stars",
-  // unattended operation
+  // Unattended operation. "runs unattended" came off this list on 2026-10-09:
+  // the owner confirmed it is honest for the mixed fleet — you start a run and
+  // it works the board for hours without you. What stays forbidden is the
+  // stronger claim that nothing on this product does: starting itself on a
+  // schedule, running with nobody reachable, or a fully local loop that closes
+  // on its own. SPEC §9.12 still refuses to start a Claude session from
+  // anything scheduled, and that is the line these words would cross.
   "while you sleep", "overnight", "fully autonomous", "autonomous", "hands-off", "set and forget",
-  "runs unattended", "run it unattended", "unattended operation is supported",
+  "24/7", "zero supervision", "no human", "fire and forget", "self-driving",
+  "unattended operation is supported", "fully local loop", "no supervision",
   // network boundary
   "never leaves", "nothing leaves", "stays on your machine", "leaves your machine never",
   // sandbox
