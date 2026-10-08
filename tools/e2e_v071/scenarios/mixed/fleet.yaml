@@ -36,11 +36,9 @@ github:
   # `publish.strategy: pull_request` needs a GitHub origin. One private repo per run,
   # created only by `harness.py setup --create-repo` (an outward-facing action).
   repo_prefix: rite-e2e-mixed-
-  # The GitHub App rite opens PRs with (the yoloAI dogfood's IDs). Its installation
-  # must include the run's new repo: add it in the App's installation settings, or
-  # install on all repositories. `rite doctor` (the last step of setup) checks it.
-  app_id: "5156044"
-  installation_id: "167030531"
+  # No GitHub App: rite opens PRs with the Worker's own github_token. An App
+  # would have to be installed on each run's new repo by hand, which a
+  # repeatable gate cannot depend on. Set app_id/installation_id here to use one.
 
 managers:
   - name: lead            # Claude; the Owner (holds `route`) and the plan reviewer (plan-review)

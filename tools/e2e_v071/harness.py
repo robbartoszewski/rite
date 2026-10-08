@@ -71,11 +71,22 @@ def _patch_config(project: Path, fleet: Fleet, repo: str) -> None:
     }
     if repo:
         cfg.setdefault("ticket_backend", {}).update({"type": "github", "repo": repo})
-        cfg["github_app"] = {
-            "app_id": str(fleet.github["app_id"]),
-            "installation_id": str(fleet.github["installation_id"]),
-            "repository": repo,
-        }
+        # ⚠ **Only when the fleet names an App.** `github_access.check_app` is
+        # "None when no App is configured", so without this block rite opens
+        # PRs with the Worker's own `github_token` instead — which is one fewer
+        # credential and, more to the point, one fewer MANUAL step: an App has
+        # to be installed on each run's brand-new repository through GitHub's
+        # UI, and a gate that cannot be re-run without a human clicking is not
+        # the repeatable instrument this is supposed to be. The App changes who
+        # a PR is authored by, not whether the work landed, and the delivery
+        # evidence is the PR and its diff either way.
+        app_id = str(fleet.github.get("app_id") or "")
+        if app_id:
+            cfg["github_app"] = {
+                "app_id": app_id,
+                "installation_id": str(fleet.github.get("installation_id") or ""),
+                "repository": repo,
+            }
     path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
 
@@ -274,7 +285,6 @@ def setup(fleet: Fleet, runs_root: Path, *, offline: bool, create_repo: bool) ->
 CREDENTIALS_NOTE = """\
 Credentials are the operator's to set; the harness never handles a secret. In {project}:
   rite credential set github_token --stdin < <a token with repo scope for the run repo>
-  rite credential set github_app_key --stdin < <the App's private key .pem>
   claude setup-token, then: rite credential set claude  (a Claude Worker needs it)
 Then re-run `rite doctor` there until it is clean."""
 
