@@ -119,6 +119,11 @@ def honour_deliveries(root: Path, manager: str, say) -> None:
             say(f"{manager!r}: {said}")
             tell(said)
             continue
+        refused = _staged_pipeline_refusal(root, manager, request.ticket)
+        if refused:
+            say(f"{manager!r}: {refused}")
+            tell(refused)
+            continue
         result = deliver(root, request.worker, request.ticket, manager=manager)
         if isinstance(result, Refused):
             said = f"NOT delivered {request.worker}/{request.ticket}: {result.why}"
@@ -130,6 +135,57 @@ def honour_deliveries(root: Path, manager: str, say) -> None:
             tell(outcome.note())
         say(f"{manager!r}: {request.worker}: {result.sandbox}")
         tell(f"{request.worker}: {result.sandbox}")
+
+
+def _staged_pipeline_refusal(root: Path, manager: str, ticket: str) -> str:
+    """Why this delivery request must not be honoured, or "" (SCRUM-72f).
+
+    🔴 **§3.3a guard 5: a delivery before RECOMPOSED, "through both the loop
+    AND a hand-written request file".** The loop's own guard is the stage
+    machine, and it is not enough on its own: this directory is the Manager's
+    own, so a Manager can write a request file into it directly — `rite
+    request deliver` exists for exactly that — and rite would then push work
+    that never passed RL-8. A guard only on the loop is a guard on the path
+    nobody needs to go round.
+
+    ⚠ **Only for a ticket the staged pipeline drives**, which is exactly a
+    ticket that HAS a stage record. A Claude Worker's ticket has none and is
+    unaffected: that path has no staged pipeline, and inventing a stage for it
+    here would refuse every delivery rite has ever made.
+
+    Fails CLOSED on anything it cannot read. A stage record that will not
+    parse is not a reason to push.
+    """
+    from rite_ai.local import plan_state
+    from rite_ai.local import stage as st
+
+    try:
+        state = plan_state.layer(root)
+        got = st.read(state, ticket)
+    except Exception as e:  # noqa: BLE001 - said, never raised into the cycle
+        return (
+            f"NOT delivered {ticket}: rite could not read its pipeline stage "
+            f"({type(e).__name__}: {e}), and it does not deliver work it cannot "
+            "tell has passed its gates"
+        )
+    if got.unavailable or got.error:
+        return (
+            f"NOT delivered {ticket}: its pipeline stage could not be read "
+            f"({got.unavailable or got.error}). rite does not deliver work it "
+            "cannot tell has passed its gates"
+        )
+    if got.record is None:
+        return ""  # not a staged-pipeline ticket
+    if got.stage == st.DELIVERY_REQUESTED:
+        return ""
+    return (
+        f"NOT delivered {ticket}: it is at stage {got.stage!r} and a delivery "
+        f"is only honoured at {st.DELIVERY_REQUESTED!r}. The staged pipeline "
+        "drives this ticket, and the stage before delivery is the "
+        "recomposition verify (RL-8) — every subtask passing its own check is "
+        "not the ticket working. A request file written by hand does not "
+        "replace the gate"
+    )
 
 
 def instructions(root: Path, manager: str) -> str:

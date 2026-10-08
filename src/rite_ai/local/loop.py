@@ -133,6 +133,7 @@ def advance_ticket(
     ask_review=None,
     step=None,
     ask_delivery=None,
+    recompose_with=None,
     gate=None,
     now: float | None = None,
 ) -> Advance:
@@ -278,23 +279,66 @@ def advance_ticket(
             note="defined",
         )
 
-    # 1b. REJECTED — it goes back to its planner, and today it stops here.
+    # 1b. REJECTED — back to its planner, RE-AUTHORED, and bounded.
     #
-    # ⚠ **`REJECTED -> DECOMPOSED` is in the table and nothing drives it yet.**
-    # Re-authoring from a rejection with its reasons as input is §3.3b's new
-    # transition, and it is only safe once the decomposer has a retry budget
-    # and an escalation past it — an unbounded re-author is a loop, not a fix.
-    # The edge is declared because the table is the design; the drive lands
-    # with the budget.
+    # 🔴 **§3.3b's new transition, and it lands with its bound (SCRUM-72f).**
+    # A REJECTED plan used to block for ever: `advance_ticket` re-authored
+    # only when there was no plan at all, so a reviewer that said no stopped
+    # the ticket rather than improving it. Re-authoring is only safe with a
+    # budget and an escalation past it, because an unbounded re-author is a
+    # loop and not a fix — and the budget is `Decomposition.returns`, the
+    # count RL-10 already keeps, shared with a failed RL-8.
     if stage == st.REJECTED:
-        return Advance(
+        from rite_ai.local import recompose
+
+        spent = len(plan.returns) if plan is not None else 0
+        if spent >= recompose.MAX_RETURNS:
+            return Advance(
+                ticket,
+                blocked=(
+                    f"its plan has gone back to review {spent} times "
+                    f"({recompose.MAX_RETURNS} is the bound), so it is NOT "
+                    "re-authored again — somebody has to look at the ticket. "
+                    "The reasons so far: "
+                    + "; ".join(plan.returns if plan is not None else ())
+                ),
+            )
+        # ⚠ **RE-AUTHORED FIRST, then the stage moves.** `decomposed`'s gate
+        # wants a PENDING plan and a rejected one is REJECTED, so the move is
+        # only legal once a new plan exists. That is the rule everywhere here:
+        # the artifact leads and the stage follows, and the gate is what makes
+        # it true rather than a convention.
+        if author_plan is None:
+            from rite_ai.local.decompose import decompose_ticket
+
+            author_plan = decompose_ticket
+        again = author_plan(
+            root,
+            manager,
             ticket,
-            blocked="its plan was rejected, so it goes back to its decomposer"
-            + (f": {plan.returns[-1]}" if plan is not None and plan.returns else ""),
+            ticket_text=_rejection_text(_definition_text(snapshot), plan),
+        )
+        if not getattr(again, "wrote", False):
+            why = getattr(again, "problem", "") or "the decomposer produced no plan"
+            reasons = getattr(again, "reasons", ()) or ()
+            if reasons:
+                why = f"{why or 'rejected'}: {reasons[-1]}"
+            return Advance(
+                ticket, blocked=f"not re-authored after its rejection: {why}"
+            )
+        return moved_to(
+            st.DECOMPOSED,
+            why=f"re-authored after rejection by {manager}",
+            note=(
+                f"re-authored with the rejection's reasons by {manager} "
+                f"({spent} of {recompose.MAX_RETURNS} returns spent)"
+            ),
         )
 
-    # 2. DEFINED — author a plan. It is written PENDING; nothing here can write
-    #    APPROVED, which is RL-6's gate and DD-3.5's rule.
+    # 2. DEFINED — author a plan. It is written PENDING; nothing here can
+    #    write APPROVED, which is RL-6's gate and DD-3.5's rule. (A plan sent
+    #    back is re-authored in the REJECTED branch above, which has the
+    #    reasons to give it.)
     if stage == st.DEFINED:
         if author_plan is None:
             from rite_ai.local.decompose import decompose_ticket
@@ -410,9 +454,8 @@ def advance_ticket(
         # the table has no self-loop, so this is not a transition.
         return Advance(ticket, stage=st.STEPPING, note=note)
 
-    # 5. Nothing left to run — compose. RL-8's verify is the gate on entering
-    #    RECOMPOSED; until it exists, every subtask accepted is the condition
-    #    (`gates.gate_for`), which is what this loop used to check inline.
+    # 5. Nothing left to run — RECOMPOSE, then move. RL-8: the ticket's own
+    #    agreed verify runs on the composed work before anything is delivered.
     if stage in (st.APPROVED, st.STEPPING):
         unfinished = [s.id for s in plan.subtasks if s.status != dec.ACCEPTED]
         if unfinished:
@@ -423,10 +466,43 @@ def advance_ticket(
                     "accepted, so the ticket is neither runnable nor finished"
                 ),
             )
+        from rite_ai.local import level2, recompose
+
+        digests = level2.approved_digests(state, ticket)
+        if isinstance(digests, str):
+            return Advance(ticket, blocked=digests)
+        got = recompose.cleared_to_deliver(state, ticket, digests)
+        if isinstance(got, recompose.Blocked):
+            # Not recorded for this plan yet, or recorded as a failure. Run it.
+            result = (recompose_with or recompose.run_recomposition)(
+                root, manager, ticket, digests, now=now
+            )
+            written = recompose.write(state, result)
+            if not isinstance(written, dec.Written):
+                return Advance(
+                    ticket,
+                    blocked=(
+                        "its recomposition result could not be recorded, so it "
+                        "is not delivered on an unrecorded verify: "
+                        f"{getattr(written, 'reason', 'it changed under this write')}"
+                    ),
+                )
+            if result.problem:
+                # Could not RUN is not a failure (RL-47): nothing is returned
+                # to review for an outage, and it is tried again next pass.
+                return Advance(ticket, blocked=result.line())
+            if not result.cleared:
+                return _return_to_review(
+                    root, manager, ticket, state, plan, read.version, result, gate, now
+                )
         return moved_to(
             st.RECOMPOSED,
-            why="every subtask was accepted",
-            note="every subtask accepted",
+            why="the composed work passed its agreed verify (RL-8)",
+            note=(
+                got.why
+                if isinstance(got, recompose.Cleared)
+                else "the composed work passed its agreed verify (RL-8)"
+            ),
         )
 
     # 6. RECOMPOSED — ask rite to deliver (OL8's request path).
@@ -448,6 +524,89 @@ def advance_ticket(
         ticket,
         blocked="its delivery has been requested; rite honours that at the "
         "cycle boundary and the pipeline has nothing further to drive",
+    )
+
+
+def _rejection_text(definition: str, plan) -> str:
+    """The decomposer's input when it re-authors after a rejection or a failed
+    RL-8 (§3.3b: "with the reasons as decomposer input").
+
+    ⚠ The definition of done comes FIRST and the reasons are under their own
+    heading. A plan re-authored against the reasons alone would be a plan
+    answering the review rather than the ticket.
+    """
+    if plan is None or not plan.returns:
+        return definition
+    reasons = "\n".join(f"- {r}" for r in plan.returns)
+    return (
+        f"{definition}\n\n"
+        "A previous plan for this ticket was REJECTED, or failed its "
+        "recomposition verify, for the reasons below. Produce a plan that does "
+        "not repeat them; do not argue with them:\n" + reasons
+    )
+
+
+def _return_to_review(
+    root: Path, manager: str, ticket: str, state, plan, version: str, result, gate, now
+) -> Advance:
+    """A failed RL-8 sends the plan back to plan review — bounded.
+
+    🔴 **One budget for BOTH return paths** (`recompose.MAX_RETURNS`), counted
+    on `Decomposition.returns`, which RL-10 already keeps. A rejection (§3.3b)
+    and a failed recomposition are the same event from the plan's point of
+    view: it goes back to its planner with reasons. Two budgets would be two
+    numbers to keep in step, and the first thing to drift.
+
+    ⚠ **Past the bound it ESCALATES rather than returning again.** A plan that
+    has been re-sliced three times and still does not compose is not a plan
+    one more turn fixes; it is a ticket somebody has to look at, and saying so
+    is the whole point of a bound.
+    """
+    from rite_ai.local import recompose
+
+    spent = len(plan.returns)
+    if spent >= recompose.MAX_RETURNS:
+        return Advance(
+            ticket,
+            blocked=(
+                f"{result.line()} — and its plan has already gone back to review "
+                f"{spent} times ({recompose.MAX_RETURNS} is the bound), so it is "
+                "NOT sent back again. Each subtask passes its own check and the "
+                "composed work does not: the slicing is wrong in a way "
+                "re-slicing has not fixed, and somebody has to look at the "
+                "ticket. The reasons so far: " + "; ".join(plan.returns)
+            ),
+        )
+    reason = f"RL-8: {result.line()}" + (
+        f" Output: {result.output[:500]}" if result.output else ""
+    )
+    written = dec.write(state, dec.returned_to_plan_review(plan, reason), version)
+    if not isinstance(written, dec.Written):
+        return Advance(
+            ticket,
+            blocked=(
+                "its plan could not be returned to review, so it is neither "
+                "delivered nor sent back: "
+                f"{getattr(written, 'reason', 'it changed under this write')}"
+            ),
+        )
+    got = st.advance(
+        state,
+        ticket,
+        st.DECOMPOSED,
+        why=f"RL-8 failed: {result.failed}",
+        gate=gate,
+        now=now,
+    )
+    if isinstance(got, st.Refused):
+        return Advance(ticket, blocked=got.why)
+    return Advance(
+        ticket,
+        stage=st.DECOMPOSED,
+        note=(
+            f"{result.line()} It goes back to plan review with the reasons "
+            f"({spent + 1} of {recompose.MAX_RETURNS} returns spent)"
+        ),
     )
 
 

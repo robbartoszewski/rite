@@ -165,6 +165,19 @@ def gate_for(root: Path, manager: str, ticket: str, state):
                     f"{', '.join(unfinished)} did not reach accepted, so the work "
                     "is not composed"
                 )
+            # 🔴 RL-8 (SCRUM-72f): every subtask passing its OWN check is not
+            # the ticket working. A plan sliced wrongly produces subtasks that
+            # each pass and a ticket that does not — the one failure
+            # decomposition itself introduces — so the ticket's agreed verify
+            # runs on the composed work before anything is delivered.
+            from rite_ai.local import level2, recompose
+
+            digests = level2.approved_digests(state, ticket)
+            if isinstance(digests, str):
+                return digests
+            verdict = recompose.cleared_to_deliver(state, ticket, digests)
+            if isinstance(verdict, recompose.Blocked):
+                return verdict.why
             return ""
 
         raise AssertionError(f"{target!r} is in _GATED with no branch above")

@@ -230,10 +230,40 @@ class _Driver:
     this file.
     """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, recomposes=True):
         self.root = root
         self.calls: list[str] = []
         self.texts: list[str] = []
+        self.recomposes = recomposes
+        self.recompositions = 0
+
+    def recompose(self, root, manager, ticket, digests, *, now=None, **kw):
+        """RL-8's verify, stubbed — it is the one stage that shells out.
+
+        ⚠ Stubbed because it RUNS A COMMAND, not because it is optional: the
+        gate itself is not stubbed anywhere in this file, and the tests below
+        drive both verdicts through it.
+        """
+        from rite_ai.local import recompose as rc
+
+        self.recompositions += 1
+        if self.recomposes:
+            return rc.Result(
+                ticket=ticket,
+                ok=True,
+                commands=("pytest -q",),
+                plan=rc.fingerprint(digests),
+                at=now or 0.0,
+            )
+        return rc.Result(
+            ticket=ticket,
+            ok=False,
+            commands=("pytest -q",),
+            failed="pytest -q",
+            output="2 failed",
+            plan=rc.fingerprint(digests),
+            at=now or 0.0,
+        )
 
     def decompose(self, root, manager, ticket, *, ticket_text=""):
         self.calls.append(f"decompose:{manager}")
@@ -281,9 +311,67 @@ class _Driver:
 
 
 def _advance(root: Path, driver: _Driver, manager="planner", **kw):
+    kw.setdefault("recompose_with", driver.recompose)
     return advance_ticket(
         root, manager, TICKET, author_plan=driver.decompose, step=driver.step, **kw
     )
+
+
+def _recomposed(root: Path, manager="planner", ok=True) -> None:
+    """Record an RL-8 result for the plan approved now, the way a pass that
+    ran the verify leaves it — for tests that start after that stage."""
+    from rite_ai.local import level2
+    from rite_ai.local import recompose as rc
+
+    state = _state(root)
+    digests = level2.approved_digests(state, TICKET)
+    assert not isinstance(digests, str), digests
+    written = rc.write(
+        state,
+        rc.Result(
+            ticket=TICKET,
+            ok=ok,
+            commands=("pytest -q",),
+            failed="" if ok else "pytest -q",
+            plan=rc.fingerprint(digests),
+            at=1.0,
+        ),
+    )
+    assert type(written).__name__ == "Written", written
+    # ⚠ And the STAGE, which could not be adopted until now: `recomposed`'s
+    # gate wants an RL-8 result, so `_write_plan`'s own adoption was refused
+    # while there was none. Adopting here is what a driven pipeline has by
+    # this point, and it keeps these tests one pass from the delivery they
+    # are about rather than two.
+    from rite_ai.local.gates import gate_for
+
+    st.adopt(
+        state,
+        TICKET,
+        st.RECOMPOSED if ok else st.STEPPING,
+        gate=gate_for(root, manager, TICKET, state),
+        definition=_pinned(root, manager),
+    )
+
+
+def _level2_cleared(root: Path, manager="planner") -> None:
+    """The approval digests and a persisted approach per subtask, as a driven
+    pipeline leaves them by the time a delivery is asked for."""
+    from rite_ai.local import level2
+
+    state = _state(root)
+    plan = _stored(root)
+    recorded = level2.record_approval(
+        state,
+        TICKET,
+        plan.approved_by or "lead",
+        plan.subtasks,
+        expected=level2.approval_version(state, TICKET),
+    )
+    assert type(recorded).__name__ == "Written", recorded
+    for sub in plan.subtasks:
+        written = level2.write_approach(state, TICKET, sub, "1. do it")
+        assert type(written).__name__ == "Written", written
 
 
 def test_it_drives_decompose_then_approve_then_step_with_no_commands(tmp_path):
@@ -358,6 +446,8 @@ def test_when_every_subtask_is_accepted_it_asks_rite_to_deliver(tmp_path):
         asked["args"] = (manager, ticket)
         return True, ""
 
+    _level2_cleared(root)
+    _recomposed(root)
     got = advance_ticket(root, "planner", TICKET, ask_delivery=ask)
     assert got.stage == DELIVERY_ASKED, got
     assert asked["args"] == ("planner", TICKET)
@@ -379,6 +469,8 @@ def test_the_delivery_goes_through_the_request_path(tmp_path):
     # The Worker of this Manager recorded as started on the ticket is
     # `_project`'s: the pipeline cannot reach DEFINED without one, so a second
     # one written here would be a second answer to "whose work is this".
+    _level2_cleared(root)
+    _recomposed(root)
     got = advance_ticket(root, "planner", TICKET)
     assert got.stage == DELIVERY_ASKED, got
     written = requests.requests_dir(root, "planner") / f"{TICKET}.json"
@@ -398,6 +490,8 @@ def test_a_delivery_is_not_asked_for_twice(tmp_path):
         approval=dec.APPROVED,
         approved_by="lead",
     )
+    _level2_cleared(root)
+    _recomposed(root)
     where = requests.requests_dir(root, "planner")
     where.mkdir(parents=True, exist_ok=True)
     (where / f"{TICKET}.json").write_text("{}")
@@ -425,6 +519,8 @@ def test_once_the_delivery_is_requested_the_pipeline_is_at_its_end(tmp_path):
         approval=dec.APPROVED,
         approved_by="lead",
     )
+    _level2_cleared(root)
+    _recomposed(root)
     asked = []
     got = advance_ticket(
         root,
@@ -540,13 +636,56 @@ def test_an_unresolvable_cite_stops_approval(tmp_path):
     assert _stored(root).approval == dec.PENDING
 
 
-def test_a_rejected_plan_goes_back_rather_than_round(tmp_path):
+def test_a_rejected_plan_is_RE_AUTHORED_with_its_reasons(tmp_path):
+    """🔴 **§3.3b's new transition, and it lands with its bound.** A REJECTED
+    plan used to block for ever: `advance_ticket` re-authored only when there
+    was no plan at all, so a reviewer that said no stopped the ticket rather
+    than improving it. It is re-authored now, WITH the reasons as the
+    decomposer's input — and bounded, because an unbounded re-author is a loop
+    and not a fix.
+
+    ⚠ The plan is re-authored BEFORE the stage moves. `decomposed`'s gate
+    wants a PENDING plan and a rejected one is REJECTED, so the move is only
+    legal once a new plan exists — the artifact leads and the gate is what
+    makes that true.
+    """
     root = _project(tmp_path)
+    d = _Driver(root)
     _write_plan(root, approval=dec.REJECTED, returns=("the slicing crosses modules",))
-    blocked = advance_ticket(root, "planner", TICKET)
-    assert not blocked.moved
-    assert "rejected" in blocked.blocked
-    assert "crosses modules" in blocked.blocked
+
+    got = _advance(root, d)
+    assert got.stage == DECOMPOSED, got
+    assert "re-authored" in got.note
+    assert d.calls == ["decompose:planner"]
+    # The definition of done comes first and the reasons are under their own
+    # heading: a plan re-authored against the reasons alone would answer the
+    # review rather than the ticket.
+    text = d.texts[0]
+    assert text.index("Agreed definition of done") < text.index("was REJECTED")
+    assert "the slicing crosses modules" in text
+    assert "do not argue with them" in text
+    assert _stored(root).approval == dec.PENDING
+
+
+def test_a_plan_rejected_past_the_bound_is_escalated_not_re_authored(tmp_path):
+    """The bound, and it is `Decomposition.returns` — the count RL-10 already
+    keeps. A plan re-sliced three times that still does not pass is not a plan
+    one more turn fixes."""
+    from rite_ai.local.recompose import MAX_RETURNS
+
+    root = _project(tmp_path)
+    d = _Driver(root)
+    _write_plan(
+        root,
+        approval=dec.REJECTED,
+        returns=tuple(f"reason {n}" for n in range(MAX_RETURNS)),
+    )
+    got = _advance(root, d)
+    assert not got.moved, got
+    assert f"{MAX_RETURNS} is the bound" in got.blocked
+    assert "somebody has to look at the ticket" in got.blocked
+    assert "reason 0" in got.blocked
+    assert d.calls == [], "nothing is re-authored past the bound"
 
 
 def test_a_decomposer_that_produced_nothing_is_reported_not_retried_blindly(tmp_path):
