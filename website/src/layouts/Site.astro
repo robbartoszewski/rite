@@ -1,0 +1,178 @@
+---
+import '../styles/fonts.css';
+import '../styles/tokens.css';
+import '../styles/components.css';
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import { url } from '../lib/site';
+
+interface Props {
+  title: string;
+  description: string;
+  current?: 'what-works' | 'blog' | 'licensing' | null;
+  /** 'website' for pages, 'article' for blog posts. */
+  ogType?: 'website' | 'article';
+  /** Rendered verbatim into a JSON-LD script tag. */
+  jsonLd?: object;
+  /** The home hero needs a flex column head; other pages don't. */
+  bodyMinHeight?: boolean;
+  /** 404 and anything else that should not be indexed. */
+  noindex?: boolean;
+}
+const {
+  title,
+  description,
+  current = null,
+  ogType = 'website',
+  jsonLd,
+  bodyMinHeight = true,
+  noindex = false,
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const ogImage = new URL(url('/og.png'), Astro.site).href;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex" />}
+
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:site_name" content="rite" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content={ogImage} />
+
+    <meta name="theme-color" content="#FAF7F2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#211E1B" media="(prefers-color-scheme: dark)" />
+
+    {/* Brand pack favicons. The .ico carries no `media` and is listed first, so
+        a browser that ignores `media` on rel=icon still gets the real mark.
+        The tile-* variants are the pack's "dark-tab-safe coloured version" —
+        its README recommends them where the flame goes muddy on a dark tab. */}
+    <link rel="icon" href={url('/favicon.ico')} sizes="any" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href={url('/favicon-16.png')}
+      media="(prefers-color-scheme: light)"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href={url('/favicon-32.png')}
+      media="(prefers-color-scheme: light)"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="48x48"
+      href={url('/favicon-48.png')}
+      media="(prefers-color-scheme: light)"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="64x64"
+      href={url('/favicon-64.png')}
+      media="(prefers-color-scheme: light)"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href={url('/favicon-tile-16.png')}
+      media="(prefers-color-scheme: dark)"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href={url('/favicon-tile-32.png')}
+      media="(prefers-color-scheme: dark)"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="48x48"
+      href={url('/favicon-tile-48.png')}
+      media="(prefers-color-scheme: dark)"
+    />
+    <link rel="apple-touch-icon" sizes="180x180" href={url('/apple-touch-icon.png')} />
+    <link rel="manifest" href={url('/site.webmanifest')} />
+
+    <link
+      rel="alternate"
+      type="application/rss+xml"
+      title="rite — blog"
+      href={url('/blog/rss.xml')}
+    />
+
+    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
+  </head>
+  <body class="rt-page" style={bodyMinHeight ? 'min-height:100vh' : undefined}>
+    <a class="rt-skip" href="#main">Skip to content</a>
+    <SiteNav current={current} />
+    <slot />
+    <SiteFooter />
+
+    <script>
+      // The only client JavaScript on the site: copy the terminal / install
+      // command. Commands are copied without their `$ ` prompts.
+      document.querySelectorAll<HTMLButtonElement>('[data-copy-target]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const sel = btn.dataset.copyTarget;
+          if (!sel) return;
+          const src = document.querySelector(sel);
+          if (!src) return;
+          const text = (src.textContent ?? '')
+            .split('\n')
+            .map((l) => l.replace(/^\$ /, ''))
+            .join('\n')
+            .trim();
+          const live = btn.parentElement?.querySelector('[data-copy-live]');
+          const label = btn.dataset.copyLabel ?? btn.textContent?.trim() ?? 'Copy';
+          btn.dataset.copyLabel = label;
+          const say = (msg: string) => {
+            // Sighted feedback as well as the aria-live region: a mouse user
+            // clicking "Copy" saw nothing at all before this.
+            const text = btn.lastChild;
+            if (text && text.nodeType === Node.TEXT_NODE) text.textContent = msg;
+            else btn.textContent = msg;
+            if (live) live.textContent = msg;
+            setTimeout(() => {
+              if (text && text.nodeType === Node.TEXT_NODE) text.textContent = label;
+              else btn.textContent = label;
+              if (live) live.textContent = '';
+            }, 2000);
+          };
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            // Clipboard access can be refused outright; say so rather than
+            // looking like a dead button.
+            say('Press ⌘C');
+            const range = document.createRange();
+            range.selectNodeContents(src);
+            const sel = window.getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+            return;
+          }
+          say('Copied');
+        });
+      });
+    </script>
+  </body>
+</html>

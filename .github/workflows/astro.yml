@@ -1,0 +1,119 @@
+# Builds the Astro site in website/ and deploys it to GitHub Pages.
+#
+# Started from GitHub's "Deploy Astro site to Pages" starter. Three changes were
+# needed for this repository, each of which the starter would have failed on:
+#
+#   1. The Astro project is in `website/`, not at the repository root. The
+#      starter's BUILD_PATH="." made its package-manager detection exit 1,
+#      because the root has no package.json. BUILD_PATH is gone; the path is
+#      written out literally.
+#   2. Node 22.12, not 20. Astro 7 refuses to run on Node 20.
+#   3. `npm run check` runs after the build — `astro check` plus
+#      scripts/copy-lint.mjs, which fails on a hype word, a claim the brief
+#      forbids, an exclamation mark or an unfilled placeholder. Without it the
+#      content tripwire gates nothing.
+#
+# The starter's package-manager detection is dropped: this project has a
+# committed package-lock.json and uses npm, so detecting it every run is a
+# moving part with one possible answer.
+#
+# ⚠ One-time setup, in the repository's own settings:
+#     Settings → Pages → Build and deployment → Source: "GitHub Actions"
+# Until that is set, this workflow builds and then fails at the deploy step.
+# See website/DEPLOY.md.
+name: Deploy Astro site to Pages
+
+on:
+  push:
+    branches: ['main']
+    paths:
+      - 'website/**'
+      - '.github/workflows/astro.yml'
+  # The same build runs on a pull request, without deploying. Without this,
+  # `npm run check` gates nothing: a copy edit that trips copy-lint would pass
+  # every required check, merge, and only fail afterwards on main.
+  pull_request:
+    branches: ['main']
+    paths:
+      - 'website/**'
+      - '.github/workflows/astro.yml'
+  # Lets you deploy by hand from the Actions tab, e.g. the first time.
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run
+# in-progress and latest queued. However, do NOT cancel in-progress runs, as we
+# want to allow these production deployments to complete.
+concurrency:
+  group: 'pages'
+  cancel-in-progress: false
+
+env:
+  ASTRO_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Literal rather than the starter's BUILD_PATH indirection: the env
+        # context is not worth the ambiguity here, and one wrong value was
+        # what broke the starter in the first place.
+        working-directory: website
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Astro 7 requires >= 22.12. Keep in step with website/.nvmrc and
+          # the `engines.node` field in website/package.json.
+          node-version: '22.12'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build with Astro
+        # `site` and `base` come from website/astro.config.mjs, deliberately,
+        # rather than from the Pages origin: they are the one place the switch
+        # to getrite.ai happens, and a local build and a CI build must produce
+        # the same URLs. See website/DEPLOY.md §3.
+        run: npm run build
+
+      - name: Check types and copy
+        run: npm run check
+
+      - name: Setup Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          # Resolved against $GITHUB_WORKSPACE — `defaults.run.working-directory`
+          # applies only to `run:` steps, not to an action's inputs.
+          path: website/dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build
+    # A pull request builds and lints; only main deploys.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    name: Deploy
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

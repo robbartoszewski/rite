@@ -1,0 +1,50 @@
+---
+/** The seven stages in reader-facing names (handover §4.1, and CHANGELOG's
+ *  "spec session, plan, review, approach, work, recomposition check,
+ *  delivery"). The identifiers in src/rite_ai/local/stage.py differ —
+ *  UNSTARTED / DEFINED / DECOMPOSED / APPROVED / REJECTED / STEPPING /
+ *  RECOMPOSED — so check the transition table, not these strings, when the
+ *  pipeline changes.
+ *
+ *  Drawn in CSS rather than one SVG so the labels stay selectable text and the
+ *  chain reflows at every width. */
+const STAGES = [
+  { n: 1, name: 'definition', note: 'pinned: the signed refinement record is snapshotted' },
+  { n: 2, name: 'plan', note: 'written against the pinned definition', hasReturn: true },
+  {
+    n: 3,
+    name: 'plan review',
+    note: 'not the author, a different model; <code>reject --reason-file</code> sends it back to plan',
+    active: true,
+  },
+  { n: 4, name: 'approach' },
+  { n: 5, name: 'work' },
+  { n: 6, name: 'recomposition verify', note: "the composed work passes the ticket's own agreed check" },
+  { n: 7, name: 'delivery' },
+];
+---
+<figure>
+  <ol class="rt-stages" aria-label="Ticket pipeline, seven stages">
+    {
+      STAGES.map((s) => (
+        <li class={`rt-stage${s.active ? ' is-active' : ''}`}>
+          {s.hasReturn && <span class="rt-stage-return" aria-hidden="true" />}
+          <span class="rt-stage-dot">{s.n}</span>
+          <div class="rt-stage-body">
+            <span class="rt-stage-name">{s.name}</span>
+            {s.note && <span class="rt-stage-note" set:html={s.note} />}
+          </div>
+        </li>
+      ))
+    }
+  </ol>
+  <ul class="rt-stages-legend">
+    <li>
+      <span class="rt-legend-gate" aria-hidden="true"></span>gate: a ticket can&rsquo;t be recorded
+      at a stage until the artifact that stage claims already exists — the stage never leads the
+      artifact
+    </li>
+    <li><span class="rt-legend-return" aria-hidden="true"></span>rejection, back to plan (bounded)</li>
+    <li><span class="rt-legend-active" aria-hidden="true"></span>highlighted: the independent review</li>
+  </ul>
+</figure>

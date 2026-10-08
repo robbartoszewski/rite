@@ -1,0 +1,22 @@
+---
+import Icon from './Icon.astro';
+/** Native <details>. No JavaScript. First item open. */
+interface Props {
+  items: { q: string; a: string }[];
+}
+const { items } = Astro.props;
+---
+<div class="rt-faq rt-narrow">
+  {
+    items.map((it, i) => (
+      <details open={i === 0}>
+        <summary>
+          {it.q} <Icon name="chevron" />
+        </summary>
+        <div class="rt-faq-a">
+          <p set:html={it.a} />
+        </div>
+      </details>
+    ))
+  }
+</div>

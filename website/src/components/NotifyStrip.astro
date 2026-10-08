@@ -1,0 +1,41 @@
+---
+/** DECISION 3 — renders ONLY when PUBLIC_NOTIFY_ENDPOINT is set. There is no
+ *  backend by default, and a form that goes nowhere is worse than no form.
+ *  The wording stays "release notifications" — never "early access". */
+import { NOTIFY_ENDPOINT, NOTIFY_STATUS } from '../lib/site';
+---
+{
+  NOTIFY_ENDPOINT && (
+    <section class="rt-notify rt-narrow" aria-labelledby="notify-h">
+      <div class="rt-notify-copy">
+        <p id="notify-h" style="font-weight: 600">
+          Release notifications
+        </p>
+        <p class="rt-body-sm" style="color: var(--text-muted)">
+          One email when 1.0 lands, nothing else.
+        </p>
+      </div>
+      <form action={NOTIFY_ENDPOINT} method="post">
+        <div class="rt-field">
+          <label for="notify-email">Email</label>
+          <input
+            id="notify-email"
+            type="email"
+            name="email"
+            placeholder="you@example.com"
+            autocomplete="email"
+            required
+          />
+        </div>
+        <button class="rt-btn rt-btn-secondary" type="submit">
+          Notify me
+        </button>
+        {NOTIFY_STATUS && (
+          <p class="rt-notify-status" aria-live="polite">
+            {NOTIFY_STATUS}
+          </p>
+        )}
+      </form>
+    </section>
+  )
+}

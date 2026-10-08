@@ -1,0 +1,24 @@
+---
+import Icon from './Icon.astro';
+
+/** rt-term. Only output copied verbatim from the repository goes in here.
+ *  `lines` are pre-tokenised HTML fragments (span.rt-tok around shell tokens);
+ *  `id` is needed so the copy button can find the <code> to read. */
+interface Props {
+  label: string;
+  ariaLabel: string;
+  lines: string[];
+  id: string;
+}
+const { label, ariaLabel, lines, id } = Astro.props;
+---
+<figure class="rt-term" role="group" aria-label={ariaLabel}>
+  <div class="rt-term-bar">
+    <span class="rt-term-label">{label}</span>
+    <button class="rt-term-copy" type="button" data-copy-target={`#${id} code`}>
+      <Icon name="copy" size={14} />Copy
+    </button>
+    <span class="rt-sr-only" aria-live="polite" data-copy-live></span>
+  </div>
+  <pre id={id} tabindex="0" aria-label={ariaLabel}><code set:html={lines.join('')} /></pre>
+</figure>

@@ -1,0 +1,30 @@
+---
+import Icon from './Icon.astro';
+import { LABEL_TEXT, type StatusRow } from '../data/status';
+
+interface Props {
+  rows: StatusRow[];
+}
+const { rows } = Astro.props;
+
+const iconFor = (label: StatusRow['label']) =>
+  label === 'works' ? 'check' : label === 'by-design' ? 'dash' : 'warn';
+const classFor = (label: StatusRow['label']) =>
+  label === 'works' ? 'ok' : label === 'by-design' ? 'design' : 'gap';
+---
+<ul class="rt-status">
+  {
+    rows.map((r) => (
+      <li class={classFor(r.label)}>
+        <Icon name={iconFor(r.label)} />
+        <div>
+          {r.label !== 'works' && <span class="rt-status-label">{LABEL_TEXT[r.label]}</span>}
+          <p>
+            <b set:html={r.lead} />{' '}
+            {r.text && <Fragment set:html={r.text} />}
+          </p>
+        </div>
+      </li>
+    ))
+  }
+</ul>

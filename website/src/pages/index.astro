@@ -1,0 +1,463 @@
+---
+import Site from '../layouts/Site.astro';
+import Button from '../components/Button.astro';
+import Terminal from '../components/Terminal.astro';
+import ProofStrip from '../components/ProofStrip.astro';
+import ClaimMap from '../components/ClaimMap.astro';
+import StageChain from '../components/StageChain.astro';
+import Faq from '../components/Faq.astro';
+import InstallCommand from '../components/InstallCommand.astro';
+import NotifyStrip from '../components/NotifyStrip.astro';
+import Icon from '../components/Icon.astro';
+import { getCollection } from 'astro:content';
+import {
+  REPO, SPEC, PROOF, VERSION, MATURITY, COMMERCIAL_SENTENCE,
+  url, formatDate,
+} from '../lib/site';
+
+/* The hero terminal: output copied verbatim from the repository's README. */
+const TERM_LINES = [
+  '<span class="l"><span class="p">$ </span><span class="rt-tok">rite claim backend/src/billing</span> <span class="rt-tok">--worker alpha</span> <span class="rt-tok">--ticket ABC-12</span></span>',
+  '<span class="l">claimed 1 path(s) for alpha</span>',
+  '<span class="l"> </span>',
+  '<span class="l"><span class="p">$ </span><span class="rt-tok">rite claim backend/src/billing</span> <span class="rt-tok">--worker beta</span> <span class="rt-tok">--ticket ABC-19</span></span>',
+  '<span class="l err">claim failed: path contention</span>',
+  '<span class="l">  <span class="rt-tok">backend/src/billing</span> overlaps <span class="rt-tok">backend/src/billing</span> <span class="rt-tok">(held by alpha)</span></span>',
+];
+
+const FAQ = [
+  {
+    q: 'Is it production-ready?',
+    a: `No. It is <code>${VERSION}</code> — pre-1.0 ${MATURITY.label}. Claim exclusion is built and measured; the staged pipeline is built and enforced in rite&rsquo;s code. A sandboxed Worker has not yet carried a ticket end to end in one run, and unattended operation is the goal, not the state. <a class="rt-link" href="${url('/what-works')}">What works, what doesn&rsquo;t</a> has the full list.`,
+  },
+  {
+    q: 'Does it work on Linux?',
+    a: 'Partly, and the difference matters. rite is built and tested on macOS 26.2. On Linux (tested on Ubuntu 24.04, ARM64) the sandbox is weaker and Workers are not sandboxed by default. Reaching the tmux server, which runs outside the sandbox, is closed on macOS and open on Linux. Windows is not attempted.',
+  },
+  {
+    q: 'Is the sandbox secure?',
+    a: 'It bounds files, not capability: outbound network is not restricted, <code>git</code> runs hooks and <code>python -c</code> runs anything. And the sandbox is a Worker thing — treat a Manager as having your own file and network access, because a determined one does.',
+  },
+  {
+    q: 'What does it cost to run?',
+    a: 'Your own model usage. rite neither meters nor throttles, so N Workers spend your Claude quota at roughly N times one session&rsquo;s rate, against a quota shared with the Claude apps on a rolling window; Pro exhausts sooner than Max. A Worker that runs out stops where it stands, its claim still held until you release it.',
+  },
+  {
+    q: 'What happens if an agent dies mid-ticket?',
+    a: 'Its claim is reported, never released automatically — rite cannot tell a crashed session from one thinking hard, and releasing a path under a live Worker is worse than a stale claim. It names the claim, the holder and the command, and waits for you.',
+  },
+  {
+    q: 'Can I use it on a repository I don’t own?',
+    a: 'Yes, through a fork, and the shape is deliberate. You register your fork as the module and give the token write access to the fork and nothing else; the Worker pushes its branch there, and <b>you</b> open the pull request upstream. A diff going to someone else&rsquo;s project should be read by you before its maintainer sees it.',
+  },
+  { q: 'Do I need this?', a: 'If you run one session at a time, no.' },
+  {
+    q: 'Is it on PyPI?',
+    a: 'No. Install is a <code>curl | sh</code> from a release tag, and needs <code>uv</code> or <code>pipx</code>. The repo documents two slower paths — verify the checksum, or clone and read it — and why you might want them.',
+  },
+];
+
+/* Latest published post for the one-line "Latest from the blog" row. Hidden
+   when there is none, so the row never points at nothing. */
+const published = (await getCollection('blog', (p) => !p.data.draft)).sort(
+  (a, b) => (b.data.date?.getTime() ?? 0) - (a.data.date?.getTime() ?? 0),
+);
+const latest = published[0];
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'rite',
+  applicationCategory: 'DeveloperApplication',
+  /* Linux is partial, so it is deliberately left out of structured data. */
+  operatingSystem: 'macOS',
+  license: 'https://opensource.org/licenses/MIT',
+  softwareVersion: VERSION,
+  codeRepository: REPO,
+  description:
+    'Orchestration for fleets of AI coding agents: exclusive file claims, enforced stages, independent-model plan review.',
+};
+---
+
+<Site
+  title="rite — orchestration for fleets of AI coding agents"
+  description="Run many AI coding agents on one codebase: exclusive file claims, stages they can't skip, plans reviewed by a different model. Open source, local-first."
+  jsonLd={jsonLd}
+>
+  <main id="main" tabindex="-1">
+    <header
+      class="rt-container rt-page-head rt-page-head-hero"
+      style="display: flex; flex-direction: column; gap: 48px"
+    >
+      <div class="rt-stack" style="gap: 24px; max-width: var(--measure)">
+        <h1 class="rt-title-hero">Your agents can&rsquo;t skip the review step.</h1>
+        <p class="rt-lead">
+          rite runs a fleet of AI coding agents against one codebase: exclusive file claims so they
+          don&rsquo;t collide, stages its own code won&rsquo;t let a model skip, and a plan approved
+          by a different model from the one that wrote it. Claude, local open-weight models, or both.
+          rite itself runs on your machine.
+        </p>
+        <div class="rt-btn-row">
+          <Button href={SPEC} variant="primary" external>Read the spec</Button>
+          <Button href={REPO} variant="secondary" external>GitHub</Button>
+          <Button href={url('/what-works')} variant="ghost">What works, what doesn&rsquo;t</Button>
+        </div>
+        <p class="rt-body-sm" style="color: var(--text-muted)">
+          <b style="color: var(--text)">Alpha, {VERSION} · MIT.</b> {MATURITY.heroNote}
+        </p>
+      </div>
+      <Terminal
+        id="hero-term"
+        label="two Workers, one path"
+        ariaLabel="Terminal output: two Workers claim one path"
+        lines={TERM_LINES}
+      />
+    </header>
+
+    <ProofStrip />
+
+    <section class="rt-section" aria-labelledby="problem-h">
+      <div class="rt-container">
+        <div class="rt-section-head">
+          <p class="rt-eyebrow">The problem</p>
+          <h2 class="rt-h2" id="problem-h">Many agents. One codebase.</h2>
+          <p class="rt-lead">One coding agent is easy. Six against the same repository is not.</p>
+        </div>
+        <div class="rt-grid-3">
+          <div class="rt-stack">
+            <h3 class="rt-h3">They collide.</h3>
+            <p>
+              Two sessions open the same file and one of them loses — silently, because nothing tells
+              either session the other is there.
+            </p>
+          </div>
+          <div class="rt-stack">
+            <h3 class="rt-h3">They skip steps.</h3>
+            <p>
+              A <code>CLAUDE.md</code> that says &ldquo;review before you open a PR&rdquo; is a
+              request. Deep into a long session, it is a suggestion.
+            </p>
+          </div>
+          <div class="rt-stack">
+            <h3 class="rt-h3">They report success.</h3>
+            <p>
+              A step that failed comes back as done. In testing, a small local model more than once
+              reported a failed step as done, so rite checks every local-model reply in a separate
+              session before the Owner reads it. That checker is also a model, and can be wrong.
+            </p>
+          </div>
+        </div>
+        <p class="rt-lead" style="margin: 48px 0 0">
+          rite adds what a prompt can&rsquo;t enforce: claims it hands out, stages its code drives,
+          and a plan review a model can&rsquo;t skip.
+        </p>
+      </div>
+    </section>
+
+    <section class="rt-section" aria-labelledby="how-h" id="how">
+      <div class="rt-container">
+        <div class="rt-section-head">
+          <h2 class="rt-h2" id="how-h">How a ticket moves through rite.</h2>
+        </div>
+        <ol class="rt-steps">
+          <li class="rt-step">
+            <div class="rt-step-text">
+              <span class="rt-step-n">01</span>
+              <div>
+                <h3 class="rt-h3">Write the ticket.</h3>
+                <p>
+                  <code>/refine "export invoices as CSV"</code> drafts a ticket a cold session could
+                  start: the paths it touches, a definition of done, and a <code>Verify</code> section
+                  naming the command that proves it. It checks your board — JIRA or GitHub Issues —
+                  for a duplicate first, and implements nothing.
+                </p>
+              </div>
+            </div>
+          </li>
+          <li class="rt-step">
+            <div class="rt-step-text">
+              <span class="rt-step-n">02</span>
+              <div>
+                <h3 class="rt-h3">Give each agent its own ground.</h3>
+                <p>
+                  <code>rite add worker alpha</code> creates <code>workers/alpha/</code> with its own
+                  clone of each module. Before touching anything, a Worker claims its paths, and the
+                  second Worker to claim the same path is refused.
+                </p>
+                <p>
+                  On Docker, file locking does not lock — run one Worker there. A claim whose holder
+                  died is reported, never released.
+                </p>
+              </div>
+            </div>
+            <ClaimMap />
+          </li>
+          <li class="rt-step">
+            <div class="rt-step-text">
+              <span class="rt-step-n">03</span>
+              <div>
+                <h3 class="rt-h3">Work moves through stages.</h3>
+                <p>
+                  Each stage is recorded and gated on its own artifact, and a model cannot skip or
+                  reorder one. The approver of a plan must hold the plan-review duty, must not be the
+                  plan&rsquo;s author, and must run a different model; an author rite can&rsquo;t
+                  place fails the check closed. A rejection sends the plan back to be re-authored with
+                  reasons, and that loop is bounded.
+                </p>
+                <p>
+                  The gates are on rite&rsquo;s stages and the ticket&rsquo;s own agreed check — not
+                  on your code quality: no coverage threshold, no lint gate, no opinion on your test
+                  strategy.
+                </p>
+                <p class="rt-body-sm" style="color: var(--text-muted)">
+                  Source: <a class="rt-link" href={PROOF.stageTransitions} rel="noopener"
+                    >stage.py ↗</a
+                  > · <a class="rt-link" href={PROOF.gates} rel="noopener">gates.py ↗</a> · <a
+                    class="rt-link"
+                    href={PROOF.independence}
+                    rel="noopener">the independence check ↗</a
+                  >
+                </p>
+              </div>
+            </div>
+            <StageChain />
+          </li>
+          <li class="rt-step">
+            <div class="rt-step-text">
+              <span class="rt-step-n">04</span>
+              <div>
+                <h3 class="rt-h3">You read what came back.</h3>
+                <p>
+                  <code>rite status</code> shows every Worker and the paths it holds. <code
+                    >rite loop start</code
+                  > watches the queue in the background and writes, every couple of minutes, one word
+                  for why the run is where it is — everyone busy, files held, schedule closed,
+                  nothing waiting, or <b>deadlocked</b>, where it stops and prints exactly what to
+                  release. It starts nothing.
+                </p>
+              </div>
+            </div>
+          </li>
+        </ol>
+        <p class="rt-note">
+          You start every run: <code>rite start</code> runs a Manager — a long-running session that
+          works your board and talks to you — for the <code>--sessions</code> and <code>--minutes</code
+          > you give it, in your own foreground terminal, and Ctrl-C ends it. <a class="rt-link" href={PROOF.unattended} rel="noopener"
+            >Unattended dispatch of Claude sessions is refused on purpose ↗</a
+          >, because it spends your quota with nobody watching.
+        </p>
+      </div>
+    </section>
+
+    <section class="rt-section" aria-labelledby="features-h">
+      <div class="rt-container">
+        <div class="rt-section-head">
+          <h2 class="rt-h2" id="features-h">Engines, sandbox and secrets.</h2>
+        </div>
+        <div class="rt-cards">
+          <article class="rt-card">
+            <h3 class="rt-h3">Frontier and local, in one fleet.</h3>
+            <p>
+              Claude Code; local open-weight models through Goose and Ollama; Cursor as a Manager
+              engine. Named integrations rather than a lowest-common-denominator abstraction — on
+              purpose.
+            </p>
+            <p>
+              A local Manager must declare a context window of at least 32,768 tokens, and rite pins
+              it on the server, so Ollama&rsquo;s 4,096-token default doesn&rsquo;t decide it.
+            </p>
+            <p class="rt-caveat rt-card-caveat">
+              <Icon name="warn" size={16} /><span
+                ><b>Caveat.</b> Mixed fleets run on one machine and one project root today. Several
+                Managers across machines is planned for 0.8.0.</span
+              >
+            </p>
+          </article>
+          <article class="rt-card">
+            <h3 class="rt-h3">Sandboxed Workers on macOS.</h3>
+            <p>
+              A Worker runs under Seatbelt, and <code>rite init</code> turns it on by default on
+              macOS. What it buys is that a mistake stays inside the project.
+            </p>
+            <p class="rt-caveat rt-card-caveat">
+              <Icon name="warn" size={16} /><span
+                ><b>Caveat.</b> It bounds files, not capability — outbound network isn&rsquo;t
+                restricted and <code>python -c</code> runs anything. A session you open yourself is
+                not sandboxed. On Linux, Workers aren&rsquo;t sandboxed by default.</span
+              >
+            </p>
+          </article>
+          <article class="rt-card">
+            <h3 class="rt-h3">Secret scanning on pre-push and in CI.</h3>
+            <p>
+              The scan runs over full history. Suppressing a finding takes a written reason, and
+              there is no global off switch.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="rt-section" aria-labelledby="local-h">
+      <div class="rt-container rt-split">
+        <div class="rt-stack">
+          <p class="rt-eyebrow">Network boundary</p>
+          <h2 class="rt-h2" id="local-h">rite runs on your machine.</h2>
+          <p>
+            rite is a CLI and a set of files in your repository. There is no rite service, no rite
+            account and no telemetry — nothing phones home.
+          </p>
+          <p>
+            <b>What leaves your machine is whatever your agents send.</b> On a Claude fleet, that is
+            code going to Anthropic, exactly as it does when you use Claude Code yourself. On local
+            open-weight models through Ollama, inference stays on your hardware. You can mix the two:
+            a Claude Owner with a local secondary Manager is the setup this release is built for, and
+            in that setup the Owner&rsquo;s work still goes to Anthropic.
+          </p>
+          <p>
+            Be precise about the edges: a Worker&rsquo;s sandbox does not restrict outbound network;
+            a Manager has your own file and network access; pushes go to the git remote you
+            configured; if you wire up Slack, a Manager&rsquo;s questions and replies go through
+            Slack; and if you share claims across machines, rite pushes that claim state to the
+            coordination git repository you configure. Beyond these, rite&rsquo;s own code sends
+            nothing.
+          </p>
+        </div>
+        <div class="rt-table-wrap">
+          <table class="rt-table">
+            <caption class="rt-sr-only">What leaves your machine, by path out</caption>
+            <thead><tr><th scope="col">Path out</th><th scope="col">What goes</th></tr></thead>
+            <tbody>
+              <tr
+                ><th scope="row">rite&rsquo;s own code</th><td
+                  >Nothing beyond the rows below. No rite service, no rite account, no telemetry.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">A Claude Owner or Worker</th><td
+                  >Code to Anthropic, as with Claude Code itself.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">A local Manager (Goose + Ollama)</th><td
+                  >Nothing for inference — it stays on your hardware.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">A Claude or Cursor Manager</th><td
+                  >Anything you could send: it has your file and network access, behind an allowlist
+                  of 77 command families.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">A local (Goose) Manager</th><td
+                  >Anything you could send. Goose takes its permission from the environment, not
+                  from rite&rsquo;s allowlist.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">A Worker&rsquo;s sandbox</th><td
+                  >Outbound network is not restricted.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">Your ticket board</th><td
+                  >JIRA or GitHub Issues: the tickets <code>/refine</code> drafts, and its duplicate
+                  check.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">git push</th><td>Your branches, to the remote you configured.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">Slack, if you wire it up</th><td
+                  >A Manager&rsquo;s questions and replies.</td
+                ></tr
+              >
+              <tr
+                ><th scope="row">Claims shared across machines</th><td
+                  >Claim and lease state, to the coordination git repository you configure.
+                  Implemented, unproven: not yet run on two physical machines over a real network.</td
+                ></tr
+              >
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="rt-section" aria-labelledby="install-h">
+      <div class="rt-container">
+        <div class="rt-section-head">
+          <h2 class="rt-h2" id="install-h">Install it, or read it first.</h2>
+        </div>
+        <InstallCommand />
+      </div>
+    </section>
+
+    <section class="rt-section" aria-labelledby="oss-h">
+      <div class="rt-container">
+        <div class="rt-stack" style="max-width: var(--measure)">
+          <h2 class="rt-h2" id="oss-h">MIT, and the spec is public.</h2>
+          <p>
+            The design document is in the repository: <b>101 numbered decisions</b>, each with the
+            question it answers and the reasoning behind it. If you want to know why something works
+            the way it does, it is written down.
+          </p>
+          <p>{COMMERCIAL_SENTENCE}</p>
+          <div class="rt-btn-row">
+            <Button href={url('/licensing')} variant="ghost">Licensing</Button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    {
+      latest && (
+        <section class="rt-section" aria-label="Latest post" style="padding-bottom: 0">
+          <div class="rt-container">
+            <p class="rt-latest rt-narrow">
+              <span style="color: var(--text-muted)">Latest from the blog</span>
+              <a class="rt-link rt-latest-title" href={url(`/blog/${latest.id}`)}>
+                {latest.data.title}
+              </a>
+              <span style="color: var(--text-muted)">
+                {latest.data.date && formatDate(latest.data.date)}
+              </span>
+              <a class="rt-link" href={url('/blog')}>
+                All posts
+              </a>
+            </p>
+          </div>
+        </section>
+      )
+    }
+
+    <section class="rt-section" aria-labelledby="faq-h">
+      <div class="rt-container">
+        <div class="rt-section-head">
+          <h2 class="rt-h2" id="faq-h">Common questions.</h2>
+        </div>
+        <Faq items={FAQ} />
+      </div>
+    </section>
+
+    <section class="rt-section rt-flame-bg" aria-labelledby="cta-h">
+      <img class="rt-flame-art" src={url('/brand/rite-mark.png')} alt="" width="240" height="542" />
+      <div class="rt-container" style="display: flex; flex-direction: column; gap: 48px">
+        <div class="rt-stack" style="max-width: var(--measure)">
+          <h2 class="rt-h2" id="cta-h">Six agents, one repository, limits written down.</h2>
+          <p class="rt-lead">
+            rite is MIT, installs from a release tag, and tells you what it cannot do.
+          </p>
+          <div class="rt-btn-row">
+            <Button href={SPEC} variant="primary" external>Read the spec</Button>
+            <Button href={REPO} variant="secondary" external>GitHub</Button>
+          </div>
+        </div>
+        <NotifyStrip />
+      </div>
+    </section>
+  </main>
+</Site>

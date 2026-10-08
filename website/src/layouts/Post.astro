@@ -1,0 +1,93 @@
+---
+import Site from './Site.astro';
+import PostCard from '../components/PostCard.astro';
+import { CATEGORY_LABEL, formatDate, url } from '../lib/site';
+import type { CollectionEntry } from 'astro:content';
+
+interface Props {
+  post: CollectionEntry<'blog'>;
+  /** The two latest OTHER published posts. Empty hides the section. */
+  more: CollectionEntry<'blog'>[];
+}
+const { post, more } = Astro.props;
+const { title, description, date, category, author, appliesTo, sources } = post.data;
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BlogPosting',
+  headline: title,
+  description,
+  ...(date ? { datePublished: date.toISOString().slice(0, 10) } : {}),
+  author: { '@type': 'Person', name: author },
+};
+---
+
+<Site
+  title={`${title} — rite blog`}
+  description={description}
+  current="blog"
+  ogType="article"
+  jsonLd={jsonLd}
+>
+  <main id="main" tabindex="-1" class="rt-container rt-page-head" style="padding-bottom: 96px">
+    <article>
+      <header class="rt-post-header">
+        <p class="rt-crumb">
+          <a class="rt-link rt-link-solo" href={url('/blog')}>← Blog</a>
+        </p>
+        <h1 class="rt-title">{title}</h1>
+        <div class="rt-post-byline">
+          {
+            date ? (
+              <time datetime={date.toISOString().slice(0, 10)}>{formatDate(date)}</time>
+            ) : (
+              <time>Draft</time>
+            )
+          }
+          <span class="rt-tag">{CATEGORY_LABEL[category]}</span>
+          <span>{author}</span>
+          <span>Applies to <code>{appliesTo}</code></span>
+        </div>
+      </header>
+
+      <div class="rt-prose">
+        <slot />
+      </div>
+
+      <aside class="rt-sources" aria-labelledby="sources-h">
+        <h2 id="sources-h">Sources</h2>
+        <ol>
+          {
+            sources.map((s) => (
+              <li>
+                <a class="rt-link" href={s.href} rel="noopener">
+                  {s.label} ↗
+                </a>
+              </li>
+            ))
+          }
+        </ol>
+      </aside>
+    </article>
+
+    {
+      more.length > 0 && (
+        <section aria-labelledby="more-h" style="margin-top: 96px">
+          <div class="rt-section-head-row">
+            <h2 class="rt-h3" id="more-h">
+              More from the blog
+            </h2>
+            <a class="rt-link rt-link-solo" href={url('/blog')}>
+              All posts
+            </a>
+          </div>
+          <ul class="rt-posts">
+            {more.map((p) => (
+              <PostCard post={p} level={3} />
+            ))}
+          </ul>
+        </section>
+      )
+    }
+  </main>
+</Site>

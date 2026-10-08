@@ -1,0 +1,8 @@
+/* IBM Plex Sans + Mono, self-hosted, latin subset only, weights 400/500/600.
+ * Two families, three weights each — the budget in the design handover §9. */
+@import '@fontsource/ibm-plex-sans/latin-400.css';
+@import '@fontsource/ibm-plex-sans/latin-500.css';
+@import '@fontsource/ibm-plex-sans/latin-600.css';
+@import '@fontsource/ibm-plex-mono/latin-400.css';
+@import '@fontsource/ibm-plex-mono/latin-500.css';
+@import '@fontsource/ibm-plex-mono/latin-600.css';

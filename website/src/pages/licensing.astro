@@ -1,0 +1,49 @@
+---
+import Site from '../layouts/Site.astro';
+import Button from '../components/Button.astro';
+import { SPEC, LICENSE, REPO, COMMERCIAL_SENTENCE } from '../lib/site';
+---
+
+<Site
+  title="rite — licensing"
+  description="rite is MIT-licensed, the design spec is public, and the core stays MIT. Nothing is for sale yet."
+  current="licensing"
+>
+  <main id="main" tabindex="-1" style="flex: 1 0 auto">
+    <header class="rt-container rt-page-head">
+      <div class="rt-stack" style="max-width: var(--measure)">
+        <p class="rt-eyebrow">Licensing</p>
+        <h1 class="rt-title">MIT, and the spec is public.</h1>
+        <p class="rt-lead">
+          rite is MIT-licensed and the design document is in the repository: <b
+            >101 numbered decisions</b
+          >, each with the question it answers and the reasoning behind it. If you want to know why
+          something works the way it does, it is written down.
+        </p>
+        <div class="rt-btn-row">
+          <Button href={SPEC} variant="primary">Read the spec</Button>
+          <Button href={LICENSE} variant="secondary" external>Read the licence (MIT)</Button>
+        </div>
+      </div>
+    </header>
+
+    <section class="rt-section" aria-label="Licence and commercial plans">
+      <div class="rt-container">
+        <div class="rt-split">
+          <div class="rt-stack">
+            <h2 class="rt-h3">The core</h2>
+            <p>
+              rite is released under the MIT licence. You can install it, read it, fork it and run it
+              today, and the core stays MIT.
+            </p>
+            <p><a class="rt-link rt-link-solo" href={REPO} rel="noopener">Browse the source ↗</a></p>
+          </div>
+          <div class="rt-stack">
+            <h2 class="rt-h3">Anything commercial</h2>
+            <p>{COMMERCIAL_SENTENCE} When there is, it will be described here plainly.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</Site>

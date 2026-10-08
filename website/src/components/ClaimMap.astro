@@ -1,0 +1,19 @@
+---
+import Icon from './Icon.astro';
+/** Mirrors the hero terminal and nothing more. A refusal is drawn in text
+ *  colour, not accent — it is the normal, correct outcome. */
+---
+<figure class="rt-claimmap" aria-labelledby="cm-cap">
+  <div class="rt-cm-worker is-active">alpha</div>
+  <div class="rt-cm-link is-held"><span class="rt-cm-label">claims</span></div>
+  <div class="rt-cm-path">
+    <code>backend/<wbr />src/<wbr />billing</code>
+    <span class="rt-cm-held"><Icon name="lock" size={14} />held by alpha</span>
+  </div>
+  <div class="rt-cm-worker">beta</div>
+  <div class="rt-cm-link is-refused"><span class="rt-cm-label">refused: path contention</span></div>
+  <figcaption id="cm-cap" class="rt-diagram-caption" style="grid-column: 1 / -1">
+    alpha holds <code>backend/src/billing</code>; beta&rsquo;s claim on the same path is refused.
+    Highlighted: the Worker holding the claim.
+  </figcaption>
+</figure>

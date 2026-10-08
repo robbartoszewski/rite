@@ -1,0 +1,10 @@
+---
+import { VERSION, MATURITY, CHANGELOG } from '../lib/site';
+---
+{
+  MATURITY.show && (
+    <a class="rt-chip" href={CHANGELOG} rel="noopener">
+      {VERSION} <span class="rt-chip-sep">·</span> {MATURITY.label}
+    </a>
+  )
+}
