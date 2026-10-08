@@ -221,6 +221,31 @@ branch" — but it is a different product from the one design §5 argues for, an
 it should be chosen deliberately. **My recommendation is the two-level model in
 §1.2**, which takes Robert's per-worker capability whole and keeps the gates.
 
+### 1.6a. Mixed fleets: who authors Level 1 under a Claude Manager (v0.7.1)
+
+*Decided by Robert, 2026-10-05; see `V071_DOGFOOD_FIXES.md` §3.3b.* A Claude
+`lead` plus one GPU Worker has no Manager that can author a plan:
+- `lead` lacks `decompose`;
+- the Claude proposer is not wired;
+- the Worker is not a Manager (RL-67).
+
+**Decided:** declare a local `planner` Manager (the `planner` preset, the same
+Ollama model as the Worker). It **writes** the plan. **A Manager approves it,
+whatever its engine:** Claude, local or any other provider, provided it holds
+`plan-review`, did not write the plan (DD-3.5), and is independent of the
+author under RL-6's `engine_identity` (the model for a local engine, the engine
+kind otherwise). Approval authority is a Manager responsibility and is never
+conditioned on the Manager's engine. Level 1 stays at Manager tier (§1.3), and
+RL-6 and RL-67 are unchanged. RL-6's model comparison is independence, not an
+engine gate.
+
+**Rejected:** letting the GPU Worker author its own plan. That is §1.6's trade,
+made by accident.
+
+**Still open, separately:** authoring requires a local (goose) Manager until the
+Claude proposer adapter is wired. That limits who may *write*, never who may
+approve.
+
 ### 1.7. Config, now that placement is settled
 
 **Level 1 needs no new keys.** A decomposer is a Manager holding the

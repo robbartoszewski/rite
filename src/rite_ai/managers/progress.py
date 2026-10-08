@@ -40,6 +40,7 @@ something" is a session, a false "it did nothing" is a stalled Manager.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +66,10 @@ class Footprint:
     deliveries: tuple[str, ...] = ()
     """Delivery requests not yet honoured (PB1), read at the same moment and
     for the same reason: asking for a delivery is progress."""
+    lifecycle: tuple[str, ...] = ()
+    """Stop, destroy and restart requests not yet honoured (SCRUM-59): asking
+    rite to change a Worker is coordination too. Not `status` or `gate`,
+    which only look (`lifecycle.acting_requests`)."""
 
     def differs_from(self, other: Footprint) -> list[str]:
         """The names of the parts that changed, in a fixed order."""
@@ -77,6 +82,7 @@ class Footprint:
                 "routes",
                 "requests",
                 "deliveries",
+                "lifecycle",
             )
             if getattr(self, name) != getattr(other, name)
         ]
@@ -94,13 +100,20 @@ def _git_state(root: Path) -> str:
     unchanged, and the guard falls back on the other parts. It never makes
     an unchanged project look changed."""
     try:
+        from rite_ai.githost import hardened_git_env
+
+        env = hardened_git_env()
         head = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
+            env=env,
             capture_output=True,
             timeout=10,
         )
+        # 🔴 A repo-set core.fsmonitor runs a program on `git status`, and
+        # this runs every cycle in a Manager-writable tree (SCRUM-75).
         status = subprocess.run(
             ["git", "-C", str(root), "status", "--porcelain=v1", "-z"],
+            env=env,
             capture_output=True,
             timeout=10,
         )
@@ -111,15 +124,16 @@ def _git_state(root: Path) -> str:
     return _digest(head.stdout + b"\0" + status.stdout)
 
 
-def _names(where: Path) -> tuple[str, ...]:
-    """File names under `where`, recursively, sorted. Names and not
-    contents: every one of these directories gains a file per act."""
+def _own_names(root: Path, manager: str, dirname: str, area: str) -> tuple[str, ...]:
+    """Names in one of the Manager's own directories, through `own_dir`, so
+    a link the Manager planted there is never listed through."""
+    from rite_ai.managers import own_dir
+
     try:
-        if not where.is_dir():
-            return ()
-        return tuple(
-            sorted(str(p.relative_to(where)) for p in where.rglob("*") if p.is_file())
-        )
+        if dirname:
+            return tuple(own_dir.names(root, manager, dirname, "", area=area))
+        with own_dir.directory(root, manager, area=area) as fd:
+            return () if fd is None else tuple(sorted(os.listdir(fd)))
     except OSError:
         return ()
 
@@ -133,17 +147,19 @@ def _bytes(path: Path) -> str:
 
 def footprint(root: Path, manager: str) -> Footprint:
     """What `manager` could have changed, as it stands now."""
-    from rite_ai.managers.broker import requests_dir
-    from rite_ai.managers.mailbox import OUTBOX, mailbox_dir
+    from rite_ai.managers import own_dir
+    from rite_ai.managers.broker import REQUESTS_DIRNAME
+    from rite_ai.managers.lifecycle import acting_requests
     from rite_ai.managers.routing import routed_log
-    from rite_ai.publishing.requests import requests_dir as deliveries_dir
+    from rite_ai.publishing.requests import DIRNAME as DELIVERIES_DIRNAME
 
     root = Path(root)
     return Footprint(
         project=_git_state(root),
         claims=_bytes(root / ".rite" / "claims.json"),
-        outbox=_names(mailbox_dir(root, manager, OUTBOX)),
+        outbox=_own_names(root, manager, "", own_dir.OUTBOX),
         routes=_bytes(routed_log(root, manager)),
-        requests=_names(requests_dir(root, manager)),
-        deliveries=_names(deliveries_dir(root, manager)),
+        requests=_own_names(root, manager, REQUESTS_DIRNAME, own_dir.STATE),
+        deliveries=_own_names(root, manager, DELIVERIES_DIRNAME, own_dir.STATE),
+        lifecycle=acting_requests(root, manager),
     )

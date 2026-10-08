@@ -108,10 +108,13 @@ def test_a_question_sent_as_a_reply_is_refused_and_redirected_to_ask(project):
     nobody. Before RP1 this was sent; now nothing is written."""
     root = project()
     result = CliRunner().invoke(
-        cli, ["reply", "--manager", "lead", "-"], input="which schema?"
+        cli,
+        ["reply", "--manager", "lead", "-"],
+        input="which schema?",
+        env={"RITE_MANAGER": "lead"},
     )
     assert result.exit_code == 1
-    assert "rite ask --manager lead - <<'RITE_TEXT_" in result.output
+    assert "rite ask --manager lead --from-file " in result.output
     assert _outbox(root) == []
 
 

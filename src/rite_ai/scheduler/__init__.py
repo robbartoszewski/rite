@@ -642,6 +642,14 @@ def _assign_the_pool(
     ticket, and anything but REFINED (UNREADABLE included) is left and said.
     `refinement` is injectable for tests; None checks `board` itself.
 
+    **RULE 1a — never a ticket whose STATUS says the work is over
+    (SCRUM-73).** `scheduled` is only ever added and nothing in rite removed
+    it, so a Done ticket stays in this query for ever. KAN-28 was assigned
+    this way after it had been delivered and merged, and a Worker was started
+    on it twice. Dropped before every other rule, and each one named: a
+    ticket left in the backlog with nobody assigned is otherwise
+    indistinguishable from one the fleet is too busy for.
+
     **RULE 2 — never to a Manager that refused this ticket.** Refusing costs
     the refuser nothing, so it is still the least loaded and gets the ticket
     straight back, with a board comment, every five minutes for ever. The
@@ -669,16 +677,34 @@ def _assign_the_pool(
     from rite_ai.coordination.ticket_labels import SCHEDULED
     from rite_ai.schedule import current_moment, workers_at
     from rite_ai.tickets import BackendError, TicketFilter
+    from rite_ai.tickets.statuses import is_terminal
 
     waiting = board.list_tickets(TicketFilter(label=SCHEDULED))
     if isinstance(waiting, BackendError):
         return [f"coordination: could not read the backlog: {waiting.message}"]
 
+    # ⚠ **RULE 1a — never work whose STATUS says it is over (SCRUM-73).**
+    # Before anything else, because assignment is the step BEFORE a Worker
+    # starts: KAN-28 reached a Manager this way, Done and merged, because
+    # `scheduled` is only ever added and nothing read the status. Said, not
+    # silent — a ticket left in the backlog with nobody assigned is otherwise
+    # indistinguishable from one the fleet is too busy for.
+    lines: list[str] = []
+    for ticket in waiting:
+        if is_terminal(ticket):
+            lines.append(
+                f"coordination: {ticket.id} not assigned — it is "
+                f"{ticket.status or 'in a terminal status'}, so that work is "
+                f"over. Its `{SCHEDULED}` label outlived it; rite only ever "
+                "adds one."
+            )
+    waiting = [t for t in waiting if not is_terminal(t)]
+
     # Rule 1.
     managers = set(config.managers)
     unassigned = [t for t in waiting if not (set(t.labels or []) & managers)]
     if not unassigned:
-        return []
+        return lines
 
     # Rule 0. Before the fleet is read: an unrefined ticket goes nowhere
     # whoever is idle, and saying so is the part the Owner acts on.
@@ -689,7 +715,6 @@ def _assign_the_pool(
         def refinement(ticket_id: str):
             return refinement_status.status(board, ticket_id)
 
-    lines: list[str] = []
     refined = []
     for ticket in unassigned:
         answer = refinement_status.checked(refinement, ticket.id)

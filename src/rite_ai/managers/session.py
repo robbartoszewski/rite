@@ -320,6 +320,19 @@ def _rejected_the_flag(done: subprocess.CompletedProcess) -> bool:
     return "unknown flag" in said or "unknown option" in said or "usage:" in said
 
 
+def _write_prompt(path: Path, prompt: str) -> None:
+    """Write the cycle's instruction to `path`, `0600`, never through a link.
+
+    🔴 SCRUM-69 round-3 review, measured: the Manager can replace
+    `prompt.txt` with a link, and `write_text` then overwrote whatever it
+    pointed at (`~/.zshrc`, say) with the prompt; and a FIFO there hung the
+    supervisor. An atomic replace (`own_dir.write_file`) replaces whatever
+    is at the name, link or FIFO, and never opens it."""
+    from rite_ai.managers import own_dir
+
+    own_dir.write_file(path, prompt, 0o600)
+
+
 def start(
     root: Path,
     manager: str,
@@ -548,8 +561,7 @@ def start(
     # given one instruction, not a history.
     prompt_path = manager_dir(root, manager) / PROMPT_FILE
     try:
-        prompt_path.write_text(prompt)
-        prompt_path.chmod(0o600)
+        _write_prompt(prompt_path, prompt)
     except OSError as e:
         return StartResult(False, f"could not write the cycle's prompt: {e}")
     try:
@@ -1118,6 +1130,8 @@ ALLOWED_ON_TMUX_ARGV = frozenset(
         "TMPDIR",
         # Claude Code's temp root, a PATH (`boundaries.temp_environment`).
         "CLAUDE_CODE_TMPDIR",
+        # zsh's here-document temp files, a PATH prefix (SCRUM-69).
+        "TMPPREFIX",
         "GOOSE_PROVIDER",
         "GOOSE_MODEL",
         "GOOSE_CONTEXT_LIMIT",

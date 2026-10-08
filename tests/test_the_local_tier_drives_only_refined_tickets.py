@@ -51,6 +51,16 @@ class _Board:
         )()
 
 
+def _held(yes: bool = True):
+    """Patch the WORKER filter (SCRUM-72 §3.3), which this file is not about.
+
+    ⚠ Patched rather than set up: the two filters are independent and this
+    file's subject is the refinement one. The Worker filter has its own tests
+    at the bottom, with their own control.
+    """
+    return patch("rite_ai.cli.main._local_worker_holds", lambda root, m, t: yes)
+
+
 def _answer(board: _Board):
     def status(asked_board, ticket_id: str) -> Status:
         board.asked.append(ticket_id)
@@ -64,15 +74,15 @@ def _answer(board: _Board):
 # ── the gate ─────────────────────────────────────────────────────────────────
 
 
-def test_only_the_refined_ticket_is_driven():
+def test_only_the_refined_ticket_is_driven(tmp_path):
     """The mutation test: delete the filter and this fails.
 
     A board with one refined and one unrefined ticket. Both are assigned to this
     Manager and both come back from `list_tickets`; only one is work.
     """
     board = _Board({"KAN-1": REFINED, "KAN-2": NOT_REFINED})
-    with _answer(board):
-        tickets, why = _local_tier_tickets(board, "lead")
+    with _answer(board), _held():
+        tickets, why = _local_tier_tickets(tmp_path, board, "lead")
     assert why == ""
     assert tickets == ["KAN-1"]
     # Stated as its own assertion: the unrefined one must be ABSENT, which is
@@ -81,7 +91,7 @@ def test_only_the_refined_ticket_is_driven():
 
 
 @pytest.mark.parametrize("state", [NOT_REFINED, STALE, CONFLICT, UNREADABLE])
-def test_no_state_but_refined_is_work(state):
+def test_no_state_but_refined_is_work(tmp_path, state):
     """Four ways not to be refined, and none of them is work.
 
     ⚠ STALE is the one a loose check lets through: the ticket HAS a refinement
@@ -89,41 +99,41 @@ def test_no_state_but_refined_is_work(state):
     approved.
     """
     board = _Board({"KAN-1": state})
-    with _answer(board):
-        tickets, why = _local_tier_tickets(board, "lead")
+    with _answer(board), _held():
+        tickets, why = _local_tier_tickets(tmp_path, board, "lead")
     assert tickets == [], f"{state} was treated as work"
     assert why == ""
 
 
-def test_every_assigned_ticket_is_asked_about():
+def test_every_assigned_ticket_is_asked_about(tmp_path):
     # One read per ticket, as `loop._ready` does — not a guess from the label.
     board = _Board({"KAN-1": REFINED, "KAN-2": NOT_REFINED, "KAN-3": REFINED})
-    with _answer(board):
-        tickets, _why = _local_tier_tickets(board, "lead")
+    with _answer(board), _held():
+        tickets, _why = _local_tier_tickets(tmp_path, board, "lead")
     assert board.asked == ["KAN-1", "KAN-2", "KAN-3"]
     assert tickets == ["KAN-1", "KAN-3"]
 
 
-def test_it_asks_the_board_for_this_managers_tickets():
+def test_it_asks_the_board_for_this_managers_tickets(tmp_path):
     board = _Board({"KAN-1": REFINED})
-    with _answer(board):
-        _local_tier_tickets(board, "lead")
+    with _answer(board), _held():
+        _local_tier_tickets(tmp_path, board, "lead")
     assert getattr(board.listed[0], "assignee", None) == "lead"
 
 
 # ── a board that cannot answer ───────────────────────────────────────────────
 
 
-def test_a_board_error_is_returned_not_raised():
+def test_a_board_error_is_returned_not_raised(tmp_path):
     # A board that cannot be read is a cycle that advanced nothing, never a run
     # that ends.
     board = _Board({}, error="the board is down")
-    tickets, why = _local_tier_tickets(board, "lead")
+    tickets, why = _local_tier_tickets(tmp_path, board, "lead")
     assert tickets == []
     assert "the board is down" in why
 
 
-def test_a_ticket_with_no_id_is_skipped_rather_than_asked_about():
+def test_a_ticket_with_no_id_is_skipped_rather_than_asked_about(tmp_path):
     board = _Board({"KAN-1": REFINED})
 
     def list_tickets(filters=None):
@@ -134,7 +144,7 @@ def test_a_ticket_with_no_id_is_skipped_rather_than_asked_about():
         )()
 
     board.list_tickets = list_tickets
-    with _answer(board):
-        tickets, _why = _local_tier_tickets(board, "lead")
+    with _answer(board), _held():
+        tickets, _why = _local_tier_tickets(tmp_path, board, "lead")
     assert tickets == ["KAN-1"]
     assert board.asked == ["KAN-1"]

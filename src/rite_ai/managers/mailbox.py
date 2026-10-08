@@ -108,6 +108,22 @@ class Message:
     routing a Manager's reply under the Owner's message it answers
     (SCRUM-56): rite's narration is not the Manager answering anybody, and
     threading it under the Owner's question says it is."""
+    answers: str = ""
+    """The id of the message this one answers, as the Manager was shown it
+    in its instruction, or "" (SCRUM-21).
+
+    ⚠ **A CLAIM BY THE MANAGER, and the only thing in this file that is.**
+    Everything else here is classed by the command that wrote it; this is
+    the Manager saying, with `rite reply --message <id>`, which message it
+    is answering. That is a fact only it knows — rite's own guess
+    (`slack.Relay._awaiting`) is "the Owner addressed this Manager and it
+    then spoke inside a window", which is a correlation and not an answer.
+    So the Manager may state it, and `slack._answer_root` prefers what is
+    stated over what was guessed.
+
+    ⚠ **An id, never a channel.** Where a reply is POSTED is rite's to
+    choose and is never read from here: a Manager naming its own
+    destination is a Manager choosing who reads its words."""
 
 
 QUESTION = "question"
@@ -321,6 +337,7 @@ def send(
     sent_at: float | None = None,
     kind: str = "",
     by_rite: bool = False,
+    answers: str = "",
 ) -> Path:
     """Put one message in a box. Returns the path written.
 
@@ -338,6 +355,10 @@ def send(
     `kind` is what produced an outbox message (`KINDS`, RP1); one outside
     `KINDS` is refused rather than written, so a typo cannot quietly file a
     question as something else.
+
+    `answers` is the id of the message this one answers (SCRUM-21), which
+    the Manager states and the Slack relay threads under. See
+    `Message.answers` for what it does and does not claim.
     """
     if kind and kind not in KINDS:
         raise ValueError(f"unknown message kind {kind!r}; one of {KINDS}")
@@ -359,16 +380,24 @@ def send(
     # a position the reader has already passed. Widths cover every pid Linux
     # and macOS issue (≤ 7 digits) and a counter no process reaches.
     path = where / f"{int(ts * 1000)}_{os.getpid():07d}_{next(_SEQUENCE):012d}.json"
-    write_atomic(path, _encoded(text, ts, kind, by_rite))
+    write_atomic(path, _encoded(text, ts, kind, by_rite, answers))
     return path
 
 
-def _encoded(text: str, timestamp: float, kind: str, by_rite: bool = False) -> str:
+def _encoded(
+    text: str,
+    timestamp: float,
+    kind: str,
+    by_rite: bool = False,
+    answers: str = "",
+) -> str:
     data: dict = {"text": text, "timestamp": timestamp}
     if kind:
         data["kind"] = kind
     if by_rite:
         data["by_rite"] = True
+    if answers:
+        data["answers"] = answers
     return json.dumps(data) + "\n"
 
 
@@ -526,10 +555,26 @@ def read(root: Path, manager: str, box: str) -> list[Message]:
     read: this is called from the supervisor's wait loop, and one bad file
     must not stop a Manager from receiving the others or take the run down.
     """
+    from rite_ai.managers import own_dir
+
+    # 🔴 Through `own_dir` (SCRUM-69 round 3 and its follow-up, measured): a
+    # link in the outbox relayed any readable JSON file as the Manager's
+    # message, and a directory named `5.json` woke the loop for ever. A link,
+    # FIFO or directory is never opened: it is set aside, under a name no
+    # glob here matches, and kept for a person to look at.
+    area = {OUTBOX: own_dir.OUTBOX, INBOX: own_dir.INBOX}.get(box)
     out: list[Message] = []
     for path in _messages(root, manager, box):
         try:
-            data = json.loads(path.read_text())
+            if area is None:
+                raw = own_dir.read_file(path)
+            else:
+                raw = own_dir.read_text(root, manager, path.name, area=area)
+            data = json.loads(raw)
+        except own_dir.NotARegularFile:
+            if area is not None:
+                own_dir.set_aside(root, manager, path.name, area=area)
+            continue
         except (OSError, ValueError):
             continue
         if not isinstance(data, dict):
@@ -545,6 +590,7 @@ def read(root: Path, manager: str, box: str) -> list[Message]:
                 path,
                 kind if kind in KINDS else "",
                 by_rite=data.get("by_rite") is True,
+                answers=str(data.get("answers") or ""),
             )
         )
     return out
@@ -996,6 +1042,13 @@ def how_to_reply(root: Path, manager: str) -> str:
     action, so the instruction names both and says which is which. It used to
     say "to ask the User something … run reply", which is exactly the
     question-in-the-reading-pile RP1 removes.
+
+    ⚠ **It says to pass the message id when answering one (SCRUM-21).** rite
+    puts the id in the message's own header; without being told to hand it
+    back, a Manager has no reason to, and its answers surface in the flat
+    feed instead of under the question. Said as the FIRST thing about
+    replying, because answering is the common case and the DM is where the
+    Owner is looking.
     """
     from rite_ai import own_command
     from rite_ai.managers import stdin_text
@@ -1003,14 +1056,40 @@ def how_to_reply(root: Path, manager: str) -> str:
     rite = own_command()
     return (
         "\n\n## Talking to the User\n\n"
-        "To TELL the User something (progress, results, what you found), "
-        "run:\n"
-        + stdin_text.heredoc(f"{rite} reply --manager {manager} -", "<your message>")
+        "To ANSWER a message they sent you, add `--message` and the id from "
+        "that message's own header (its last part, `message 1759000000.123456`) "
+        "— then your answer appears in the thread they asked in, rather than "
+        "in the flat feed where they are not looking:\n"
+        + stdin_text.file_form(
+            root,
+            manager,
+            f"{rite} reply --manager {manager} --message 1759000000.123456",
+            "reply.md",
+            "your answer",
+        )
+        + "\n⚠ That id is an EXAMPLE: use the one in the header of the "
+        "message you are answering. rite refuses an id of any other shape "
+        "rather than posting your answer where nobody asked anything.\n"
+        "To TELL the User something they did not ask for (progress, results, "
+        "what you found), leave `--message` out:\n"
+        + stdin_text.file_form(
+            root,
+            manager,
+            f"{rite} reply --manager {manager}",
+            "reply.md",
+            "your message",
+        )
         + "\n"
         "That is filed for them to read, not to act on. To ASK them anything, "
-        "or to say you are blocked or need a decision, run:\n"
-        + stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<your question>")
-        + f"\n{stdin_text.RULE}\n"
+        "or to say you are blocked or need a decision:\n"
+        + stdin_text.file_form(
+            root,
+            manager,
+            f"{rite} ask --manager {manager}",
+            "ask.md",
+            "your question",
+        )
+        + f"\n{stdin_text.FILE_RULE}\n"
         "A reply that reads like a question is refused, and you are told to "
         "ask it instead. When unsure, ask.\n"
         f"Do not write files into the mailbox yourself. They read your replies "

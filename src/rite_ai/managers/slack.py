@@ -522,11 +522,10 @@ def remembered_targets(project: Path, managers: list[str]) -> dict:
     for manager in managers:
         if not manager:
             continue
-        try:
-            path = manager_dir(project, manager) / "slack.json"
-            state = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
+        from rite_ai.managers import own_dir
+
+        # Through `own_dir`: a link or FIFO at it is never followed.
+        state = own_dir.load_json(manager_dir(project, manager) / "slack.json")
         known = state.get("known") if isinstance(state, dict) else None
         if isinstance(known, dict) and known:
             return known
@@ -686,6 +685,16 @@ class _Relayed(str):
 
 
 _QUESTION_IN_LABEL = re.compile(r"\bq[0-9a-f]{4}\b")
+
+MESSAGE_ID = re.compile(r"\A[0-9]{10,}\.[0-9]{6}\Z")
+"""The shape of a Slack message `ts`, which is the id rite shows a Manager
+beside an instruction and takes back on `rite reply --message` (SCRUM-21).
+
+Checked rather than trusted: the value reaches `chat.postMessage` as a
+`thread_ts`, and a Manager is a process that may be confused. The shape is
+Slack's own — seconds since the epoch, a dot, six digits (measured on every
+live message this relay has read) — and `rite reply` refuses anything else
+where the Manager can see the refusal, rather than posting into nowhere."""
 
 REFINEMENT_CHANNEL = "refinement channel"
 """The header's first part for a message relayed from the refinement
@@ -879,6 +888,18 @@ class Listener:
     refinement_id: str = ""
     """Its id, learned by `open` once rite has both posted there and read
     there. Empty means rounds go to the DM, and `open` said why."""
+    record: object = None
+    """🔴 SCRUM-71's journal recorder, or None when `--record-issues` is off.
+
+    ⚠ **Called at the two places the relay KNOWS it failed**, not off
+    `news()`. A problem line is prose, and recording by matching rite's own
+    sentences is the dead-wiring trap this project has met before: the text
+    changes and the recorder goes quiet with nothing saying so. These two
+    call sites hold the fact itself — Slack refused the post, or the answer
+    could not reach the thread the Owner asked in.
+
+    The a9 run is why both are here: the Owner's answers were relayed into
+    the notes thread, and the journal recorded none of it."""
 
     def news(self) -> list[str]:
         """Problems not yet said, for the supervisor to print — once each.
@@ -1575,8 +1596,37 @@ class Listener:
                     "context — not an instruction",
                 )
             else:
+                # ⚠ **THE ID IS IN THE HEADER (SCRUM-21).** Without it the
+                # Manager cannot answer in the thread the Owner asked in: the
+                # `ts` was captured here, used for the 👀, and dropped. So
+                # every answer surfaced as `Status · lead` in the flat feed —
+                # you ask in one place and the answer appears in another.
+                # Outside the `> ` quote, like the chore id, so typed text
+                # cannot forge one.
+                #
+                # ⚠ **BEFORE `INSTRUCTION`, WHICH MUST STAY LAST.**
+                # `delivered.classify` gates the User's own words on
+                # `parts[-1] != INSTRUCTION`, and that one word decides
+                # whether a DM becomes a chore (`rite chore`), whether a
+                # refinement answer is attributed to the Owner, and whether
+                # the Owner's answer reaches a Worker that asked. Appending
+                # the id after it turned every Owner instruction into "not
+                # the User's words" — measured, and silently: the relay still
+                # delivered the text, and everything that acts on it refused.
+                # A test now runs this exact header back through `classify`.
+                #
+                # Omitted entirely when Slack sent no `ts`: a message with no
+                # id has none to hand back, and `message None` in the header
+                # is a value the instruction would tell the Manager to pass.
+                sent_ts = str(message.get("ts") or "")
                 head = _header(
-                    "Owner's DM", when, *normalised, *thread, "addressed", "INSTRUCTION"
+                    "Owner's DM",
+                    when,
+                    *normalised,
+                    *thread,
+                    "addressed",
+                    *((f"message {sent_ts}",) if sent_ts else ()),
+                    "INSTRUCTION",
                 )
                 # ⚠ Recorded HERE, in the one branch that decided this is the
                 # Owner addressing this Manager, and from the same facts the
@@ -1650,12 +1700,11 @@ class Listener:
         return manager_dir(self.project, self.manager) / "slack.json"
 
     def _state(self) -> dict:
+        from rite_ai.managers import own_dir
+
         path = self._state_path
-        try:
-            data = json.loads(path.read_text()) if path else {}
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
+        # Through `own_dir`: a link or FIFO at it is never followed.
+        return own_dir.load_json(path) if path else {}
 
     def posted(self) -> dict[str, dict]:
         """The relay's own record: outbox filename → where Slack put it.
@@ -1672,7 +1721,7 @@ class Listener:
         """Write the relay's state: what was posted, and how far each thread
         has been read — so a restart neither loses a thread nor re-delivers
         its replies."""
-        from rite_ai.state import write_atomic
+        from rite_ai.managers import own_dir
 
         path = self._state_path
         if path is None:
@@ -1685,7 +1734,6 @@ class Listener:
             for r in self.roots
         }
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
             state = {
                 "started": self._started,
                 "since": self.since,
@@ -1697,7 +1745,7 @@ class Listener:
                 "answered": dict(sorted(self._answered.items())[-POSTED_KEPT:]),
                 "ticked": dict(sorted(self._ticked.items())[-POSTED_KEPT:]),
             }
-            write_atomic(path, json.dumps(state, indent=1) + "\n")
+            own_dir.write_file(path, json.dumps(state, indent=1) + "\n")
         except OSError as e:
             self._problem(f"cannot record the relay's state: {e}")
 
@@ -1871,6 +1919,28 @@ class Listener:
                 # failure A5 exists to prevent. The reply itself must still
                 # reach them, so it goes to the pile that always can.
                 if answering:
+                    # 🔴 SCRUM-71. THE a9 FAILURE, recorded where it happens:
+                    # the Owner asked in their DM and the answer went to the
+                    # ambient pile whose own root line says nothing in it
+                    # needs them.
+                    self._record_failure(
+                        "routing",
+                        message.path.name,
+                        f"an answer from {self.manager} could not be posted "
+                        f"in the thread of the message it answered, so it "
+                        f"does not appear where the Owner asked. rite falls "
+                        f"back to the day's notes, whose own root line says "
+                        f"nothing in it needs them",
+                        "an answer appears in the thread the question was asked in",
+                    )
+                if answering and not str(getattr(message, "answers", "") or ""):
+                    # ⚠ Only the GUESS is cleared, and only when the guess is
+                    # what just failed (SCRUM-21). `_awaiting` is rite's
+                    # correlation; a stated id is the Manager's claim and does
+                    # not come from here. Clearing it for a failed stated post
+                    # threw away a still-valid correlation, so the NEXT plain
+                    # reply inside the window went to notes as well — one dead
+                    # thread costing two answers their place.
                     self._awaiting = {}
                     self._save(posted)
                 root = self._notes_root(target, call=call)
@@ -1906,6 +1976,13 @@ class Listener:
                 # Not marked read, so the next tick retries it — and the ones
                 # after it wait, so replies are never posted out of order.
                 self._problem(f"cannot post a reply: {sent.problem}")
+                self._record_failure(
+                    "relay",
+                    message.path.name,
+                    f"a message from {self.manager} could not be posted to "
+                    f"Slack: {sent.problem}. Every reply behind it waits too",
+                    "what the Manager says reaches the person it is for",
+                )
                 break
             posted[message.path.name] = {
                 "channel": sent.channel,
@@ -2134,6 +2211,21 @@ class Listener:
         None means "nothing says this is an answer", which is the day's notes
         — the right place for a Manager that is reporting rather than
         replying. See `_awaiting` for what this does and does not claim.
+
+        ⚠ **WHAT THE MANAGER STATED BEATS WHAT RITE GUESSED (SCRUM-21).**
+        `rite reply --message <id>` is the Manager saying which message it
+        answers, which is a fact only it has; `_awaiting` is a correlation —
+        "the Owner addressed this Manager and it then spoke inside a window"
+        — and it is right only for the most recent message, so answering the
+        earlier of two questions threaded the answer under the later one.
+        A stated id is taken with no window: the Manager naming a message
+        from this morning means this morning's, and a stale guess is exactly
+        what the window exists to refuse.
+
+        ⚠ **THE CHANNEL IS NEVER THE MANAGER'S TO NAME.** The id is a `ts`
+        and the channel is always `self.dm`, read from config. A Manager that
+        could choose a channel could post the Owner's answer where the
+        workspace reads it.
         """
         if getattr(message, "by_rite", False):
             # ⚠ rite's own narration, not the Manager answering. `kind`
@@ -2143,6 +2235,25 @@ class Listener:
             # whatever the Owner last asked, and exempted from the check-in
             # hold along with it. See `mailbox.Message.by_rite`.
             return None
+        stated = str(getattr(message, "answers", "") or "")
+        if stated:
+            if not self.dm:
+                # No Owner DM is configured, so there is no thread to answer
+                # in and no person who asked. Not an error: the reply still
+                # reaches the reading pile, which is what the caller does
+                # with None.
+                return None
+            if not MESSAGE_ID.match(stated):
+                # Said, not silently dropped: a Manager answering into
+                # nowhere is the failure SCRUM-21 is about, and it must not
+                # fail quietly a second time.
+                self._problem(
+                    f"a reply from {self.manager!r} names message {stated!r}, "
+                    "which is not the shape of a message id — posted where "
+                    "replies are read instead of in its thread"
+                )
+                return None
+            return (self.dm, stated)
         awaiting = self._awaiting
         channel = str(awaiting.get("channel") or "")
         ts = str(awaiting.get("ts") or "")
@@ -2169,6 +2280,34 @@ class Listener:
         if self.clock() - at >= ANSWER_WINDOW_SECONDS:
             return None
         return (channel, ts)
+
+    def _record_failure(
+        self, kind: str, subject: str, observed: str, expected: str
+    ) -> None:
+        """One journal entry for a relay failure this method just saw.
+
+        Never raises and never needs the caller to check: `record` is None
+        when the flag is off, and the recorder itself swallows everything.
+        """
+        if self.record is None:
+            return
+        from rite_ai.managers import recording
+
+        which = (
+            recording.ROUTING_ANOMALY if kind == "routing" else recording.RELAY_FAILED
+        )
+        try:
+            self.record(
+                recording.Event(
+                    which,
+                    f"{self.manager}: {subject}",
+                    observed,
+                    expected,
+                    anchor=f"manager {self.manager} message {subject}",
+                )
+            )
+        except Exception:  # noqa: BLE001 - a journal write never breaks a relay
+            pass
 
     def _notes_root(self, target: str, *, call=None):
         """Today's top-level notes post, made on first use; (channel, ts), or

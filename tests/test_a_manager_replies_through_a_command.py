@@ -42,9 +42,9 @@ def project(tmp_path: Path, monkeypatch) -> Path:
 
 def test_the_instruction_names_a_command_and_no_format(tmp_path):
     said = how_to_reply(tmp_path, "lead")
-    assert "rite reply --manager lead - <<'RITE_TEXT_" in said
+    assert "rite reply --manager lead --from-file " in said
     # RP1: questions have their own command, and the instruction names it.
-    assert "rite ask --manager lead - <<'RITE_TEXT_" in said
+    assert "rite ask --manager lead --from-file " in said
     for shape in ('"text"', "timestamp", ".json", "<pid>"):
         assert shape not in said, f"the Manager is still handed a format: {shape}"
 

@@ -16,9 +16,9 @@ import tempfile
 from pathlib import Path
 
 from rite_ai.config.managers import ManagerRole
-from rite_ai.coordination.local_backend import LocalStateLayer
 from rite_ai.local import decompose as dcmp
 from rite_ai.local import decomposition as dec
+from rite_ai.local import plan_state
 from rite_ai.spec.digest_files import unit_filename, units_dir
 
 ROLES = [
@@ -42,7 +42,7 @@ def _project(cites=("U1", "U2")):
     where.mkdir(parents=True, exist_ok=True)
     for cite in cites:
         (where / unit_filename(cite)).write_text("spec text for " + cite)
-    return root, LocalStateLayer(root / ".rite")
+    return root, plan_state.layer(root)
 
 
 def _candidate(ticket="KAN-1", **over):

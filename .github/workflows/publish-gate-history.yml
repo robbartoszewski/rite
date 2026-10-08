@@ -1,0 +1,88 @@
+name: Publish gate (full history)
+
+# The full-history half of SCRUM-39, split off deliberately.
+#
+# `publish-gate.yml` is the REQUIRED per-pull-request check, and since
+# SCRUM-39 it judges only what the pull request introduces. That is the right
+# question for a merge gate — "does THIS change leak" — but it is not the only
+# question worth asking. "Safe to publish" means the whole history is safe for
+# the whole history to become public, including content long since removed
+# from HEAD, and nothing checks that if every run is scoped to a range.
+#
+# So this job asks the other question, on a schedule, where it is nobody's
+# merge blocker:
+#
+#   * a leak anywhere in history is found, including one on a branch that was
+#     never merged and one in a commit whose file is long gone;
+#   * a leak on an unrelated branch cannot block a pull request, which is the
+#     coupling the ticket is about (#183 failing #184, 2026-10-02);
+#   * `workflow_dispatch` so it can be run by hand after a suppression
+#     changes, rather than waiting for the schedule.
+#
+# ⚠ **ADVISORY BY CONSTRUCTION, and that is the point.** It is not in main's
+# required-checks ruleset and must not be added to it: a required check that
+# can go red for something on somebody else's branch is exactly what was just
+# removed. When this goes red, an Owner reads it and decides.
+#
+# ⚠ It triggers on neither push nor pull_request, so `rite_ai.gate.ci` reads
+# it as not guarding the way to the remote — correctly. `ci_workflow_status`
+# reads only `publish-gate.yml`, so this file cannot be mistaken for the gate.
+
+on:
+  schedule:
+    # 04:17 UTC daily. Off the hour on purpose: GitHub queues scheduled runs
+    # and the top of the hour is the most contended slot.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-gate-history:
+    runs-on: ubuntu-latest
+    steps:
+      # The whole history is the subject here, so the full fetch is the scan's
+      # own requirement rather than a way to find a base ref.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Pinned AND checksummed, the same way `templates/ci/publish-gate.yml`
+      # requires of every project rite generates — this file downloaded the
+      # binary unverified while the template it ships said, in as many words,
+      # that this binary "is not a build tool here — it IS the security
+      # control this job exists to run". A release asset can be replaced under
+      # an unchanged tag.
+      #
+      # The one line for our asset is grepped OUT of `checksums.txt` rather
+      # than checking the whole file with `--ignore-missing`, for the reason
+      # the template gives: if the asset name ever changes, grep exits 1 and
+      # the job stops, whereas `--ignore-missing` with nothing left to match
+      # is a no-op that exits 0 on some implementations.
+      - name: Install gitleaks
+        run: |
+          cd /tmp
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            -o gitleaks_8.30.1_linux_x64.tar.gz
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt \
+            -o gitleaks_checksums.txt
+          grep ' gitleaks_8.30.1_linux_x64.tar.gz$' gitleaks_checksums.txt > expected.sha256
+          sha256sum --check expected.sha256
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # No `--ci-range`: this job exists to scan everything, which is what a
+      # bare `check` does.
+      - name: Run publish gate over the whole history
+        run: uv run python -m rite_ai.gate check

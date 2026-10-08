@@ -30,6 +30,9 @@ from tests.test_rite_delivers_a_finished_task import TICKET, Project, _commit, _
 class _Report:
     def __init__(self, code: int):
         self.exit_code = code
+        # What a refused delivery's note now quotes (SCRUM-59, `gate.brief`).
+        self.errors: list[str] = []
+        self.findings: list = []
 
 
 def _gate(code: int):
@@ -53,7 +56,8 @@ def test_push_lands_the_work_on_the_modules_branch(tmp_path):
     # beneath it, and one path for both either scans a tree git cannot
     # answer about (SCRUM-60) or drops the project's suppressions.
     assert gate.call_args.kwargs == {
-        "rev_range": f"main..{TICKET}",
+        # Full ref names (SCRUM-59): no tag named like the ticket is gated.
+        "rev_range": f"refs/heads/main..refs/heads/{TICKET}",
         "config_root": p.root,
     }
     assert gate.call_args.args[0] != p.root

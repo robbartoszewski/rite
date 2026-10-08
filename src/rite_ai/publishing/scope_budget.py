@@ -10,6 +10,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rite_ai.githost import hardened_git_env
+
 PASS = "pass"
 HOLD = "hold"
 
@@ -101,6 +103,7 @@ def measure(
         proc = subprocess.run(
             ["git", "diff", "--numstat", "-M", rev_range],
             cwd=project,
+            env=hardened_git_env(),
             capture_output=True,
             text=True,
             errors="replace",
@@ -156,9 +159,13 @@ def _added_comment_ratio(
     A second `git diff` because `--numstat` carries no content.
     """
     try:
+        # 🔴 --no-textconv (Option A review, measured): `git diff` runs a
+        # repo-defined diff textconv PROGRAM on the host, and this runs on the
+        # Manager-writable module checkout every delivery (SCRUM-75).
         proc = subprocess.run(
-            ["git", "diff", "--unified=0", rev_range],
+            ["git", "diff", "--no-textconv", "--unified=0", rev_range],
             cwd=project,
+            env=hardened_git_env(),
             capture_output=True,
             text=True,
             errors="replace",

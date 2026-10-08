@@ -2,6 +2,95 @@
 
 ## Unreleased
 
+### A GPU Worker is driven under any Manager, through enforced stages (SCRUM-72)
+
+A Worker running a local model was never given any work when its Manager ran
+Claude: it started, took its paths and sat there. It is driven now, whatever
+its Manager runs — and driven through stages rite itself enforces rather than
+asks for. A ticket goes spec session, plan, review, approach, work,
+recomposition check, delivery; each one is recorded, none can be skipped or
+reordered, and the definition of done you agreed is what the plan is written
+against and what the finished work is checked against.
+
+Plan review is a real review now. rite asks the Manager that can judge the
+plan independently and waits for it: **`rite plan approve <ticket>`** and
+**`rite plan reject <ticket> --reason-file <path>`** are how that Manager
+answers, and a rejection sends the plan back to be written again with your
+reasons. Before this, rite stamped its own approval and no one ever read the
+plan. Nothing is delivered until the composed work passes the ticket's own
+agreed check — each piece passing its own check is not the ticket working.
+
+A Worker running a local model no longer shows as stalled while it waits: it
+does not send heartbeats by design, and `rite status` says so instead of
+reporting it stuck.
+
+### `rite release` says when the slot is still taken (SCRUM-70)
+
+Releasing a Worker's claims freed its paths and left its slot occupied, so the
+next Worker still could not start — and `rite status` said "no active claims"
+the whole time, which is the most reassuring thing it can say about the state
+that stops all work. Both now say which Workers are still holding a slot, and
+what frees one.
+
+### A restarted Manager recovers by itself (SCRUM-64)
+
+When a Manager was stopped and restarted it used to resume whatever it last
+believed — a Worker mid-ticket, a sandbox it thought was running — and ask you,
+every cycle, to sort out state that was already resolved. It now checks each of
+its Workers against what is actually true before acting: it frees a claim only
+when that Worker's sandbox is really gone and its work was delivered or handed
+back, leaves anything it cannot read for certain, and tells itself what it
+found. A restart converges on its own, with nobody running host commands.
+
+### rite runs no program a Worker's repository configures (host git hardening)
+
+rite runs git on the host inside repositories a Worker can write, and git
+runs programs those repositories configure — a filesystem-monitor command on
+`git status`, a diff program during a secret scan, commit hooks. A Worker
+could set one and have it run on your machine when rite next checked the
+repository. rite now forces those off for every git command it runs, whatever
+the repository's own settings say, while still committing under your identity.
+
+### rite no longer follows links a Manager plants in its own directory
+
+rite reads and writes a Manager's directory and outbox from outside the
+sandbox, and a Manager could replace a file there with a link: the next cycle's
+prompt then overwrote whatever file the link named, another Manager's routed
+work was taken as its own, and any readable file could be sent to you as its
+message. rite now opens everything there without following a link, sets aside
+anything that is not a plain file and says so, and a Manager's sandbox can no
+longer create links there.
+
+### A Manager can stop, restart, check and gate its Workers itself (SCRUM-59)
+
+When a Worker's sandbox died, its Manager could do nothing about it: stopping,
+restarting or destroying a sandbox, and seeing why the publish gate refused a
+delivery, all needed host commands, so you had to run them. A Manager now asks
+with `rite request stop|restart|destroy|status|gate <worker>`, and rite does
+it outside the sandbox when the Manager's turn ends and tells it what
+happened. It may act only on Workers rite started for it, and a destroy is
+never forced: a sandbox holding unpushed work or an unanswered question is
+kept. Starting and delivering a Worker are `rite request start|deliver <worker>
+--ticket <id>` too, so a Manager no longer has to write a request file with
+`echo … > $(date).json`, which its engine refused. A refused delivery now says
+what the gate found. A Worker you started yourself is yours: no Manager can act
+on it through `rite request`. A module's `branch` in `.rite/modules.yaml` must
+now be a plain branch name, and its `path` a path inside the project.
+
+### A Manager's messages no longer depend on a heredoc (SCRUM-69)
+
+A Manager reached you with `rite reply` and `rite ask` through a shell
+heredoc, and partway through a session that could stop working: "can't create
+temp file for here document: operation not permitted". Its instructions taught
+no other way, so it went silent. It now writes its text to a file in its own
+drafts directory and runs `rite reply --from-file <file>` (the same for
+`ask`, `route` and `refine ask`). Nothing in the file is expanded, and there
+is no end line it can write twice. rite reads only a file in that Manager's
+own drafts directory, and removes it once the message is queued, so a retry
+cannot send it twice, and two sends started at the same moment send it once.
+From your own shell, `-` with the text on stdin still works, and that is what
+a refusal there tells you.
+
 ### A check mark means the Worker read your answer: `rite ack`
 
 When you answered a Worker's question, rite settled the question and told you

@@ -348,6 +348,34 @@ cheapest mitigation.
 
 ---
 
+### 5.7. Driven by the Worker's engine, not the Manager's (v0.7.1, SCRUM-72)
+
+*Design, not built.* In v0.7.0a9 the supervise loop drives the local tier only
+when the **Manager** is local (`cli/main.py`, `local_tier=… if role.is_local`).
+So a Claude Manager's GPU Worker gets a sandbox and a board move and is then
+never run.
+
+From v0.7.1, the loop drives the local tier for every ticket held by a **local
+Worker** of the Manager, whatever the Manager's engine:
+- the ticket filter keeps only those tickets;
+- a local Worker's sandbox gets no prompt;
+- an idle local sandbox with a plan step pending is not a stall.
+
+The gates do not change. A plan is still authored by a `decompose` Manager and
+approved by a `plan-review` Manager running a different model (RL-6).
+
+**Approval is a Manager responsibility, independent of engine (Robert,
+2026-10-05).** In a Claude-plus-GPU fleet a local `planner` Manager writes the
+plan, and a Manager approves it, whether that Manager is Claude, local or any
+other provider. The approval path carries no engine-kind condition. That
+condition is exactly what kept the GPU Worker undriven in a9.
+- The supervisor asks the reviewer through its inbox.
+- The reviewer answers with `rite plan approve|reject`, honoured outside its
+  boundary, with the reviewer's identity taken from where the answer was found.
+- The harness never stamps APPROVED itself.
+
+Design and tests: `V071_DOGFOOD_FIXES.md` §3.3b.
+
 ## 6. The harness
 
 ### 6.1. Scope — local engines only
@@ -1146,7 +1174,7 @@ show it wrong.
 | RL-3 | Duty vocabulary | **Closed and rite-defined**, unlike expertise and capabilities | rite enforces gates keyed on duties. An open set would let a misspelt duty silently skip plan review. |
 | RL-4 | Fungibility | **Engine and duties are Manager attributes; every Worker under a Manager is identical; assignment targets Managers once they differ** | Adopts the routing design's "fungible within a Manager". Keeps SPEC §5.3.4's reason intact: no assignment reasoning about *Workers*, and no derived differences. |
 | RL-5 | Routing order for a task | **Duty, then capability and permission, then free capacity. Decisions route separately, by expertise (SPEC §4)** | Three routers with three tiebreaks, as the routing design argued; duty is added in front because it decides which stage a task belongs to. |
-| RL-6 | Who gates a decomposition | **A `plan-review` holder on a different Manager, and a different engine, from the decomposer — approval before any subtask is released** | The decomposer reviewing its own plan's output shares every blind spot of the plan. Catching a mis-slice before execution is the cheapest place to catch it. `rite doctor` refuses a config where no such holder exists. |
+| RL-6 | Who gates a decomposition | **A `plan-review` holder on a different Manager, and a different engine, from the decomposer — approval before any subtask is released** | The decomposer reviewing its own plan's output shares every blind spot of the plan. Catching a mis-slice before execution is the cheapest place to catch it. `rite doctor` refuses a config where no such holder exists. **"Different engine" means a different `engine_identity`:** the model for a local engine, the engine kind otherwise. It decides independence, never which kind of Manager may approve (§5.7, v0.7.1). |
 | RL-7 | When a subtask is done | **Only when its mechanical verify passes. Plan review rejects a verify that cannot fail** | A check that is not a model's opinion. Rejecting un-failable verifies closes the easiest way to fake a pass. |
 | RL-8 | The whole-versus-parts failure | **Recomposition verify: the parent ticket's verify runs on the combined branch; a failure returns to plan review, not to the decomposer** | Catches the confidently-wrong decomposition, whose parts all pass. Sending it back to the decomposer would ask the author of the mistake to find it. |
 | RL-9 | Step review | **Advisory, and stateless: a fresh context with the plan item, the diff and the verify output** | It shares the plan's blind spots, so it cannot gate. Statelessness keeps each review inside a small context window (D-29). |

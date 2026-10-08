@@ -120,9 +120,9 @@ class Boundary:
     """Why not, when `available()` is False. Printed at launch."""
 
 
-def temp_environment(path: Path) -> dict[str, str]:
+def temp_environment(path: Path, heredocs: Path | None = None) -> dict[str, str]:
     """The environment that puts an engine's temporary files at `path`, inside
-    the boundary.
+    the boundary, and zsh's here-documents at `heredocs` (default `path`).
 
     ⚠ **`TMPDIR` alone is not enough: Claude Code ignores it.** Its temp root
     is `CLAUDE_CODE_TMPDIR`, falling back to a hard-coded `/tmp` (read from
@@ -133,8 +133,43 @@ def temp_environment(path: Path) -> dict[str, str]:
     SB8 closed. Both variables point at the same directory, and every launch
     that runs an engine under a profile takes them from here, so the next one
     an engine reads is added once.
+
+    ⚠ **And zsh's here-document temp files (SCRUM-69).** zsh writes every
+    here-document to a file named by `TMPPREFIX` (default `/tmp/zsh`), not
+    `TMPDIR`. With `/tmp` no longer granted, a Manager's heredoc failed inside
+    its own profile with exactly the dogfood's words, "can't create temp file
+    for here document: operation not permitted" (measured; outside, and with
+    `TMPPREFIX` inside the boundary, it ran). The relay no longer needs a
+    heredoc at all, but a Manager writes others (a commit message), so the
+    prefix is put inside the boundary too.
+
+    🔴 **But NOT in `engine_tmp` (SCRUM-69 review).** That is under
+    `.rite/user/`, inside the project, which every Manager in the root can
+    write: a sibling could read a Manager's heredoc, or rename its own file
+    over it between zsh writing it and reading it back, and the text would go
+    out in the other Manager's name. So a Manager's heredocs go in its OWN
+    directory (`heredoc_dir`), which no other profile grants. ⚠ `TMPDIR`
+    is still `engine_tmp`, so bash's heredocs keep the exposure they always
+    had; moving it is a change of its own, not this one.
     """
-    return {"TMPDIR": str(path), "CLAUDE_CODE_TMPDIR": str(path)}
+    return {
+        "TMPDIR": str(path),
+        "CLAUDE_CODE_TMPDIR": str(path),
+        "TMPPREFIX": str((heredocs or path) / "zsh"),
+    }
+
+
+HEREDOCS_DIRNAME = "heredocs"
+
+
+def heredoc_dir(root: Path, manager: str) -> Path:
+    """Where Manager `manager`'s zsh here-documents are written: inside its
+    own directory, so no other Manager can read or replace them
+    (`temp_environment`). Each boundary's `write_profile` creates it, because
+    zsh does not create a missing directory: its first heredoc would fail."""
+    from rite_ai.managers import manager_dir
+
+    return manager_dir(Path(root), manager) / HEREDOCS_DIRNAME
 
 
 def _landlock_available() -> bool:

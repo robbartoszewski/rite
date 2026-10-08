@@ -955,6 +955,55 @@ def test_a_managers_own_state_is_its_own_outside_the_project(tmp_path, monkeypat
 
 
 @NO_LANDLOCK
+def test_the_plan_state_is_outside_every_managers_reach(tmp_path, monkeypatch):
+    """SCRUM-72 §3.3b, the Linux half, against the kernel.
+
+    🔴 **Landlock has NO DENY**, which is exactly why the plan state had to
+    move rather than be excluded. `_fenced_project_paths` grants the project
+    tree and cannot take a path inside it back, so while every decomposition
+    lived in `.rite/state.json` any Manager could set a plan's own `approval`
+    to APPROVED — no plan-review duty, no independence from the author, and
+    `approve_plan` never running. The move puts it beside the Manager
+    directories, where a Manager is granted its own by path and reaches no
+    other.
+
+    The control is in the same test: the OLD path is still writable, because
+    the project tree is. If that control fails the move was not needed; if
+    the assertion above it fails, the move was undone."""
+    from rite_ai.local import plan_state
+
+    monkeypatch.setenv("RITE_MAIL_DIR", str(tmp_path / "data" / "mail"))
+    root = tmp_path / "proj"
+    (root / ".rite").mkdir(parents=True)
+    where = plan_state.home(root)
+    where.mkdir(parents=True, exist_ok=True)
+    (where / "state.json").write_text('{"keys": {}, "version": "1"}\n')
+    landlock.write_profile(root, "small", tmp_path / "home")
+    policy = landlock.compose_policy(root, "small", tmp_path / "home")
+
+    def can(action):
+        def child():
+            landlock.apply(policy)
+            try:
+                action()
+                return 0
+            except OSError:
+                return 1
+
+        return _in_child(child) == 0
+
+    # The control, and the whole reason for the move.
+    assert can(lambda: plan_state.legacy_path(root).write_text("{}")), (
+        "control: the project tree is writable, which is why the plan state "
+        "could not stay in it"
+    )
+    assert not can(lambda: (where / "state.json").read_text())
+    assert not can(lambda: (where / "state.json").write_text("{}"))
+    assert not can(lambda: (where / "planted.json").write_text("{}"))
+    assert not where.is_relative_to(root)
+
+
+@NO_LANDLOCK
 def test_a_linux_manager_creates_a_new_top_level_file_in_its_project(
     tmp_path, monkeypatch
 ):

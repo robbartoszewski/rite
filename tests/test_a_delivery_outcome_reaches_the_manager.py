@@ -127,7 +127,7 @@ def test_a_mid_run_change_reaches_the_manager_with_its_command(tmp_path):
     [
         ("not json", "the request is not JSON"),
         ({"worker": "alpha", "ticket": TICKET, "strategy": "push"}, "'strategy'"),
-        ({"worker": "../x", "ticket": TICKET}, "Write the request again"),
+        ({"worker": "../x", "ticket": TICKET}, "Ask again with `rite request deliver"),
         ({"worker": "alpha", "ticket": "y" * 65}, "1 to 64 characters"),
     ],
 )
@@ -207,7 +207,9 @@ def test_the_manager_is_promised_every_outcome_and_given_the_directory(tmp_path)
 
     text = for_manager(MANAGER, root=tmp_path)
     assert "rite tells you every outcome" in text
-    assert str(requests.requests_dir(tmp_path, MANAGER)) in text
+    # SCRUM-59: a command, not a directory to `echo` into.
+    assert " request deliver <name> --ticket <ID>" in text
+    assert "$(date" not in text
     assert "never merge a pull request" in text
 
 
@@ -226,8 +228,10 @@ def test_deliveries_are_honoured_before_worker_requests():
     import rite_ai.managers.supervise as supervise
 
     source = Path(supervise.__file__).read_text()
-    assert source.index("honour_deliveries(root, manager, say)") < source.index(
-        "_honour_worker_requests(root, manager, broker, say)\n            if"
+    assert source.index(
+        "honour_deliveries(root, manager, say, recorder)"
+    ) < source.index(
+        "_honour_worker_requests(root, manager, broker, say, recorder)\n            if"
     )
 
 

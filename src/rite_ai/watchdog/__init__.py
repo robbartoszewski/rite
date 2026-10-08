@@ -173,10 +173,28 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
     # and nothing restarts a Worker on the assumption it is hung.
     handed_back = sorted(read_handbacks(root, workers).values(), key=lambda h: h.worker)
     done = {h.worker for h in handed_back}
+    # ⚠ **A LOCAL WORKER'S HEARTBEAT IS NOT A LIVENESS SIGNAL (SCRUM-72
+    # §3.3), so it must not be read as one.** A local Worker never beats at
+    # all: it is started IDLE and the staged pipeline places one approved
+    # subtask at a time into its sandbox, so it is silent while a plan is
+    # being authored, while a reviewer is being waited on, between subtasks,
+    # and while the recomposition verify runs. The stall check can therefore
+    # only ever produce a FALSE positive for it — and the dogfood already
+    # showed what a Manager does with a line that says "stalled": it restarts
+    # the Worker, which here would restart a sandbox the pipeline is placing
+    # turns into.
+    #
+    # Subtracted the way a handback is, and for the same reason: `scheduler`
+    # turns `stalled` into standing outbox blockers and `reporting.status`
+    # prints it as STALLED, and both read the list rather than the prose
+    # beside it. What says a local Worker is alive is its PIPELINE — a plan
+    # step pending, or one running — and the supervisor's own spin guard is
+    # what notices a pipeline that has stopped advancing.
+    driven = _driven_by_the_staged_pipeline(root, workers)
     stalled = [
         s
         for s in detect_stalls(root, workers, threshold_seconds=threshold_seconds)
-        if s.worker not in done
+        if s.worker not in done and s.worker not in driven
     ]
     unwatched = _unwatched_workers(root, workers)
 
@@ -248,6 +266,19 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         reasons.append(line)
         if not h.not_integrated():
             handback_reasons.append(line)
+    for worker, where in sorted(driven.items()):
+        # Said, not silent: a reader looking for a Worker it has not heard
+        # from must find the reason, and "it does not beat" is the reason.
+        # Not in `needs_attention`'s sense of a fault — a pipeline that has
+        # stopped advancing is the supervisor's spin guard to notice, not
+        # this check's — but a line all the same.
+        reasons.append(
+            f"worker '{worker}' runs a local engine and is driven by the "
+            f"staged pipeline ({where}) — it does NOT send heartbeats and its "
+            "silence is the expected state. Do not restart it and do not "
+            "force-release its claims: its Manager's supervise loop advances "
+            "it one stage per cycle"
+        )
     for b in blockers:
         detail = b.payload.get("detail") or b.payload.get("reason") or ""
         reasons.append(f"{b.kind} in outbox" + (f": {detail}" if detail else ""))
@@ -294,6 +325,39 @@ def run_watchdog_check(root: Path) -> WatchdogResult:
         handed_back=handed_back,
         handed_back_reasons=handback_reasons,
     )
+
+
+def _driven_by_the_staged_pipeline(root: Path, workers: list[str]) -> dict[str, str]:
+    """`{worker: where its ticket is}` for every LOCAL Worker this project has
+    whose ticket is in the staged pipeline (SCRUM-72 §3.3).
+
+    A Worker is in here when all three hold: its manifest says `local:`, rite
+    has a record of which ticket it was started on, and that ticket has a
+    persisted pipeline stage. Anything rite cannot read leaves the Worker OUT
+    — the stall check then applies as before, which is the direction that
+    reports too much rather than too little (`not_started`'s rule: a missed
+    stall is worse than a false one).
+    """
+    found: dict[str, str] = {}
+    for worker in workers:
+        try:
+            from rite_ai.local import plan_state
+            from rite_ai.local import stage as st
+            from rite_ai.publishing import record
+            from rite_ai.sandbox import worker_manifest
+
+            if not bool(getattr(worker_manifest(root, worker), "is_local", False)):
+                continue
+            ticket = getattr(record.read(root, worker), "ticket", "")
+            if not ticket:
+                continue
+            got = st.read(plan_state.layer(root), ticket)
+            if got.unavailable or got.error or got.record is None:
+                continue
+            found[worker] = f"{ticket} at stage {got.stage}"
+        except Exception:  # noqa: BLE001 - cannot tell: the stall check stands
+            continue
+    return found
 
 
 def _blocked_workers(root: Path) -> list[BlockedWorker]:

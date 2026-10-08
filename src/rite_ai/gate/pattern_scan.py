@@ -30,6 +30,7 @@ from rite_ai.gate.findings import (
     redact,
     rev_range_args,
 )
+from rite_ai.githost import hardened_git_env
 
 
 @dataclass
@@ -62,6 +63,7 @@ def list_tracked_files(root: Path) -> list[str] | ScanError:
         proc = subprocess.run(
             ["git", "ls-files", "-z"],
             cwd=root,
+            env=hardened_git_env(),
             capture_output=True,
             timeout=30,
         )
@@ -281,7 +283,9 @@ def files_touched_by(root: Path, rev_range: str) -> set[str] | ScanError:
     """
     args = ["git", "log", "--name-only", "-z", "--format=", *rev_range_args(rev_range)]
     try:
-        proc = subprocess.run(args, cwd=root, capture_output=True, timeout=30)
+        proc = subprocess.run(
+            args, cwd=root, env=hardened_git_env(), capture_output=True, timeout=30
+        )
     except (OSError, subprocess.SubprocessError) as e:
         return ScanError(f"'git log --name-only' failed: {e}")
     if proc.returncode != 0:

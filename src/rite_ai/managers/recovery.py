@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rite_ai.reporting.heartbeat import StallReport
@@ -46,6 +46,8 @@ REPORT = "report"  # backoff exhausted or cannot classify -> leave it for the Ow
 DEFAULT_MAX_RESTARTS = 3
 DEFAULT_BASE_BACKOFF = 300.0  # seconds before the 2nd attempt; doubles thereafter
 DEFAULT_BACKOFF_CAP = 3600.0
+REQUESTED = "requested:"
+"""Ledger key prefix for restarts a Manager asked for (`lifecycle._restart`)."""
 DEFAULT_MAX_ACTIONS = 1  # one recovery action per cycle, like one session at a time
 
 
@@ -62,6 +64,20 @@ class RecoveryAction:
     kind: str
     ticket: str = ""
     reason: str = ""
+    attempted: bool | None = None
+    """Whether the action was CARRIED OUT, once it has been tried: True, False,
+    or None for one nothing attempts (`REPORT`).
+
+    ⚠ **Added because the plan was being read as the outcome (SCRUM-71).**
+    These are returned "for the caller to say/record", and the caller recorded
+    a RESTART as "restarted in place" whether or not the restart worked —
+    measured 2026-10-07: the terminal said "could not restart stalled Worker
+    'alpha'" while the journal said it had been restarted. A journal that
+    states the opposite of what happened is worse than one that says nothing,
+    which is the whole subject of the ticket that found this."""
+    outcome: str = ""
+    """What the attempt said — `do_restart`/`do_restage`'s own message, so a
+    recorded entry carries the reason rather than a bare failure."""
 
 
 def _backoff_seconds(
@@ -140,7 +156,12 @@ def _plan_recovery(
 
 
 def _ledger_path(root: Path) -> Path:
-    return Path(root) / ".rite" / "recovery.json"
+    """Beside the publish records, under no path any Manager's profile grants
+    (SCRUM-59 review, measured): in `.rite/` a Manager could zero it and,
+    with `rite request restart`, restart its Worker without limit."""
+    from rite_ai.managers.mailbox import _checkout_key, _mail_home  # noqa: PLC2701
+
+    return _mail_home().parent / "recovery" / f"{_checkout_key(Path(root))}.json"
 
 
 def _read_ledger(root: Path) -> dict[str, LedgerEntry]:
@@ -232,7 +253,13 @@ def recover_stalled_workers(
         stalled_names = {r.worker for r in stalls}
         # A Worker that recovered on its own clears its backoff, so a later
         # stall starts from zero rather than from an exhausted budget.
-        for gone in [w for w in ledger if w not in stalled_names]:
+        # ⚠ Not the restarts a Manager asked for (`REQUESTED`, SCRUM-59): a
+        # Worker just restarted on request is never stalled at this point,
+        # so pruning those erased the cap the same cycle (review, measured:
+        # six requests, six restarts). They expire on their own instead.
+        for gone in [
+            w for w in ledger if w not in stalled_names and not w.startswith(REQUESTED)
+        ]:
             del ledger[gone]
 
         by_worker = {r.worker: r for r in stalls}
@@ -244,10 +271,14 @@ def recover_stalled_workers(
             max_restarts=max_restarts,
             max_actions=max_actions,
         )
+        # ⚠ Rebuilt as the attempts are made, so what is RETURNED says what
+        # happened rather than what was planned (SCRUM-71).
+        done: list[RecoveryAction] = []
         for action in actions:
             report = by_worker[action.worker]
             if action.kind == RESTART:
                 ok, message = do_restart(report)
+                done.append(replace(action, attempted=ok, outcome=message))
                 _record_attempt(ledger, action.worker, now)
                 say(
                     f"recovering stalled Worker {action.worker!r}: restarted in "
@@ -258,6 +289,7 @@ def recover_stalled_workers(
                 )
             elif action.kind == RESTAGE:
                 ok, message = do_restage(report)
+                done.append(replace(action, attempted=ok, outcome=message))
                 _record_attempt(ledger, action.worker, now)
                 say(
                     f"recovering stalled Worker {action.worker!r}: its sandbox is "
@@ -268,12 +300,14 @@ def recover_stalled_workers(
                     f"{message}"
                 )
             elif action.kind == REPORT:
+                # Nothing is attempted: it is the report itself.
+                done.append(action)
                 say(
                     f"stalled Worker {action.worker!r} has exhausted its recovery "
                     f"budget — left STALLED for you: {action.reason}"
                 )
         _write_ledger(root, ledger)
-        return actions
+        return done
     except Exception as e:  # noqa: BLE001 - recovery must never break the cycle
         try:
             say(f"Worker recovery skipped this cycle: {type(e).__name__}: {e}")
@@ -315,8 +349,12 @@ def _restart(root: Path, worker: str) -> tuple[bool, str]:
 
 def _restage(root: Path, worker: str) -> tuple[bool, str]:
     """Release the Worker's claim so its ticket returns to the board. The work
-    is already gone with the sandbox; the Manager re-dispatches next cycle."""
+    is already gone with the sandbox; the Manager re-dispatches next cycle.
+    Its owner is forgotten with the sandbox (SCRUM-59)."""
     from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.managers.lifecycle import forget_owner
+
+    forget_owner(Path(root), worker)
 
     ledger = ClaimsLedger(Path(root) / ".rite" / "claims.json")
     try:

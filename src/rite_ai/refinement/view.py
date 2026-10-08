@@ -121,7 +121,19 @@ class Reconciled:
 
 def wanted(ticket, status: st.Status, managers=()) -> bool:
     """Whether `ticket`, as read, should carry the label: `scheduled`,
-    REFINED, and no Manager's name on it (not yet assigned)."""
+    REFINED, no Manager's name on it (not yet assigned), and **its work not
+    already over** (SCRUM-73).
+
+    ⚠ The status is the fourth condition, and the one the a9 run was missing.
+    KAN-28 was Done and merged, and every other condition still held — so
+    rite kept the label on finished work and its own brief offered the ticket
+    again, twice. `wanted` is False here, which means `reconcile_one` TAKES
+    THE LABEL OFF: the root cause said "nothing in rite removes it either",
+    and this is the line that does."""
+    from rite_ai.tickets.statuses import is_terminal
+
+    if is_terminal(ticket):
+        return False
     labels = set(ticket.labels or [])
     return status.refined and SCHEDULED in labels and not labels & set(managers)
 

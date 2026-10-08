@@ -292,7 +292,7 @@ def _gate_root() -> Path:
     return toplevel if toplevel is not None else Path.cwd()
 
 
-def _gate_config_root() -> Path:
+def _gate_config_root(explicit: str | Path | None = None) -> Path:
     """Where the gate reads `.rite/config.yaml`, `gitleaks.toml` and
     `gitleaksignore` from — the rite PROJECT, which is a different question
     from which tree to scan and was for a long time the same variable.
@@ -308,29 +308,114 @@ def _gate_config_root() -> Path:
     own repository: it tracks `.rite/gitleaksignore` and
     `.rite/review-checklist.md` for the gate and is not a rite project.
 
-    The NEAREST marker wins over `RITE_PROJECT_ROOT`, which is deliberately
-    the opposite order from `_find_project_root`, and the difference is the
-    difference between the two questions. `_find_project_root` is asking
-    which project a session BELONGS to, and the override exists there
-    because walking up from a module that is itself a rite project found the
-    inner one and gave every Worker a private claims ledger. This is asking
-    whose rules govern the tree in front of us — and for a clone that
-    carries its own `.rite/`, those are its own. Taking the override first
-    applied an outer project's suppressions to an inner repository, where
-    the fingerprints cannot match anyway, while ignoring the ones that
-    could; with commit-message findings now unconditionally blocking, that
-    is a block the Worker has no file to clear it in. The override still
-    answers when there is no marker to find, which is the sandboxed case it
-    was added for.
+    The NEAREST marker wins over `RITE_PROJECT_ROOT` **only outside the
+    scanned repository.** That ordering is deliberately the opposite of
+    `_find_project_root`'s, and the difference is the difference between the
+    two questions. `_find_project_root` is asking which project a session
+    BELONGS to, and the override exists there because walking up from a
+    module that is itself a rite project found the inner one and gave every
+    Worker a private claims ledger. This is asking whose rules govern the
+    tree in front of us, and for a clone that carries its own `.rite/` those
+    are its own: taking the override first applied an outer project's
+    suppressions to an inner repository, where the fingerprints cannot match
+    anyway, while ignoring the ones that could.
+
+    🔴 **SCRUM-76. A MARKER INSIDE THE SCANNED REPOSITORY NO LONGER
+    REDIRECTS A PROJECT RITE WAS TOLD.** `PROJECT_MARKERS` are
+    `.rite/brief.yaml` and `.rite/modules.yaml` — two ordinary files, which
+    anything able to commit to the scanned repository can create. So a
+    Worker could commit one into its own module repository, and the nearest
+    marker became that repository: the gate then read its suppression list
+    and its ruleset from `<module>/.rite/`, two files on the Worker's own
+    branch. The party the gate constrains got to choose the file that says
+    what the gate ignores. It reaches `rite publish check` and the pre-push
+    hook, which is where a Worker runs the gate against itself; delivery's
+    own run is on the host and SCRUM-62 refuses a branch that touches those
+    files at all.
+
+    So when rite has NAMED the project — `RITE_PROJECT_ROOT`, which the host
+    sets when it starts a Manager or a Worker and which no commit can change
+    — that answer wins over any marker found inside the tree being scanned.
+    A marker in an ancestor ABOVE the repository still wins, because it is
+    not on the branch being pushed and is not the Worker's to write: that is
+    SCRUM-60's `rite prepare` layout, where the project's `.rite/` sits above
+    the module repositories, and it is untouched.
+
+    ⚠ **What this costs, stated rather than discovered.** A module that is
+    genuinely its own rite project, cloned under a project rite named, now
+    reads the OUTER project's rules — the case the paragraph above defends.
+    An Owner who wants the inner project's rules says so by pointing
+    `RITE_PROJECT_ROOT` at the inner project, which is a statement by the
+    Owner rather than by whoever committed a file. That is the trade: the
+    inner repository loses a convenience it cannot be trusted to assert, and
+    the Owner keeps a way to grant it.
+
+    🔴 **AND THE HOOK CARRIES IT (`explicit`), because it has no
+    environment of its own.** The installed `pre-push` is `exec rite publish
+    pre-push`, so `RITE_PROJECT_ROOT` reached it only if it happened to be
+    exported — measured 2026-10-08, the planted marker plus a matching
+    suppression exits 2 with the variable set and **0 without it**, which is
+    the hijack on the very path the ticket is about. So the hook bakes
+    `--project-root` (`gate.hook._ROOTED`) and that answer wins over every
+    marker. A baked root that is no longer a project falls through to the
+    walk rather than being obeyed, because obeying it would drop every
+    suppression the project declared.
+
+    The override still answers when there is no marker to find, which is the
+    sandboxed case it was added for.
     """
     cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        if _is_project(parent):
-            return parent
+    if explicit is not None:
+        told = Path(explicit).expanduser().resolve()
+        if _is_project(told):
+            return told
+        # ⚠ A baked root that is no longer a project is DETECTED rather than
+        # obeyed: the project moved, or was renamed. Obeying it would drop
+        # every suppression it declared and turn each into a blocking
+        # finding with a reason already written for it. Fall through to the
+        # walk, and `_gate_root_note` says which tree answered.
+        explicit = None
     override = os.environ.get(PROJECT_ROOT_ENV)
-    if override:
-        return Path(override).expanduser().resolve()
+    named = Path(override).expanduser().resolve() if override else None
+    scanned = _gate_root() if named is not None else None
+    # ⚠ The named project overrules a marker only inside the tree it
+    # actually CONTAINS. Without that, an ambient or stale
+    # `RITE_PROJECT_ROOT` took an unrelated repository's own Owner-reviewed
+    # suppressions away from it — measured 2026-10-08, the same tree going
+    # from exit 0 to exit 2 — which is the same "rules nobody chose"
+    # failure as the hijack, pointing the other way.
+    governs = named is not None and _inside(scanned, named)
+    for parent in [cwd, *cwd.parents]:
+        if not _is_project(parent):
+            continue
+        if governs:
+            # SCRUM-76: this marker is somewhere the named project's own
+            # parties can write — the scanned repository or a directory of
+            # the Worker's workspace above it. rite was told which project
+            # governs; that stands.
+            return named
+        return parent
+    if named is not None:
+        return named
     return _gate_root()
+
+
+def _inside(path: Path, outer: Path | None) -> bool:
+    """Whether `path` is `outer` or sits beneath it.
+
+    Resolved before comparing, so a symlinked or `..`-laden path cannot read
+    as outside a tree it is actually in — the check decides whose rules the
+    publish gate trusts (SCRUM-76), and `is_relative_to` on unresolved paths
+    is a string comparison wearing a path's clothes.
+    """
+    if outer is None:
+        return False
+    try:
+        return path.resolve().is_relative_to(outer.resolve())
+    except OSError:
+        # Cannot tell. Treated as INSIDE, which keeps the named project:
+        # refusing to answer must not hand the choice back to the tree.
+        return True
 
 
 def _gate_root_note(root: Path, config_root: Path) -> str:
@@ -1532,7 +1617,26 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
         # remote is set: half a `coordination:` block does not fail, it
         # silently never elects anybody.
         coordination = project.config.coordination
-        for problem in coordination_problems(coordination):
+        # SCRUM-72 §3.3b: a local Worker needs a Manager that can author its
+        # plan and one that can independently approve it, or it never gets a
+        # subtask. Doctor is where that is said, because it parses fine.
+        from rite_ai.config.managers import is_local_engine
+
+        local_workers = tuple(
+            w.name
+            for w in (getattr(project, "workers", []) or [])
+            if is_local_engine(getattr(w, "engine", ""))
+        )
+        # SCRUM-72 §3.3b: plan state written before the move is left where it
+        # is and NOT read, because adopting it would import the forgery the
+        # move prevents. Said once rather than losing a plan silently.
+        from rite_ai.local.plan_state import stranded
+
+        left_behind = stranded(root)
+        if left_behind:
+            click.echo(f"plan state: {left_behind}")
+            problems.append(left_behind)
+        for problem in coordination_problems(coordination, local_workers=local_workers):
             click.echo(problem)
             problems.append(problem)
         # Needs the machine, not just the config: the same committed
@@ -1928,6 +2032,37 @@ def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
         raise SystemExit(4)
 
 
+def _say_held_slots(root, released_workers) -> None:
+    """After a release: which of those Workers still holds a SLOT (SCRUM-70).
+
+    🔴 **The sentence this exists to stop being the only one.** `rite release
+    --force` printed "force-released 2 claim(s)" and the next Worker still
+    could not start, because a Worker's claims and its slot against
+    `sandbox.max_concurrent_workers` are freed by different commands — only a
+    `destroy` frees the slot (`count_active_sandboxes`: "a stopped-but-not
+    destroyed sandbox counts"). The release message was true about claims and
+    read as a message about capacity.
+
+    Says nothing when nothing is held. "Could not ask yoloAI" IS said, because
+    a release that cannot tell whether the slot came with it is exactly when
+    somebody is about to wait for a Worker that will never start.
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.reporting.held_slots import held_slots
+
+    names = sorted({w for w in released_workers if w})
+    if not names:
+        return
+    slots = held_slots(root, names)
+    if isinstance(slots, str):
+        click.echo(f"  {slots}")
+        return
+    manager = current_manager()
+    for slot in slots:
+        click.echo(f"  SLOT STILL HELD — {slot.line()}")
+        click.echo(f"    {slot.how_to_free_it(manager)}")
+
+
 @cli.command()
 @click.option(
     "--worker", "-w", default=None, help="Worker name (not used with --force)"
@@ -2046,6 +2181,8 @@ def release(
                     "asked for. `--force` matches paths exactly, so it was "
                     "left alone — name it directly to release it too"
                 )
+        # SCRUM-70: the paths are free and the SLOT may not be.
+        _say_held_slots(_find_project_root(), ledger.last_released_workers)
         _warn_if_unpublished(ledger)
         return
 
@@ -2056,6 +2193,9 @@ def release(
     layer, machine = claims_channel(_find_project_root())
     released = ledger.release(worker, path_list, layer=layer, machine=machine)
     click.echo(f"released {released} claim(s) for {worker}")
+    # SCRUM-70, and it matters MORE here: this is the command somebody runs to
+    # free a Worker up, and it does not free its slot.
+    _say_held_slots(_find_project_root(), [worker])
     _warn_if_unpublished(ledger)
 
 
@@ -2310,6 +2450,121 @@ def local_approve(reviewer: str, ticket: str) -> None:
         click.echo(f"not approved: {result.why}", err=True)
         raise SystemExit(1)
     click.echo(result.note())
+
+
+@cli.group()
+def plan() -> None:
+    """Answer a plan review rite has asked you for.
+
+    \b
+    rite asks the Manager that can independently review a plan, and waits.
+    Nothing moves the ticket until you answer: the harness does not approve
+    plans itself.
+    """
+
+
+def _reviewing_manager() -> str:
+    """The Manager running this command, or exit saying who may.
+
+    ⚠ **Never an argument.** Who is answering a plan review is the directory
+    the verdict lands in — this Manager's own — so taking a name here would be
+    taking a name anyone inside any boundary could type. The Owner's door is
+    `rite local approve <reviewer> <ticket>`, outside every boundary.
+    """
+    from rite_ai.managers import current_manager
+
+    manager = current_manager()
+    if not manager:
+        click.echo(
+            "this is not a Manager's session, so there is no Manager whose "
+            "verdict this would be. A plan review is answered by the Manager "
+            "it was asked of, from inside its own boundary; as the Owner, use "
+            "`rite local approve <reviewer> <ticket>`",
+            err=True,
+        )
+        raise SystemExit(1)
+    return manager
+
+
+@plan.command("approve")
+@click.argument("ticket")
+def plan_approve(ticket: str) -> None:
+    """Approve TICKET's decomposition, as the Manager running this.
+
+    \b
+    rite asked you because you hold plan-review, you did not author the plan,
+    and you run a different model from its author — so RL-6, DD-3.5 and RL-67
+    are satisfied by you. Your answer is written into your own directory and
+    honoured at rite's next cycle boundary; the harness does not approve plans
+    itself.
+
+    \b
+    Examples:
+      rite plan approve KAN-7
+    """
+    from rite_ai.local.plan_review import APPROVE, write_verdict
+
+    root = _require_project_root()
+    manager = _reviewing_manager()
+    write_verdict(root, manager, APPROVE, ticket)
+    click.echo(
+        f"{ticket}: your approval is recorded and rite will honour it at its "
+        "next cycle boundary. It is refused if the plan has changed since you "
+        "were asked about it, and then you are asked again"
+    )
+
+
+@plan.command("reject")
+@click.argument("ticket")
+@click.option(
+    "--reason-file",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="A file you wrote holding why the plan is wrong. REQUIRED: the plan "
+    "goes back to its author with these, and RL-10 counts a return nobody "
+    "can act on as a return all the same.",
+)
+def plan_reject(ticket: str, reason_file: str) -> None:
+    """Reject TICKET's decomposition, with reasons, as the Manager running this.
+
+    \b
+    ⚠ **From a FILE, never a shell argument** (SCRUM-69's rule): you write the
+    reasons with your own file-writing tool, so no heredoc, no `$()` and no
+    `>` ever reaches the engine, and nothing in the text has to survive a
+    shell.
+
+    \b
+    Examples:
+      rite plan reject KAN-7 --reason-file /tmp/why.md
+    """
+    from rite_ai.local.plan_review import MAX_REASON_CHARS, REJECT, write_verdict
+
+    root = _require_project_root()
+    manager = _reviewing_manager()
+    try:
+        reason = Path(reason_file).read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        click.echo(f"its reasons could not be read: {e}", err=True)
+        raise SystemExit(1) from None
+    if not reason.strip():
+        click.echo(
+            f"{reason_file} is empty, and a rejection carries its reasons: the "
+            "plan goes back to its author with them",
+            err=True,
+        )
+        raise SystemExit(1)
+    if len(reason) > MAX_REASON_CHARS:
+        click.echo(
+            f"its reasons are {len(reason)} characters and the limit is "
+            f"{MAX_REASON_CHARS}; say the decisive ones",
+            err=True,
+        )
+        raise SystemExit(1)
+    write_verdict(root, manager, REJECT, ticket, reason)
+    click.echo(
+        f"{ticket}: your rejection is recorded and rite will honour it at its "
+        "next cycle boundary. The plan goes back to its author with your reasons"
+    )
 
 
 @local.command("decompose")
@@ -4653,7 +4908,9 @@ def publish_install_hook(force: bool) -> None:
     """
     from rite_ai.gate.hook import install_pre_push_hook
 
-    result = install_pre_push_hook(_gate_root(), force=force)
+    result = install_pre_push_hook(
+        _gate_root(), force=force, project_root=_gate_config_root()
+    )
     # `install_pre_push_hook` already phrases both outcomes for a human
     # ("installed <path>" / the full reason it refused) — don't re-prefix it.
     click.echo(result.message, err=not result.ok)
@@ -4775,6 +5032,27 @@ def _warn_summary(report) -> str:
 @publish.command("check")
 @click.option("--rev-range", default=None, help="Git revision range to scan")
 @click.option(
+    "--project-root",
+    "project_root",
+    default="",
+    help="The project whose gate rules to trust (SCRUM-76). What the "
+    "installed pre-push hook passes, because a committed `.rite/brief.yaml` "
+    "could otherwise move the trusted suppression list onto the branch being "
+    "pushed. Wins over any project marker found by walking up.",
+)
+@click.option(
+    "--ci-range",
+    "ci_range",
+    is_flag=True,
+    help=(
+        "Scan only what this CI run introduces, instead of every commit the "
+        "repository can reach (SCRUM-39). For the per-pull-request check: "
+        "without it, a secret on any other fetched branch fails the gate on "
+        "every unrelated pull request. Falls back to the full scan, saying "
+        "so, whenever the range cannot be established."
+    ),
+)
+@click.option(
     "--strict",
     is_flag=True,
     help=(
@@ -4784,20 +5062,40 @@ def _warn_summary(report) -> str:
         "stopped; on for CI, where an unexamined finding is worth failing."
     ),
 )
-def publish_check(rev_range: str | None, strict: bool) -> None:
+def publish_check(
+    rev_range: str | None, ci_range: bool, strict: bool, project_root: str
+) -> None:
     """Dry-run the publish gate — scan for secrets and local paths.
 
     Examples:
       rite publish check
       rite publish check --rev-range origin/main..HEAD
+      rite publish check --ci-range --strict
     """
     from rite_ai.gate import run_gate
     from rite_ai.gate.gate import _partial_lines, scanned_line
 
     root = _gate_root()
-    config_root = _gate_config_root()
+    config_root = _gate_config_root(project_root or None)
     from rite_ai.gate import suppression
     from rite_ai.gate.suppression import stale_hint
+
+    # ⚠ SCRUM-39. Refused rather than resolved in some order: `--rev-range`
+    # and `--ci-range` answer the same question, and silently preferring one
+    # would make the output a claim nobody can check from the command line.
+    if ci_range and rev_range is not None:
+        raise click.UsageError(
+            "pass --rev-range or --ci-range, not both: they would answer the "
+            "same question differently, and the output names only one."
+        )
+    if ci_range:
+        import os
+
+        from rite_ai.gate.ci_range import range_for_ci
+
+        chosen = range_for_ci(os.environ, root)
+        click.echo(f"range: {chosen.why}")
+        rev_range = chosen.rev_range
 
     report = run_gate(root, rev_range=rev_range, config_root=config_root)
 
@@ -4844,6 +5142,15 @@ def publish_check(rev_range: str | None, strict: bool) -> None:
         over = " (of what could be scanned)" if report.errors else ""
         click.echo(f"\none entry covers {n} findings{over}: {entry.fingerprint}")
 
+    if report.stale_unknown:
+        # SCRUM-39: the same line `format_report` prints, for the same
+        # reason — a range-scoped run that said nothing here would read as a
+        # clean bill of health for every entry, which it cannot give.
+        click.echo(
+            "\nstale suppressions: not checked — this run scanned a range, "
+            "and an entry pinned outside it matches nothing for a reason "
+            "that says nothing about the entry."
+        )
     if report.stale_suppressions:
         click.echo(f"\n{len(report.stale_suppressions)} stale suppression(s):")
         for fp in report.stale_suppressions:
@@ -4892,7 +5199,16 @@ def publish_check(rev_range: str | None, strict: bool) -> None:
 
 
 @publish.command("pre-push")
-def publish_pre_push() -> None:
+@click.option(
+    "--project-root",
+    "project_root",
+    default="",
+    help="The project whose gate rules to trust (SCRUM-76). What the "
+    "installed pre-push hook passes, because a committed `.rite/brief.yaml` "
+    "could otherwise move the trusted suppression list onto the branch being "
+    "pushed. Wins over any project marker found by walking up.",
+)
+def publish_pre_push(project_root: str) -> None:
     """Range-scoped scan for the `pre-push` git hook (reads stdin).
 
     Not meant to be typed by a human — this is what the installed
@@ -4907,7 +5223,7 @@ def publish_pre_push() -> None:
     from rite_ai.gate.hook import compute_pre_push_ranges
 
     root = _gate_root()
-    config_root = _gate_config_root()
+    config_root = _gate_config_root(project_root or None)
     lines = sys.stdin.read().splitlines()
 
     if not lines:
@@ -5184,10 +5500,20 @@ def _board_list_by_refinement(backend, *, ready: bool) -> None:
     shown = [r for r in rows if r.ready == ready]
     if not shown:
         click.echo("no tickets")
+    from rite_ai.tickets.statuses import is_terminal
+
     for row in shown:
         title = normalise(row.ticket.title).text
         if ready:
             click.echo(f"  {row.ticket.id}  {title}")
+        elif is_terminal(row.ticket):
+            # ⚠ Before the refinement branches, and the reason it exists:
+            # since SCRUM-73 `view.wanted` answers False for finished work,
+            # so a Done ticket lands in this bucket. Printing `[assigned]`
+            # for it (which a REFINED one gets) would be two statements about
+            # one ticket that cannot both be true.
+            status = row.ticket.status or "finished"
+            click.echo(f"  {row.ticket.id}  [{status}, not work]  {title}")
         elif row.status.refined:
             click.echo(f"  {row.ticket.id}  [assigned]  {title}")
         else:
@@ -5457,7 +5783,7 @@ def _provenance_line(provenance: dict) -> str:
 
 @refine.command("ask")
 @click.argument("ticket_id")
-@click.argument("text")
+@click.argument("text", required=False, default="")
 @click.option(
     "--message",
     "is_message",
@@ -5467,7 +5793,15 @@ def _provenance_line(provenance: dict) -> str:
     "it as a chore with exactly his words when he accepts, or, unrefined, "
     "if he does not reply in time.",
 )
-def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
+@click.option(
+    "--from-file",
+    "from_file",
+    default="",
+    help="A file in your drafts directory holding the text, written with your "
+    "file-writing tool, not the shell. The form your instructions teach: "
+    "nothing in it is expanded. It is removed once sent.",
+)
+def refine_ask(ticket_id: str, text: str, is_message: bool, from_file: str) -> None:
     """Ask the User about a ticket — the Owner Manager only (TR2).
 
     One round: at most three numbered questions under `Questions:`, and from
@@ -5480,7 +5814,9 @@ def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
 
     ⚠ This only ASKS. The round is checked and sent by your supervisor,
     outside your sandbox; whether it went, or why not, is in your next
-    instruction. **The text is `-`, on stdin (F14).**
+    instruction. **The text is a file: `--from-file <draft>` (SCRUM-69)**,
+    written with your file-writing tool (not the shell) in your drafts
+    directory; `-` with the text on stdin is still accepted (F14).
 
     An instruction he gave in chat is refined straight away too, before it
     is a ticket: `--message <message-id>`. If he accepts, rite files it as a
@@ -5489,14 +5825,12 @@ def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
     unrefined, so nothing he asked for is lost, and refinement goes on.
 
     Examples:
-      rite refine ask KAN-7 - <<'RITE_TEXT_1f2e3d'
-      Questions:
-      1. Which timeout: a file's, or the HTTP call's?
-      2. A flag, an environment variable, or a config key?
-      RITE_TEXT_1f2e3d
+      rite refine ask KAN-7 --from-file <your drafts directory>/round.md
     """
+    import shlex
+
     from rite_ai.config.managers import routing_owner
-    from rite_ai.managers import current_manager, stdin_text
+    from rite_ai.managers import current_manager
     from rite_ai.managers.routing import ticket_problem
     from rite_ai.refinement import ask as refinement_ask
     from rite_ai.refinement import protocol
@@ -5527,18 +5861,22 @@ def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
             err=True,
         )
         raise SystemExit(1)
-    try:
-        text = stdin_text.read(text)
-    except stdin_text.OnTheCommandLine:
-        click.echo(
-            stdin_text.refusal(f"rite refine ask {ticket_id}", "<your round>"),
-            err=True,
-        )
-        raise SystemExit(1)
+    # The ticket first: it is echoed into the command a refusal teaches, so
+    # it is checked before anything is read or taught.
     problem = ticket_problem(ticket_id)
     if problem:
         click.echo(f"refusing: {problem}.", err=True)
         raise SystemExit(1)
+    text, draft = _manager_text(
+        root,
+        speaking,
+        text,
+        from_file,
+        f"rite refine ask {shlex.quote(ticket_id.strip())}"
+        + (" --message" if is_message else ""),
+        "<your round>",
+        "round.md",
+    )
     if not text.strip():
         click.echo("refusing to send an empty round.", err=True)
         raise SystemExit(1)
@@ -5556,6 +5894,7 @@ def refine_ask(ticket_id: str, text: str, is_message: bool) -> None:
             click.echo(f"  - {p}", err=True)
         raise SystemExit(1)
     protocol.request(root, speaking, target, text)
+    _say_consumed(draft)
     click.echo(
         f"round queued for {target}: rite checks it against the "
         "ticket and the User's answers, then puts it in front of him and on "
@@ -8230,6 +8569,24 @@ def sandbox_start(
             "in your working directory, with what to do with your commits under "
             "Publishing. Cite the record id in your last commit message."
         )
+        # 🔴 **NO PROMPT FOR A LOCAL WORKER (SCRUM-72 §3.3).** A prompt starts
+        # a free-form turn, and a local Worker's turns are not free-form: the
+        # staged pipeline hands it ONE approved subtask at a time, with that
+        # subtask's spec slice and its Level-2 approach
+        # (`step.take_one_step`). Pasting a "work this ticket" prompt into its
+        # idle sandbox started a second, ungated worker on the same ticket —
+        # the one thing the whole pipeline exists to prevent — and it would
+        # have been doing it inside the sandbox the pipeline then places turns
+        # into.
+        if getattr(manifest, "is_local", False):
+            prompt = None
+            click.echo(
+                f"'{worker}' runs a local engine, so it is started IDLE and no "
+                "prompt is given: the staged pipeline drives it one approved "
+                "subtask at a time (spec session, plan, review, approach, "
+                "step, recomposition verify). Its Manager's supervise loop "
+                "advances it; nothing here starts a turn."
+            )
     result = start_worker(
         root,
         worker,
@@ -8250,6 +8607,12 @@ def sandbox_start(
         from rite_ai.sandbox import EXIT_NO_SLOT
 
         raise SystemExit(EXIT_NO_SLOT if result.full else 1)
+    # A new sandbox is nobody's yet: the supervisor records its Manager after
+    # this returns, when a Manager's request started it; one a person starts
+    # stays the person's (SCRUM-59).
+    from rite_ai.managers.lifecycle import forget_owner
+
+    forget_owner(root, worker)
     _clear_previous_handback(root, worker, began)
     if ticket is not None:
         _mark_started(root, config, ticket)
@@ -8434,6 +8797,32 @@ def _deliver_ticket(
         )
         click.echo(refused_for_refinement(checked.state, ticket), err=True)
         raise SystemExit(1)
+
+    # ⚠ **Nor does a ticket whose STATUS says the work is over (SCRUM-73).**
+    # REFINED is about the definition of done; this is about whether it has
+    # already been done, and the a9 run proved they are different questions:
+    # KAN-28 was Done, merged and still REFINED, and two Workers were started
+    # on it. From the SAME read as the refinement check, never a second one.
+    # Last line again, because that is what reaches the Manager that asked.
+    from rite_ai.tickets.statuses import is_terminal
+
+    if is_terminal(checked.ticket):
+        clear_delivery(worker_dir)
+        status = checked.ticket.status or "a terminal status"
+        click.echo(
+            f"not starting '{worker}': ticket {ticket} is {status}, so that "
+            "work is already finished. A `scheduled` or `ready-to-work` "
+            "label does not say otherwise: rite only ever adds those, so a "
+            "delivered ticket keeps them.",
+            err=True,
+        )
+        click.echo(
+            f"{ticket} is {status}: no Worker is started on finished work. "
+            "Take the label off, or reopen the ticket.",
+            err=True,
+        )
+        raise SystemExit(1)
+
     read_at = read_at_now()
     rendered = render_ticket(checked.ticket)
     phrases.report(root, f"ticket {checked.ticket.id}", rendered.scanned)
@@ -8582,10 +8971,15 @@ def sandbox_destroy(worker: str, force: bool) -> None:
     """
     from rite_ai.sandbox import destroy_worker
 
-    result = destroy_worker(worker, _find_project_root(), force=force)
+    root = _find_project_root()
+    result = destroy_worker(worker, root, force=force)
     click.echo(result.message)
     if not result.ok:
         raise SystemExit(1)
+    if root is not None:
+        from rite_ai.managers.lifecycle import forget_owner
+
+        forget_owner(root, worker)
 
 
 def _injected_secret_values(root: Path | None, worker: str) -> list[str]:
@@ -9311,7 +9705,7 @@ def _other_managers_briefing(root: Path, manager: str) -> str:
     if not shares_one_root(config.coordination.remote):
         return ""
     roles = list(config.coordination.manager_roles)
-    return briefing(manager, routing_owner(roles), roles)
+    return briefing(manager, routing_owner(roles), roles, root=root)
 
 
 def _ticket_work_rule(root: Path, manager: str) -> str:
@@ -9818,7 +10212,7 @@ def _drive_local_tier(root, manager: str, board, say) -> None:
     """
     from rite_ai.local.loop import drive_local_tier
 
-    tickets, why = _local_tier_tickets(board, manager)
+    tickets, why = _local_tier_tickets(root, board, manager)
     if why:
         say(f"local tier: the board could not be read this cycle — {why}")
         return
@@ -9830,7 +10224,34 @@ def _drive_local_tier(root, manager: str, board, say) -> None:
         say(f"local tier: nothing advanced this cycle ({type(e).__name__}: {e})")
 
 
-def _local_tier_tickets(board, manager: str) -> tuple[list[str], str]:
+def _local_worker_holds(root, manager: str, ticket: str) -> bool:
+    """Whether a LOCAL Worker of `manager` is recorded as started on `ticket`.
+
+    ⚠ The SAME selector the executor and the delivery request use
+    (`loop._worker_for`, through `worker_step.placement_for`'s own comment):
+    it reads what `rite sandbox start` recorded, so the Worker whose ticket is
+    driven, the Worker that executes a subtask and the Worker named in the
+    delivery request are one by construction rather than by three functions
+    agreeing.
+
+    False for anything it cannot read. A ticket rite cannot place a Worker on
+    is not one to drive through a decomposer.
+    """
+    from pathlib import Path
+
+    from rite_ai.local.loop import _worker_for
+    from rite_ai.sandbox import worker_manifest
+
+    try:
+        worker = _worker_for(Path(root), manager, ticket)
+        if not worker:
+            return False
+        return bool(getattr(worker_manifest(Path(root), worker), "is_local", False))
+    except Exception:  # noqa: BLE001 - cannot tell is not a reason to drive
+        return False
+
+
+def _local_tier_tickets(root, board, manager: str) -> tuple[list[str], str]:
     """(the REFINED tickets assigned to `manager`, or why they could not be read).
 
     `TicketFilter(assignee=...)` is the board's own question, asked of the board
@@ -9860,6 +10281,18 @@ def _local_tier_tickets(board, manager: str) -> tuple[list[str], str]:
     for ticket in found:
         ident = getattr(ticket, "id", "")
         if not ident:
+            continue
+        # 🔴 **Held by a LOCAL WORKER of this Manager (SCRUM-72 §3.3).** The
+        # driver used to be wired only for a local MANAGER, which is this
+        # ticket's root cause; keying off the Manager's engine there and off
+        # nothing here would now drive a Claude Manager's own Claude Workers
+        # through a decomposer. The pipeline is for a local Worker's ticket
+        # and for no other, so the filter is the Worker.
+        #
+        # Silent, like the refinement filter below it and for the same
+        # reason: a Claude Worker's ticket is not a fault, and a line per
+        # ticket per cycle would bury the local tier's own notes.
+        if not _local_worker_holds(root, manager, ident):
             continue
         # `Status.refined` rather than comparing the state here: the predicate
         # owns what "refined" means, and there are five states (NOT REFINED,
@@ -9935,6 +10368,81 @@ def _refuse_a_shared_board(root: Path, manager: str) -> None:
         err=True,
     )
     raise SystemExit(1)
+
+
+def _recover_and_record(root: Path, manager: str, say, recorder, recover=None):
+    """Recover stalled Workers, and record what recovery DID (SCRUM-71).
+
+    ⚠ **The Manager cannot record this itself**, which is why the supervisor
+    does. A Worker restarted in place, or a ticket re-staged, happens on the
+    host while the Manager is mid-session; the Manager sees only the result,
+    and in the a9 run the restart of an already-finished Worker reached the
+    journal from nowhere at all.
+
+    `recover_stalled_workers` already returns its actions "for the caller to
+    say/record" — this is that caller. Recording is per ACTION rather than
+    per cycle, because a stall that lasts an hour is reported every cycle and
+    one entry per cycle would bury the other failures under it.
+    """
+    from rite_ai.managers import recording
+    from rite_ai.managers.recovery import REPORT, RESTAGE, recover_stalled_workers
+
+    # ⚠ CALLED BY NAME here rather than injected from the call site, which is
+    # what `test_no_dead_wiring` scans for: passed in as a bare name,
+    # `recover_stalled_workers` read as a function nothing calls, and that
+    # test exists because nine such functions once shipped inert. `recover`
+    # stays injectable for a test that drives the recording without a
+    # watchdog, yoloAI or a claims ledger.
+    actions = (
+        recover_stalled_workers(root, manager, say)
+        if recover is None
+        else recover(root, manager, say)
+    ) or []
+    for action in actions:
+        where = f"worker {action.worker} ticket {action.ticket or 'unrecorded'}"
+        if action.kind == REPORT:
+            recorder(
+                recording.Event(
+                    recording.RECOVERY_EXHAUSTED,
+                    action.worker,
+                    f"{action.worker} stayed stalled and ran out of recovery "
+                    f"budget; it was left STALLED: {action.reason}",
+                    "a stalled Worker is recovered, or somebody is told it "
+                    "could not be",
+                    anchor=where,
+                )
+            )
+            continue
+        tried = (
+            "its ticket was re-staged"
+            if action.kind == RESTAGE
+            else "it was restarted in place"
+        )
+        # ⚠ **WHAT HAPPENED, not what was planned.** `attempted` is False
+        # when the restart or re-stage failed, and an entry reading "it was
+        # restarted in place" for a restart that did not happen is a journal
+        # stating the opposite of the truth — worse than no journal, which is
+        # this ticket's own subject. Found by review, 2026-10-07.
+        if action.attempted is False:
+            observed = (
+                f"{action.worker} stalled and rite tried to recover it — "
+                f"{tried} — and that FAILED: {action.outcome or 'no reason given'}"
+            )
+        else:
+            observed = f"{action.worker} stalled and {tried}" + (
+                f": {action.reason}" if action.reason else ""
+            )
+        recorder(
+            recording.Event(
+                recording.RECOVERY_ACTED,
+                action.worker,
+                observed,
+                "a Worker runs its ticket to a delivery without the host "
+                "having to intervene",
+                anchor=where,
+            )
+        )
+    return actions
 
 
 def _start_a_manager(
@@ -10054,11 +10562,27 @@ def _start_a_manager(
     # needs somebody to look at a server. Before this, both arrived as
     # "stopped on 'unknown' after 0 session(s) — this is a fault, not a
     # completion", which was neither true nor actionable for either.
+    from rite_ai.managers import recording
     from rite_ai.managers.broker import for_project
     from rite_ai.managers.chores import create_asked_for
     from rite_ai.managers.chores import instructions as chore_instructions
-    from rite_ai.managers.recovery import recover_stalled_workers
     from rite_ai.refinement.protocol import step as refinement_step
+
+    # 🔴 SCRUM-71. The journal's recorder for this run, or a no-op when the
+    # flag is off. Composed HERE, where `record_issues` is, and handed to
+    # the boundary steps that know about a failure — rather than inside
+    # `supervise`, which would need the flag threaded through it for the
+    # one thing that reads it.
+    # ⚠ **`say` IS NOT OPTIONAL HERE.** Without it `_complain` is a no-op, so
+    # a read-only journal, a refused event class or any error recording one
+    # produced no entry AND no line anywhere — an empty journal reading as a
+    # clean bill of health, which is the exact defect this ticket exists to
+    # fix. The tests only saw the complaints because they inject a `say`, so
+    # the suite was green while production was mute. Found by review,
+    # 2026-10-07.
+    recorder = recording.recorder_for(
+        root, role.name, enabled=record_issues, say=lambda line: click.echo(line)
+    )
 
     board, board_state, board_problem, composed_under = _board_for_manager(root)
     if board_state == "unreachable":
@@ -10181,6 +10705,16 @@ def _start_a_manager(
     claude_signed_in = _claude_login(root, role)
     cursor_signed_in = _cursor_login(root, role)
     listener = _slack_listener(root, role.name)
+    if listener is not None:
+        # 🔴 SCRUM-71: a failed post and a misrouted answer reach the journal.
+        #
+        # ⚠ SET HERE rather than passed to `_slack_listener`, whose signature
+        # is deliberately unchanged. Three tests replace that function with a
+        # positional-only stand-in, and a new keyword argument broke all
+        # three — including the one asserting the mailbox moves before the
+        # Manager runs, which then never reached `supervise` at all. A field
+        # the caller fills needs nothing of the constructor.
+        listener.record = recorder
     waiting = _waiting_for(root, role.name)
     outcome = None
     try:
@@ -10209,16 +10743,22 @@ def _start_a_manager(
             # (preserving its unapplied work), or re-stage its ticket when its
             # sandbox is gone — at the cycle boundary, off the two-second poll.
             # Sits beside the local tier below, driving neither.
-            recover=lambda say: recover_stalled_workers(root, role.name, say),
-            # L-6 (Robert, 2026-10-03): the local tier runs hands-off, driven by
-            # this same cycle. LOCAL ENGINES ONLY, like `engine_ready` above —
-            # a Claude Manager has no local pipeline, and None means "nothing to
-            # drive" rather than "a driver that does nothing".
-            local_tier=(
-                (lambda say: _drive_local_tier(root, role.name, board, say))
-                if role.is_local
-                else None
-            ),
+            # SCRUM-71: a recovery or a restart is one of the recordable
+            # events, so it goes through the recorder rather than past it.
+            recorder=recorder,
+            recover=lambda say: _recover_and_record(root, role.name, say, recorder),
+            # L-6 (Robert, 2026-10-03): the local tier runs hands-off, driven
+            # by this same cycle.
+            #
+            # 🔴 **`if role.is_local` WAS HERE, and it is SCRUM-72's root
+            # cause.** The local tier ran only under a local Manager, so in the
+            # headline mixed fleet — a Claude `lead` with a GPU Worker — no
+            # Manager drove the Worker and it sat idle holding its claim. The
+            # driver keys off WORKERS now, whatever this Manager's engine
+            # (§3.3): `_local_tier_tickets` filters to the tickets held by a
+            # LOCAL Worker of this Manager, so a Claude Manager's own Claude
+            # Workers are never decomposed and its GPU Worker is driven.
+            local_tier=lambda say: _drive_local_tier(root, role.name, board, say),
             # TR2: the rounds this Manager asks for, and what the User's
             # replies to them do, decided outside the boundary on this board.
             # Only the Manager that refines does anything (TRQ7).
@@ -10510,6 +11050,107 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         )
 
 
+def _manager_text(
+    root: Path,
+    manager: str,
+    text: str,
+    from_file: str,
+    command: str,
+    placeholder: str,
+    name: str,
+) -> tuple:
+    """The text a Manager's `reply`, `ask`, `route` or `refine ask` sends, and
+    the draft (`stdin_text.Draft`, or None for stdin) to consume once it is
+    queued (SCRUM-69).
+
+    Exactly one source: `--from-file <draft>` (what is taught) or `-` with the
+    text on stdin (still accepted). Text on the command line is refused, as
+    before, and so are both sources, or neither. Exits with the reason.
+
+    What a refusal teaches depends on who ran it (`_teach`): a Manager is
+    taught the file form, a person at the host the heredoc they could
+    always use, word for word as before."""
+    from rite_ai.managers import current_manager, stdin_text
+
+    if from_file and text and text != stdin_text.STDIN:
+        # Command-line text is the worse problem: whatever it held has
+        # already run, and that is what must be said.
+        click.echo(
+            _command_line_refusal(root, manager, command, placeholder, name),
+            err=True,
+        )
+        raise SystemExit(1)
+    if from_file and text:
+        click.echo(
+            "refusing: give the text in --from-file or on stdin with `-`, not "
+            "both. Nothing was sent.",
+            err=True,
+        )
+        raise SystemExit(1)
+    if from_file:
+        try:
+            text, draft = stdin_text.read_draft(root, manager, from_file)
+        except stdin_text.DraftRefused as e:
+            click.echo(f"refusing: {e}. Nothing was sent.", err=True)
+            raise SystemExit(1) from None
+        # The draft stays LOCKED until it is consumed; a refusal after this
+        # point releases it with the command, leaving it where it was written.
+        ctx = click.get_current_context(silent=True)
+        if ctx is not None:
+            ctx.call_on_close(draft.close)
+        return text, draft
+    if not text:
+        click.echo(
+            "refusing: no text. "
+            + (
+                "Put it in a file and name it:\n"
+                if current_manager()
+                else "Send it on stdin through a quoted heredoc:\n"
+            )
+            + _teach(root, manager, command, name, placeholder),
+            err=True,
+        )
+        raise SystemExit(1)
+    try:
+        return stdin_text.read(text), None
+    except stdin_text.OnTheCommandLine:
+        click.echo(
+            _command_line_refusal(root, manager, command, placeholder, name),
+            err=True,
+        )
+        raise SystemExit(1) from None
+
+
+def _command_line_refusal(
+    root: Path, manager: str, command: str, placeholder: str, name: str
+) -> str:
+    from rite_ai.managers import current_manager, stdin_text
+
+    if current_manager():
+        return stdin_text.refusal(command, placeholder, root, manager, name)
+    return stdin_text.refusal(command, placeholder)
+
+
+def _teach(root: Path, manager: str, command: str, name: str, placeholder: str) -> str:
+    """How to send a text, said to whoever ran the command: a Manager (its
+    process has `RITE_MANAGER`) writes a draft and names it (SCRUM-69); a
+    person at the host gets the heredoc, which works in their own shell and
+    names no Manager's directory they have no reason to know."""
+    from rite_ai.managers import current_manager, stdin_text
+
+    if current_manager():
+        return stdin_text.file_form(root, manager, command, name, placeholder)
+    return stdin_text.heredoc(f"{command} -", placeholder)
+
+
+def _say_consumed(draft) -> None:
+    from rite_ai.managers import stdin_text
+
+    problem = stdin_text.consume_draft(draft)
+    if problem:
+        click.echo(problem, err=True)
+
+
 @cli.command("route")
 @click.option(
     "--ticket",
@@ -10521,8 +11162,16 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
     "first with `rite chore <message-id>`.",
 )
 @click.argument("manager_name")
-@click.argument("text")
-def route(manager_name: str, text: str, ticket: str) -> None:
+@click.argument("text", required=False, default="")
+@click.option(
+    "--from-file",
+    "from_file",
+    default="",
+    help="A file in your drafts directory holding the text, written with your "
+    "file-writing tool, not the shell. The form your instructions teach: "
+    "nothing in it is expanded. It is removed once sent.",
+)
+def route(manager_name: str, text: str, ticket: str, from_file: str) -> None:
     """Hand work to another Manager in this root — the Owner only.
 
     One project root may run several Managers; the one holding `route` is the
@@ -10535,16 +11184,18 @@ def route(manager_name: str, text: str, ticket: str) -> None:
     and the Owner's supervisor delivers it — and delivers only for the
     Manager holding `route`, whatever the request says.
 
-    ⚠ **TEXT IS `-`, AND THE TEXT COMES ON STDIN (F14)**, as for `rite
-    reply`. Routed work quotes tickets more than anything else does.
+    ⚠ **THE TEXT IS A FILE: `--from-file <draft>` (SCRUM-69)**, as for
+    `rite reply`, written with your file-writing tool (not the shell) in your
+    drafts directory, never on the command line (F14). Routed work quotes
+    tickets more than anything else does. `-` with the text on stdin is still accepted.
 
     Examples:
-      rite route --ticket RT-12 helper - <<'RITE_TEXT_1f2e3d'
-      run the test suite on branch fix-12 and report
-      RITE_TEXT_1f2e3d
+      rite route --ticket RT-12 helper --from-file <your drafts directory>/route.md
     """
+    import shlex
+
     from rite_ai.config.managers import routing_owner
-    from rite_ai.managers import current_manager, stdin_text
+    from rite_ai.managers import current_manager
     from rite_ai.managers.routing import request
 
     root = _require_project_root()
@@ -10582,17 +11233,17 @@ def route(manager_name: str, text: str, ticket: str) -> None:
             err=True,
         )
         raise SystemExit(1)
-    try:
-        text = stdin_text.read(text)
-    except stdin_text.OnTheCommandLine:
-        click.echo(
-            stdin_text.refusal(
-                f"rite route --ticket {ticket.strip() or '<ID>'} {manager_name}",
-                "<what to do>",
-            ),
-            err=True,
-        )
-        raise SystemExit(1)
+    text, draft = _manager_text(
+        root,
+        speaking,
+        text,
+        from_file,
+        "rite route --ticket "
+        + (shlex.quote(ticket.strip()) if ticket.strip() else "<ID>")
+        + f" {manager_name}",
+        "<what to do, and what to report back>",
+        "route.md",
+    )
     if not text.strip():
         click.echo("refusing to route an empty message.", err=True)
         raise SystemExit(1)
@@ -10602,17 +11253,105 @@ def route(manager_name: str, text: str, ticket: str) -> None:
     if problem:
         click.echo(
             f"refusing: {problem}. Every route names the ticket the work is "
-            "for: `rite route --ticket <ID> <manager> -`, the text on stdin. "
+            "for: `rite route --ticket <ID> <manager> --from-file <draft>`. "
             "If the User asked for it in a message, make it a ticket first "
             "with `rite chore <message-id>`.",
             err=True,
         )
         raise SystemExit(1)
     request(root, speaking, manager_name, text, ticket.strip())
+    _say_consumed(draft)
     click.echo(
         f"route queued for ticket {ticket.strip()}: rite checks the ticket on "
         f"the board, and {manager_name!r} receives it at its next turn, marked "
         f"as routed by {speaking!r}. A refusal is in your next instruction."
+    )
+
+
+@cli.command("request")
+@click.argument(
+    "op",
+    type=click.Choice(
+        ["start", "deliver", "stop", "destroy", "restart", "status", "gate"]
+    ),
+)
+@click.argument("worker")
+@click.option(
+    "--ticket",
+    default="",
+    help="The ticket: required for start and deliver; for gate, the ticket "
+    "branch to gate (default: the one the Worker was started on).",
+)
+def request_cmd(op: str, worker: str, ticket: str) -> None:
+    """Ask rite to start, deliver, stop, destroy, restart, report on or gate a
+    Worker — a Manager only (SCRUM-59).
+
+    A Manager's sandbox cannot reach a Worker's, so it asks, and its
+    supervisor does it on the host when the current turn ends; the outcome is
+    in the Manager's next instruction. rite writes the request itself, so
+    nothing reaches the shell: this replaces `echo '{…}' > …/$(date +%s).json`.
+
+    ⚠ This only ASKS, and only for a Worker rite started for this Manager. A
+    destroy is never forced: a sandbox holding unpushed work or an unanswered
+    question is refused.
+
+    Examples:
+      rite request start alpha --ticket RT-12
+      rite request status alpha
+      rite request gate alpha --ticket RT-12
+    """
+    import json
+
+    from rite_ai.managers import current_manager, lifecycle
+    from rite_ai.names import name_problem
+    from rite_ai.state import write_atomic
+
+    root = _require_project_root()
+    speaking = current_manager()
+    if not speaking:
+        click.echo(
+            "refusing: `rite request` is how a Manager asks rite to act on a "
+            f"Worker. From your own shell, run `rite sandbox {op} {worker}` "
+            "(or `rite deliver`) directly.",
+            err=True,
+        )
+        raise SystemExit(1)
+    problem = name_problem(worker, kind="worker name")
+    if problem:
+        click.echo(f"refusing: {problem}.", err=True)
+        raise SystemExit(1)
+    if not (root / "workers" / worker / "worker.yml").is_file():
+        click.echo(
+            f"refusing: there is no Worker called {worker!r} in this project; "
+            "`rite status` lists the ones that exist.",
+            err=True,
+        )
+        raise SystemExit(1)
+    ticket = ticket.strip()
+    if op in ("start", "deliver") and not ticket:
+        click.echo(f"refusing: `rite request {op}` needs --ticket <ID>.", err=True)
+        raise SystemExit(1)
+    if ticket:
+        problem = lifecycle.ticket_problem(ticket)
+        if problem:
+            click.echo(f"refusing: {problem}.", err=True)
+            raise SystemExit(1)
+    if op in ("start", "deliver"):
+        # The two request kinds that already existed, in the shapes their
+        # honour steps read (`broker`, `publishing.requests`): only how the
+        # file gets written changed.
+        if op == "start":
+            from rite_ai.managers.broker import requests_dir
+        else:
+            from rite_ai.publishing.requests import requests_dir
+        path = requests_dir(root, speaking) / lifecycle.request_name()
+        write_atomic(path, json.dumps({"worker": worker, "ticket": ticket}) + "\n")
+    else:
+        lifecycle.request(root, speaking, op, worker, ticket)
+    click.echo(
+        f"asked: {op} {worker}" + (f" for {ticket}" if ticket else "") + ". rite "
+        "does it when this turn ends, and your next instruction says what "
+        "happened. Do not wait for it during this turn."
     )
 
 
@@ -10662,14 +11401,30 @@ def chore(message_ids: tuple[str, ...]) -> None:
 
 
 @cli.command("reply")
-@click.argument("text")
+@click.argument("text", required=False, default="")
 @click.option(
     "--manager",
     default="",
     help="Which Manager is speaking. Inside a Manager's own session it "
     "defaults to that Manager and can be left out.",
 )
-def reply(text: str, manager: str) -> None:
+@click.option(
+    "--message",
+    "message_id",
+    default="",
+    help="The message this answers, by the id in its header: `[Owner's DM · "
+    "… · message 1759000000.123456]`. The answer goes in that message's "
+    "thread, where it was asked. Without it, nothing changes.",
+)
+@click.option(
+    "--from-file",
+    "from_file",
+    default="",
+    help="A file in your drafts directory holding the text, written with your "
+    "file-writing tool, not the shell. The form your instructions teach: "
+    "nothing in it is expanded. It is removed once sent.",
+)
+def reply(text: str, manager: str, message_id: str, from_file: str) -> None:
     """Say something to the User, from a Manager — read with `rite replies`.
 
     ⚠ **The Manager's half of what `rite message` did for the User (C5).**
@@ -10686,19 +11441,31 @@ def reply(text: str, manager: str) -> None:
     goes with `rite ask`. Anything that reads as one is refused here and
     redirected, erring toward refusing too much (`reads_as_action`).
 
-    ⚠ **TEXT IS `-`, AND THE TEXT COMES ON STDIN (F14).** Text on the
-    command line is refused: in double quotes the shell runs whatever is in
-    backticks first, and a Manager's text often quotes a ticket someone else
-    wrote (`managers/stdin_text`).
+    ⚠ **ANSWER WHERE YOU WERE ASKED: `--message <id>` (SCRUM-21).** When
+    this answers a message, pass the id from that message's header and the
+    answer goes in its thread. Without it the answer goes to the reading
+    pile, which is right for a report and wrong for an answer: the Owner
+    asked in their DM and found the answer in a notes thread they had been
+    told nothing in needs them.
+
+    ⚠ **THE TEXT IS A FILE: `--from-file <draft>` (SCRUM-69).** Write it
+    with your file-writing tool, not the shell, in your drafts directory
+    (your instructions name it), and rite sends it exactly as written. Text
+    on the command line is refused: in double quotes the shell runs
+    whatever is in backticks first, and a Manager's text often quotes a
+    ticket someone else wrote (`managers/stdin_text`). `-` with the text on
+    stdin is still accepted.
 
     Examples:
-      rite reply --manager planner - <<'RITE_TEXT_1f2e3d'
-      tickets 12 and 13 merged; CI green on a1b2c3d
-      RITE_TEXT_1f2e3d
+      rite reply --manager planner --from-file <your drafts directory>/reply.md
+      rite reply --manager lead --message 1759000000.123456 --from-file a.md
     """
-    from rite_ai.managers import current_manager, stdin_text
+    import shlex
+
+    from rite_ai.managers import current_manager
     from rite_ai.managers.mailbox import OUTBOX, REPLY, full_warning, prune, send
     from rite_ai.managers.reads_as_action import sign_of_action
+    from rite_ai.managers.slack import MESSAGE_ID
 
     root = _require_project_root()
     speaking = (manager or "").strip() or current_manager()
@@ -10721,14 +11488,15 @@ def reply(text: str, manager: str) -> None:
         known = ", ".join(sorted(r.name for r in roles)) or "none declared"
         click.echo(f"no Manager named {speaking!r} in this project — {known}", err=True)
         raise SystemExit(1)
-    try:
-        text = stdin_text.read(text)
-    except stdin_text.OnTheCommandLine:
-        click.echo(
-            stdin_text.refusal(f"rite reply --manager {speaking}", "<your message>"),
-            err=True,
-        )
-        raise SystemExit(1)
+    text, draft = _manager_text(
+        root,
+        speaking,
+        text,
+        from_file,
+        f"rite reply --manager {speaking}",
+        "<your message>",
+        "reply.md",
+    )
     if not text.strip():
         # Refused for the reason `rite message` refuses: `read` skips blank
         # text, so the file would be written and never shown.
@@ -10741,17 +11509,46 @@ def reply(text: str, manager: str) -> None:
         click.echo(
             f"refusing to send this as a reply: it contains {sign}, so it may "
             "ask the User for something, and a reply is filed for reading, "
-            "where nobody is asked to answer. Ask it instead:\n"
-            + stdin_text.heredoc(f"rite ask --manager {speaking} -", "<the same text>")
-            + "\n"
-            "If it asks for nothing, say it again without that. When unsure, "
+            "where nobody is asked to answer. Ask it instead"
+            + (
+                f", with the same file:\n  rite ask --manager {speaking} "
+                f"--from-file {shlex.quote(str(draft.path))}\n"
+                if draft is not None
+                else ":\n"
+                + _teach(
+                    root,
+                    speaking,
+                    f"rite ask --manager {speaking}",
+                    "ask.md",
+                    "<the same text>",
+                )
+                + "\n"
+            )
+            + "If it asks for nothing, say it again without that. When unsure, "
             "it is a question.",
             err=True,
         )
         raise SystemExit(1)
 
+    answers = (message_id or "").strip()
+    if answers and not MESSAGE_ID.match(answers):
+        # ⚠ Refused HERE, where the Manager reads the refusal and can fix
+        # it, rather than accepted and dropped by the relay. The value ends
+        # up as a `thread_ts` on a Slack call; an id of the wrong shape is a
+        # reply posted into nowhere, which is the silence SCRUM-21 is about.
+        click.echo(
+            f"refusing to reply: --message {answers!r} is not the shape of a "
+            "message id. It is the id in the message's own header — "
+            "`[Owner's DM · … · message 1759000000.123456]` — not a ticket, "
+            "a question id or a mailbox filename. Leave it out to send this "
+            "to the reading pile instead.",
+            err=True,
+        )
+        raise SystemExit(1)
+
     try:
-        send(root, speaking, OUTBOX, text, kind=REPLY)
+        send(root, speaking, OUTBOX, text, kind=REPLY, answers=answers)
+        _say_consumed(draft)
     except OSError as e:
         # ⚠ Said, not raised. `rite message` has caught this since v0.6.0
         # and this did not, so the one channel a Manager has to the person
@@ -10790,7 +11587,7 @@ def reply(text: str, manager: str) -> None:
 
 
 @cli.command("ask")
-@click.argument("question")
+@click.argument("question", required=False, default="")
 @click.option(
     "--defer",
     is_flag=True,
@@ -10802,9 +11599,10 @@ def reply(text: str, manager: str) -> None:
     "--while",
     "meanwhile",
     default="",
-    help="`-`: what you will do meanwhile is the FIRST LINE of stdin, the "
-    "question the rest. Required with --defer: if there is nothing, the "
-    "question blocks you and must be asked now. Never text on the command line.",
+    help="`-`: what you will do meanwhile is the FIRST LINE of the text (the "
+    "draft, or stdin), the question the rest. Required with --defer: if "
+    "there is nothing, the question blocks you and must be asked now. Never "
+    "text on the command line.",
 )
 @click.option(
     "--manager",
@@ -10812,7 +11610,17 @@ def reply(text: str, manager: str) -> None:
     help="Which Manager is asking. Inside a Manager's own session it "
     "defaults to that Manager and can be left out.",
 )
-def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
+@click.option(
+    "--from-file",
+    "from_file",
+    default="",
+    help="A file in your drafts directory holding the text, written with your "
+    "file-writing tool, not the shell. The form your instructions teach: "
+    "nothing in it is expanded. It is removed once sent.",
+)
+def ask(
+    question: str, defer: bool, meanwhile: str, manager: str, from_file: str
+) -> None:
     """Ask the User a question, now or at their next check-in.
 
     ⚠ **ASK NOW UNLESS THE QUESTION IS CLEARLY DEFERRABLE; IF YOU ARE UNSURE
@@ -10822,19 +11630,15 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
     this asks now, exactly as `rite reply` does, and every case where a
     deferral cannot be honoured safely asks now too and says why.
 
-    ⚠ **QUESTION IS `-`, AND THE QUESTION COMES ON STDIN (F14)**, as for
-    `rite reply`. So does `--while` (SCRUM-33): `--while -` makes stdin's
+    ⚠ **THE QUESTION IS A FILE: `--from-file <draft>` (SCRUM-69)**, as for
+    `rite reply`. So is `--while` (SCRUM-33): `--while -` makes the text's
     first line the meanwhile and the rest the question, and text given to
-    `--while` itself is refused.
+    `--while` itself is refused. `-` with the text on stdin is still
+    accepted.
 
     Examples:
-      rite ask --manager planner - <<'RITE_TEXT_1f2e3d'
-      which of the two schemas should ticket 12 use?
-      RITE_TEXT_1f2e3d
-      rite ask --manager planner --defer --while - - <<'RITE_TEXT_1f2e3d'
-      tickets 14 and 15
-      rename the CLI flag to --out?
-      RITE_TEXT_1f2e3d
+      rite ask --manager planner --from-file <your drafts directory>/ask.md
+      rite ask --manager planner --defer --while - --from-file <…>/ask.md
     """
     from rite_ai.managers import checkins, current_manager, stdin_text
     from rite_ai.managers.mailbox import OUTBOX, QUESTION, full_warning, prune, send
@@ -10866,27 +11670,50 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
     # the question, BEFORE stdin is read and before anything is queued; the
     # shell has already run whatever it ran, but nothing it printed is sent.
     if meanwhile and meanwhile != stdin_text.STDIN:
-        click.echo(
-            "refusing: --while takes `-`, and what you will do meanwhile is "
-            "the first line of stdin. In double quotes on the command line the "
-            "shell runs anything in backticks or $( ) BEFORE rite sees it — "
-            "and if yours had any, it already ran. Send both through one "
-            "quoted heredoc, where nothing is expanded:\n"
-            + stdin_text.heredoc(
-                f"rite ask --manager {asking} --defer --while - -",
-                "<what you will do meanwhile, on this one line>\n<your question>",
-            ),
-            err=True,
+        expanded = (
+            "In double quotes on the command line the shell runs anything in "
+            "backticks or $( ) BEFORE rite sees it — and if yours had any, it "
+            "already ran. "
         )
+        if current_manager():
+            told = (
+                "refusing: --while takes `-`, and what you will do meanwhile is "
+                "the first line of your text. "
+                + expanded
+                + "Put both in one file, the meanwhile on its first line:\n"
+                + stdin_text.file_form(
+                    root,
+                    asking,
+                    f"rite ask --manager {asking} --defer --while -",
+                    "ask.md",
+                    "<what you will do meanwhile, on the first line>, then "
+                    "<your question>",
+                )
+            )
+        else:
+            # A person at the host: word for word what it said before SCRUM-69.
+            told = (
+                "refusing: --while takes `-`, and what you will do meanwhile is "
+                "the first line of stdin. "
+                + expanded
+                + "Send both through one quoted heredoc, where nothing is "
+                "expanded:\n"
+                + stdin_text.heredoc(
+                    f"rite ask --manager {asking} --defer --while - -",
+                    "<what you will do meanwhile, on this one line>\n<your question>",
+                )
+            )
+        click.echo(told, err=True)
         raise SystemExit(1)
-    try:
-        question = stdin_text.read(question)
-    except stdin_text.OnTheCommandLine:
-        click.echo(
-            stdin_text.refusal(f"rite ask --manager {asking}", "<your question>"),
-            err=True,
-        )
-        raise SystemExit(1)
+    question, draft = _manager_text(
+        root,
+        asking,
+        question,
+        from_file,
+        f"rite ask --manager {asking}",
+        "<your question>",
+        "ask.md",
+    )
     if meanwhile:
         meanwhile, question = stdin_text.split_first_line(question)
     if not question.strip():
@@ -10901,13 +11728,16 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
             f"refusing to defer: no --while, or an empty first line. If you "
             f"cannot say what you will "
             f"do meanwhile, {checkins.REFUSED_WITHOUT_WHILE}:\n"
-            + stdin_text.heredoc(f"rite ask --manager {asking} -", "<question>"),
+            + _teach(
+                root, asking, f"rite ask --manager {asking}", "ask.md", "<question>"
+            ),
             err=True,
         )
         raise SystemExit(1)
 
     if not defer:
         send(root, asking, OUTBOX, question, kind=QUESTION)
+        _say_consumed(draft)
         if meanwhile.strip():
             # A --while with no --defer is most likely a forgotten --defer.
             # Asking now is the safe reading, and it is said.
@@ -10926,6 +11756,10 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
             # NEXT window would make them wait hours for something they are
             # here to answer.
             q = checkins.defer(root, asking, question, meanwhile)
+            # Consumed the moment it is queued, BEFORE asking: if `ask_now`
+            # fails, the question is deferred already, and a retry with the
+            # same draft would queue it twice.
+            _say_consumed(draft)
             checkins.ask_now(
                 root,
                 asking,
@@ -10943,6 +11777,10 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
             # ⚠ Nowhere to wait: a question deferred to a check-in that never
             # comes is a question nobody is asked. Asked now, with the reason.
             q = checkins.defer(root, asking, question, meanwhile)
+            # Consumed the moment it is queued, BEFORE asking: if `ask_now`
+            # fails, the question is deferred already, and a retry with the
+            # same draft would queue it twice.
+            _say_consumed(draft)
             checkins.ask_now(
                 root,
                 asking,
@@ -10957,12 +11795,14 @@ def ask(question: str, defer: bool, meanwhile: str, manager: str) -> None:
             )
         else:
             q = checkins.defer(root, asking, question, meanwhile)
+            _say_consumed(draft)
             click.echo(
                 f"deferred as {q.id} — {state.line}. At the check-in you "
                 "re-read it first and withdraw it if you have answered it "
                 "yourself; otherwise it is asked. It is asked at once if your "
                 "loop goes idle first."
             )
+    # Each branch above consumed the draft the moment its question was queued.
     warning = full_warning(prune(root, asking, OUTBOX), asking)
     if warning:
         click.echo(warning, err=True)
@@ -11135,7 +11975,7 @@ def message(manager_name: str, text: str) -> None:
         # never learn their message went nowhere.
         click.echo("refusing to send an empty message.", err=True)
         raise SystemExit(1)
-    from rite_ai.managers import current_manager
+    from rite_ai.managers import current_manager, stdin_text
 
     speaking_as = current_manager()
     if speaking_as:
@@ -11149,9 +11989,15 @@ def message(manager_name: str, text: str) -> None:
         click.echo(
             f"refusing: this is Manager {speaking_as!r}, and a Manager does "
             f"not write a Manager's inbox — a message there is delivered as "
-            f"the Owner's instruction. To answer the person, use `rite reply "
-            f"--manager {speaking_as} -` with the text on stdin, or `rite ask` "
-            "for a question.",
+            "the Owner's instruction. To answer the person, use `rite reply`, "
+            "or `rite ask` for a question:\n"
+            + stdin_text.file_form(
+                root,
+                speaking_as,
+                f"rite reply --manager {speaking_as}",
+                "reply.md",
+                "<your message>",
+            ),
             err=True,
         )
         raise SystemExit(1)

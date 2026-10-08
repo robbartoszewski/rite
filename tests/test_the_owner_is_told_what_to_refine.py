@@ -37,7 +37,8 @@ def test_only_the_refiner_is_told(project, key):
     assert ri.brief(project, "helper", board, config) == ""
     told = ri.instructions(project, "lead", config)
     assert "## Refining work with the User" in told
-    assert "refine ask <ID> - <<'" in told and "--message <message-id> -" in told
+    assert "refine ask <ID> --from-file " in told
+    assert "refine ask --message <message-id> --from-file" in told
     assert "`ok`, `yes`, `accept`, `lgtm`, `proceed`" in told
     assert "60 minutes" in told
 

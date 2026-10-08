@@ -388,6 +388,13 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
         mod_path = entry.get("path", "")
         if not mod_path:
             return ParseError(str(path), f"module '{name}' requires 'path'")
+        problem = module_path_problem(mod_path)
+        if problem:
+            return ParseError(str(path), f"module '{name}': 'path' {problem}")
+        branch = entry.get("branch", "main")
+        problem = branch_problem(branch)
+        if problem:
+            return ParseError(str(path), f"module '{name}': 'branch' {problem}")
 
         commands = _parse_recorded_commands(entry.get("commands"))
         if isinstance(commands, str):
@@ -402,13 +409,80 @@ def parse_modules(path: Path) -> list[Module] | ParseError:
                 name=name,
                 path=mod_path,
                 url=expand_home(entry.get("url")),
-                branch=entry.get("branch", "main"),
+                branch=branch,
                 description=entry.get("description", ""),
                 commands=commands,
                 publish=publish,
             )
         )
     return modules
+
+
+_BRANCH_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./#+@"
+)
+
+
+def branch_problem(branch) -> str:
+    """Why `branch` cannot be a module's branch; "" when it can.
+
+    🔴 **SCRUM-59 review, measured.** `modules.yaml` is in the project tree,
+    which a Manager can write, and a module's branch reaches `git log` and
+    gitleaks' `--log-opts` on the HOST, split on whitespace: a branch holding
+    a git option made git write a file of the Manager's choosing outside
+    every boundary, through one `rite request gate`. So a branch is checked
+    for what a branch name is made of, positively, ASCII only: a letter or
+    digit first, no whitespace, no `..`, no `@{`, not ending in `/`, `.` or
+    `.lock` (git's own refusals, `git check-ref-format`)."""
+    if not isinstance(branch, str) or not branch:
+        return "must be a branch name"
+    if branch[0] not in _BRANCH_CHARS or branch[0] in "-_./":
+        return f"{branch!r} must start with a letter or a digit"
+    if not set(branch) <= _BRANCH_CHARS:
+        return (
+            f"{branch!r} is not a branch name: letters, digits, '-', '_', '.', "
+            "'/', '#', '+' and '@' only"
+        )
+    if (
+        ".." in branch
+        or "//" in branch
+        or "@{" in branch
+        or branch == "@"
+        or "/." in branch
+        or ".lock/" in branch
+        or branch.endswith(("/", ".", ".lock"))
+    ):
+        return f"{branch!r} is not a branch name git accepts"
+    return ""
+
+
+def module_path_problem(mod_path) -> str:
+    """Why `mod_path` cannot be where a module is checked out; "" when it can.
+    Relative, and inside the project: the gate and a delivery run git there,
+    on the host (SCRUM-59 review)."""
+    if not isinstance(mod_path, str):
+        return "must be a path"
+    if mod_path.startswith(("/", "~")) or ".." in Path(mod_path).parts:
+        return f"{mod_path!r} must be a path inside the project, relative to it"
+    return ""
+
+
+def module_dir_problem(root: Path, mod_path: str) -> str:
+    """Why `root/mod_path` is not a directory inside the project rite may run
+    git in; "" when it is. At the point of use, because the string check in
+    `module_path_problem` cannot see a link: a Manager can make `svc` a link
+    to another repository, and the gate or a delivery would run there, on
+    the host (SCRUM-59 final review)."""
+    where = Path(root) / mod_path
+    if where.is_symlink():
+        return f"{mod_path} is a link; rite runs git only in the project itself"
+    try:
+        inside = where.resolve().is_relative_to(Path(root).resolve())
+    except OSError:
+        inside = False
+    if not inside:
+        return f"{mod_path} is not inside the project"
+    return ""
 
 
 def _spec_digest_error(raw: dict) -> str:

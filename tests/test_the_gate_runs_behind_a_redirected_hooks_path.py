@@ -774,16 +774,21 @@ class TestInitSaysWhatItInstalled:
 
         calls = []
         real = install_pre_push_hook
-        monkeypatch.setattr(
-            "rite_ai.gate.hook.install_pre_push_hook",
-            lambda root, force=False: calls.append(root) or real(root, force=force),
-        )
+
+        def spy(repo_root, force=False, project_root=None):
+            # SCRUM-76 added `project_root`: the hook bakes the project whose
+            # rules it trusts. Recorded, so this also pins that `rite init`
+            # passes the project it is scaffolding rather than nothing.
+            calls.append((repo_root, project_root))
+            return real(repo_root, force=force, project_root=project_root)
+
+        monkeypatch.setattr("rite_ai.gate.hook.install_pre_push_hook", spy)
         root = self._project(tmp_path)
         _redirect_globally(root, _an_upstream_hook(tmp_path))
 
         scaffold.install_pre_push_hooks(root, [])
 
-        assert calls == [root]
+        assert calls == [(root, root)]
 
 
 class TestATildeInTheRedirectIsStillTheSameDirectory:

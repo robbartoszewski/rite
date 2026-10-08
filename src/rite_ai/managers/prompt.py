@@ -30,7 +30,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rite_ai import own_command
-from rite_ai.managers.broker import REQUESTS_DIRNAME
 from rite_ai.managers.session import _tmux, session_exists
 
 SETTLE = 0.3
@@ -52,15 +51,10 @@ def for_manager(manager: str, *, root: Path, extra: str = "") -> str:
     same contract `journal.instructions` and `journal.start_notice` use for
     their disabled case.
     """
-    # ABSOLUTE, and derived from the one place the directory is spelled
-    # (`manager_dir`). It was a path relative to the project,
-    # `.rite/managers/<name>/requests`, and since MM8 the directory is
-    # outside the project: a relative path would send requests where nothing
-    # reads them. `root` is required for that reason; a default would be a
-    # wrong path nobody notices.
-    from rite_ai.managers import manager_dir
-
-    requests = str(manager_dir(root, manager) / REQUESTS_DIRNAME)
+    # ⚠ `root` is required: the request directories are the Manager's own,
+    # outside the project (MM8), and `rite request` (SCRUM-59) finds them
+    # from it. Since SCRUM-59 no path is spelled here: the Manager runs a
+    # command and rite writes the file, so no `$( )` reaches the shell.
     # ⚠ **Absolute, for the reason `mailbox.how_to_reply` gives**: a bare
     # `rite` names whatever is first on the Manager's PATH, which was
     # measured to be an older release than the one writing this text.
@@ -88,22 +82,18 @@ def for_manager(manager: str, *, root: Path, extra: str = "") -> str:
         "another one. `rite sandbox start` WILL FAIL if you run it — not "
         "because you got the command wrong, but because the operating "
         "system refuses a second sandbox from inside the first. So you ask "
-        "instead, by writing one small file:\n"
+        "instead, with one command (rite writes the request itself):\n"
         "\n"
-        "    mkdir -p " + requests + "\n"
-        '    echo \'{"worker":"<name>","ticket":"<ID>"}\' > '
-        + requests
-        + "/$(date +%s).json\n"
+        f"    {rite} request start <name> --ticket <ID>\n"
         "\n"
         "rite picks it up when this session ends, starts the Worker "
         "outside the sandbox, and tells you what happened in your next "
         "instruction. So do not wait for the Worker to appear during this "
         "session — it will not, and that is not a failure.\n"
         "\n"
-        "Those two fields are the only ones a request may carry. Anything "
-        "else in the file — an environment, a prompt, a directory — is "
-        "REFUSED, because rite chooses the rest of a Worker's launch and "
-        "will not take it from a request.\n"
+        "A Worker and a ticket are all a request names: rite chooses the "
+        "rest of a Worker's launch (its environment, its prompt, its "
+        "directory) and will not take it from a request.\n"
         "\n"
         f"`{rite} add worker <name>` first if the Worker does not exist yet; "
         f"`{rite} status` lists the ones that do. A request naming a Worker "
@@ -117,9 +107,10 @@ def for_manager(manager: str, *, root: Path, extra: str = "") -> str:
         "authentication error, every time. If a request is refused, report "
         "the refusal and stop — do not work around it.\n"
     )
+    from rite_ai.managers.lifecycle import instructions as lifecycle
     from rite_ai.publishing.requests import instructions as delivering
 
-    return base + delivering(root, manager) + extra
+    return base + delivering(root, manager) + lifecycle(root, manager) + extra
 
 
 TICKET_WORK = (

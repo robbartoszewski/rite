@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+import released_tags
 from rite_ai.cli.init.claude_gen import generate_claude_md
 from rite_ai.cli.main import cli
 from rite_ai.config.models import ProjectBrief, ProjectConfig
@@ -236,7 +237,6 @@ class TestCopiedTemplates:
         catching shows at the tag, which is where this now looks.
         """
         import hashlib
-        import subprocess
 
         from rite_ai.update.template_history import RELEASED
 
@@ -247,13 +247,22 @@ class TestCopiedTemplates:
                 ["git", *args], cwd=root, capture_output=True, check=True
             ).stdout
 
-        try:
-            tags = sorted(t for t in git("tag", "-l", "v*").decode().split() if t)
-        except (OSError, subprocess.CalledProcessError) as e:  # pragma: no cover
-            pytest.skip(f"git tags are not readable here ({e})")
-        if not tags:  # pragma: no cover - a shallow or tagless checkout
-            pytest.skip("no release tags in this checkout")
-        tag = tags[-1]
+        # SCRUM-68: which release to judge, and what is deliberately not
+        # judged. ⚠ Ordered by VERSION — this sorted STRINGS, so the moment
+        # `v0.7.0` was cut it would have gone on judging `v0.7.0a9` and
+        # silently stopped checking the release. And a tag AT HEAD is a
+        # declared "nothing to check", not a skip: a test that skips in every
+        # job passes nowhere, which `every-test-passes-somewhere` turns red.
+        judged = released_tags.judge(root)
+        if judged.nothing:  # pragma: no cover - a shallow or tagless checkout
+            pytest.skip(judged.nothing)
+        if judged.tag is None:
+            # Every tag is at HEAD. Declared and reported; nothing to check.
+            print(judged.declared)
+            return
+        if judged.declared:
+            print(judged.declared)
+        tag = judged.tag
         listing = (
             git(
                 "ls-tree",
@@ -424,28 +433,24 @@ class TestASectionAReleaseWrote:
         in a USER's file against what some release wrote; what this tree
         generates is recorded when it becomes a release, and not before.
         """
+        # SCRUM-68, and the ordering rule this half already had right —
+        # "Not string order: `v0.10.0` sorts before `v0.4.0` that way, and the
+        # answer would quietly become some older release. And not an int per
+        # dotted part either: `v0.7.0a1`, the first pre-release, made that
+        # raise, so the tripwire itself crashed." That reasoning now lives in
+        # `released_tags`, with the template half, so the two cannot disagree.
+        import released_tags
         from rite_ai.update.section_history import RELEASES
 
-        tags = subprocess.run(
-            ["git", "tag", "-l", "v*"],
-            cwd=REPO,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.split()
-        if not tags:
-            pytest.skip("no release tags in this checkout")
-
-        def version(tag: str):
-            # Not string order: "v0.10.0" sorts before "v0.4.0" that way, and
-            # the answer would quietly become some older release. And not an
-            # int per dotted part either: `v0.7.0a1`, the first pre-release,
-            # made that raise, so the tripwire itself crashed.
-            from packaging.version import Version
-
-            return Version(tag.lstrip("v"))
-
-        newest = max(tags, key=version)
+        judged = released_tags.judge(REPO)
+        if judged.nothing:
+            pytest.skip(judged.nothing)
+        if judged.tag is None:
+            print(judged.declared)
+            return
+        if judged.declared:
+            print(judged.declared)
+        newest = judged.tag
 
         assert newest in RELEASES, (
             f"{newest} is not in section_history.RELEASES — run "

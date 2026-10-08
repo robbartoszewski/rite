@@ -42,7 +42,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rite_ai.managers import manager_dir
+from rite_ai.managers import manager_dir, own_dir
 from rite_ai.state import write_atomic
 
 CHORES_DIRNAME = "chores"
@@ -89,32 +89,29 @@ def take(root: Path, manager: str) -> list[tuple[Path, str]]:
     the create. A claim left behind is found by `_interrupted`, and REPORTED,
     never retried: whether its chore exists is a fact about the board that
     only a person looking at it can settle cheaply.
+
+    Read through `own_dir`, which follows no link the Manager planted (the
+    SCRUM-59 review); a `chores` that is one raises OSError.
     """
     where = _chores_dir(root, manager)
-    if not where.is_dir():
-        return []
-    found: list[tuple[Path, str]] = []
-    for path in sorted(where.glob("*.json")):
-        claim = path.with_name(path.name + TAKEN)
-        try:
-            path.rename(claim)
-            found.append((claim, claim.read_text(encoding="utf-8", errors="replace")))
-        except OSError:
-            continue
-    return found
+    return [
+        (where / name, text)
+        for name, text in own_dir.take(
+            root, manager, CHORES_DIRNAME, MAX_REQUEST_BYTES, claim=TAKEN
+        )
+    ]
 
 
-def _done(claim: Path) -> None:
-    try:
-        claim.unlink()
-    except OSError:
-        pass
+def _done(root: Path, manager: str, claim: Path) -> None:
+    own_dir.unlink_in(root, manager, CHORES_DIRNAME, claim.name)
 
 
 def _interrupted(root: Path, manager: str) -> list[Path]:
     """Claims a previous supervisor took and never finished."""
     where = _chores_dir(root, manager)
-    return sorted(where.glob("*.json" + TAKEN)) if where.is_dir() else []
+    return [
+        where / n for n in own_dir.names(root, manager, CHORES_DIRNAME, ".json" + TAKEN)
+    ]
 
 
 def decide(raw: str) -> Decision:
@@ -236,9 +233,25 @@ def create_asked_for(root: Path, manager: str, board, say) -> int:
     from rite_ai.managers.mailbox import INBOX, send
     from rite_ai.tickets.interface import BackendError
 
-    for claim in _interrupted(root, manager):
+    try:
+        stale = _interrupted(root, manager)
+        pending = take(root, manager)
+    except OSError as e:
+        said = (
+            f"rite did not read your chore requests: {_chores_dir(root, manager)} "
+            f"cannot be opened as rite's own directory ({e}). Nothing was created."
+        )
+        say(f"{manager!r}: {said}")
         try:
-            asked = claim.read_text(encoding="utf-8", errors="replace").strip()
+            send(root, manager, INBOX, note(said))
+        except OSError:
+            pass
+        return 0
+    for claim in stale:
+        try:
+            asked = own_dir.read(
+                root, manager, CHORES_DIRNAME, claim.name, MAX_REQUEST_BYTES
+            ).strip()
         except OSError:
             asked = "(unreadable)"
         said = (
@@ -251,8 +264,7 @@ def create_asked_for(root: Path, manager: str, board, say) -> int:
             send(root, manager, INBOX, note(said))
         except OSError:
             continue
-        _done(claim)
-    pending = take(root, manager)
+        _done(root, manager, claim)
     created = 0
     for claim, raw in pending:
         verdict = decide(raw)
@@ -295,8 +307,9 @@ def create_asked_for(root: Path, manager: str, board, say) -> int:
                 said = (
                     f"chore {made.id} created from message(s) {ids}, labelled "
                     f"{' and '.join(LABELS)}. It is unrefined: refine it with "
-                    f"the User (`rite refine ask {made.id} -`) before routing "
-                    "it or starting a Worker on it."
+                    f"the User (`rite refine ask {made.id} --from-file <draft>`, "
+                    "as your instructions show) before routing it or starting a "
+                    "Worker on it."
                 )
         say(f"{manager!r}: {said}")
         try:
@@ -306,7 +319,7 @@ def create_asked_for(root: Path, manager: str, board, say) -> int:
             # the Manager never hearing.
             say(f"{manager!r}: could not tell it the chore outcome: {e}")
             continue
-        _done(claim)
+        _done(root, manager, claim)
     return created
 
 

@@ -32,6 +32,7 @@ window is what actually limits duration, and §9.14.5 says so.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import time
@@ -64,6 +65,7 @@ from rite_ai.managers.board_context import board_now
 from rite_ai.managers.boundaries import (
     UnsupportedPlatform,
     boundary_for,
+    heredoc_dir,
     temp_environment,
 )
 from rite_ai.managers.broker import take_requests
@@ -483,8 +485,121 @@ def _with_a_freed_slot(root: Path, manager: str, wake, clock):
     return combined
 
 
-def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
+def _one_listing():
+    """A zero-argument callable giving ONE `yoloai ls --json` for the steps at
+    THIS boundary that need it (SCRUM-64 follow-up, SCRUM-70).
+
+    ⚠ Fresh per boundary, never a module-level cache: the whole point of the
+    listing is that it is what the sandboxes look like NOW, and a cached one
+    would make `reconcile` act on a cycle-old picture. Lazy, so a boundary
+    where neither step needs it takes none.
+    """
+    held: list = []
+
+    def get():
+        if not held:
+            from rite_ai.sandbox import list_sandboxes
+
+            held.append(list_sandboxes())
+        return held[0]
+
+    return get
+
+
+def _record_idle_slots(root, manager: str, say, recorder, listing_of=None) -> None:
+    """One journal entry per slot held by a Worker with no claims (SCRUM-70).
+
+    ⚠ **A Manager cannot record this either**, for `_record_reconciled`'s
+    reason: it is a comparison between the claims ledger and the host's live
+    sandboxes, and it happens out here while the Manager is mid-session. The
+    failure it catches is a project that cannot start work and is told
+    nothing — `rite release` clears claims, only a `destroy` frees a slot,
+    and `rite status` said "no active claims" the whole time.
+
+    Shares the pass's ONE `yoloai ls --json` with `reconcile`; never raises.
+    """
+    if recorder is None:
+        return
+    try:
+        from rite_ai.config.parse import load_project
+        from rite_ai.managers import recording
+        from rite_ai.reporting.held_slots import held_slots, idle_only
+
+        project = load_project(Path(root))
+        workers = [w.name for w in getattr(project, "workers", []) or []]
+        if not workers:
+            return
+        listing = (listing_of or (lambda: None))()
+        slots = held_slots(Path(root), workers, listing=listing)
+        if isinstance(slots, str):
+            # "Could not ask" is not "no slots held", and it is not a journal
+            # entry either: the journal records failures that happened, and
+            # an unreachable yoloAI is said to the terminal.
+            say(slots)
+            return
+        for slot in idle_only(slots):
+            recorder(
+                recording.Event(
+                    recording.IDLE_SLOT_HELD,
+                    slot.worker,
+                    slot.line(),
+                    "a Worker's slot ends with its work, so the next Worker can start",
+                    anchor=f"manager {manager} worker {slot.worker} idle-slot",
+                )
+            )
+    except Exception as e:  # noqa: BLE001 - a journal write never ends a run
+        try:
+            say(f"could not check for held slots this cycle: {e!r}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _record_reconciled(actions, manager: str, recorder) -> None:
+    """One journal entry per reconciliation the supervisor acted on
+    (SCRUM-71, unblocked by SCRUM-64).
+
+    ⚠ **A Manager cannot record these.** Reconciliation compares its own
+    state against the host's ground truth — claims, sandboxes, publish
+    records — and happens out here while the Manager is mid-session. In the
+    a9 run a claim outliving the work it was taken for reached the journal
+    from nowhere at all.
+
+    ⚠ **The outcome is carried verbatim, not classified.** `_release_claims`
+    reports a failure in its return string rather than by raising, so the
+    entry says what the release actually said. Deriving a boolean by
+    matching rite's own prose is the trap one layer along, and the entry is
+    honest either way: "the claim it still holds is stale — its claims were
+    NOT released (…)" reads correctly.
+    """
+    if recorder is None or not actions:
+        return
+    from rite_ai.managers import recording
+
+    for action in actions:
+        detail = action.reason + (f" — {action.outcome}" if action.outcome else "")
+        recorder(
+            recording.Event(
+                recording.RECONCILED,
+                action.worker,
+                f"{manager} and the host disagreed about {action.worker}: " + detail,
+                "a Worker's claim and its sandbox end together with its work, "
+                "so there is nothing left to reconcile",
+                anchor=f"manager {manager} worker {action.worker} {action.kind}",
+            )
+        )
+
+
+def _honour_worker_requests(
+    root: Path, manager: str, broker, say, recorder=None
+) -> None:
     """Start the Workers this cycle asked for, or say why not.
+
+    🔴 **SCRUM-71: a refusal here also reaches the journal.** The Manager
+    hears it in its next instruction, and before this the Owner — reading
+    the journal after an unattended run — heard nothing. A request REFUSED
+    is a failure; a request QUEUED for want of a slot is a queue, and is
+    deliberately not recorded, or a busy fleet would fill the journal with
+    its own capacity every cycle.
 
     ⚠ **A sandboxed Manager cannot start a sandboxed Worker** — the kernel
     refuses a second profile inside the first (B9) — so it writes a request
@@ -515,15 +630,26 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
     """
     from rite_ai.managers.telling import tell_manager
 
-    pending = take_requests(root, manager)
-    if not pending:
-        return
-
     def tell(text: str) -> None:
         try:
             tell_manager(root, manager, "a Worker you asked for", text)
         except OSError as e:
             say(f"could not tell {manager!r} what happened to its request: {e}")
+
+    try:
+        pending = take_requests(root, manager)
+    except OSError as e:
+        # A `requests` the Manager replaced with a link (SCRUM-59 review):
+        # not followed, and said.
+        said = (
+            f"rite did not read {manager!r}'s Worker requests: its requests "
+            f"directory cannot be opened as rite's own ({e}). Nothing was started."
+        )
+        say(said)
+        tell(said)
+        return
+    if not pending:
+        return
 
     if broker is None:
         said = (
@@ -550,7 +676,7 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
             # when a slot frees (the waits wake for it), decided afresh each
             # time. Told once, so a Manager does not ask twice.
             try:
-                requeue(path, raw)
+                requeue(root, manager, path, raw)
             except OSError as e:
                 say(f"a Worker request could not be queued, so it is lost: {e}")
                 tell(
@@ -569,6 +695,21 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
                 )
             continue
         told.discard(raw)
+        if ok:
+            _record_owner(root, manager, raw, say)
+        if not ok and recorder is not None:
+            from rite_ai.managers import recording
+
+            recorder(
+                recording.Event(
+                    recording.WORKER_START_REFUSED,
+                    manager,
+                    f"a Worker {manager} asked for was not started: {message}",
+                    "a Worker the Manager asks for starts, or the Manager is "
+                    "told why not and stops waiting",
+                    anchor=f"manager {manager} worker request",
+                )
+            )
         say(("started: " if ok else "") + message)
         tell(
             ("Started: " if ok else "NOT started: ")
@@ -579,6 +720,22 @@ def _honour_worker_requests(root: Path, manager: str, broker, say) -> None:
                 else " Nothing is running for this request; do not wait for "
                 "it. Fix what it names, or say so to the User."
             )
+        )
+
+
+def _record_owner(root: Path, manager: str, raw: str, say) -> None:
+    """Remember that rite started this Worker for `manager` (SCRUM-59), so
+    only `manager` may later stop, restart, destroy or gate it. The request
+    was decided valid, so its worker parses; anything else is said."""
+    from rite_ai.managers.lifecycle import record_owner
+
+    try:
+        record_owner(root, json.loads(raw)["worker"], manager)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        say(
+            f"started, but rite could not record that it was for {manager!r} "
+            f"({e}); no Manager may stop, restart, destroy or gate it through "
+            "rite until it is started again by request"
         )
 
 
@@ -666,8 +823,8 @@ def _say_refusals(
                 f"refused: {command.strip()!r} — it runs a command inside "
                 "backticks or $( ), which the engine asks approval for. When "
                 "that is text for `rite reply`, `rite ask` or `rite route`, "
-                "the text goes on stdin through a quoted heredoc, as the "
-                "Manager's instructions show, never in double quotes."
+                "the text goes in a draft file named with `--from-file`, as "
+                "the Manager's instructions show, never in double quotes."
             )
         elif allowed(command):
             # ⚠ TWO CAUSES, and the transcript does not say which (SB11,
@@ -737,15 +894,15 @@ def _not_yet_reported(root: Path, manager: str, found: list[Refusal]) -> list[Re
         return found
     import json
 
-    from rite_ai.managers import manager_dir
-    from rite_ai.state import locked, write_atomic
+    from rite_ai.managers import manager_dir, own_dir
 
     path = manager_dir(root, manager) / REPORTED_FILE
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with locked(path):
+        # Through `own_dir`: in the Manager's own directory, where it can
+        # plant a link or a FIFO at this name (SCRUM-69 round 3).
+        with own_dir.locked_file(path):
             try:
-                seen = json.loads(path.read_text(encoding="utf-8"))
+                seen = json.loads(own_dir.read_file(path))
             except (OSError, ValueError):
                 seen = []
             seen = (
@@ -760,7 +917,7 @@ def _not_yet_reported(root: Path, manager: str, found: list[Refusal]) -> list[Re
             new_ids = [r.tool_use_id for r in fresh if r.tool_use_id]
             if new_ids:
                 kept = (seen + list(dict.fromkeys(new_ids)))[-REPORTED_KEPT:]
-                write_atomic(path, json.dumps(kept) + "\n")
+                own_dir.write_file(path, json.dumps(kept) + "\n")
             return fresh
     except OSError:
         # Cannot remember, so cannot dedupe: report rather than go silent. A
@@ -1216,9 +1373,10 @@ def _queued_requests(root: Path, manager: str) -> bool:
     return queued(root, manager)
 
 
-COORDINATION = frozenset({"claims", "routes", "requests", "deliveries"})
+COORDINATION = frozenset({"claims", "routes", "requests", "deliveries", "lifecycle"})
 """The footprint parts that are a Manager's own progress: claiming work,
-routing it, asking for a Worker, delivering one's work (D-115)."""
+routing it, asking for a Worker, delivering one's work (D-115), and asking
+rite to stop, restart, destroy, inspect or gate a Worker (SCRUM-59)."""
 
 
 def _session_was_idle(changed: list[str]) -> bool:
@@ -1580,6 +1738,13 @@ def _supervise(
     refine: object = None,
     refinement_brief: object = None,
     recover: object = None,
+    # 🔴 SCRUM-71. `recording.recorder_for(...)`, or None when
+    # `--record-issues` is off. The boundary steps below hand it the
+    # failures a Manager cannot see because they happen out here: a
+    # delivery refused on the host, a Worker start refused by the broker.
+    # Composed in `cli.main`, where the flag is, so this loop never reads
+    # it — it only passes it on.
+    recorder: object = None,
 ) -> SuperviseResult:
     """Run the Manager until a bound or a stop verdict ends it.
 
@@ -1794,6 +1959,27 @@ def _supervise(
     tracking = pending.sync(root, manager)
     if tracking:
         say(tracking)
+    # SCRUM-59: requests left by a run that stopped mid-session, honoured now
+    # rather than after a session that may not come (the no-progress guard
+    # can hold one off indefinitely). An interrupted claim is said, not redone.
+    from rite_ai.managers import lifecycle, reconcile
+
+    lifecycle.honour_requests(root, manager, say)
+    # SCRUM-64: reconcile against ground truth BEFORE the first session, so a
+    # restarted Manager does not resume stale claims/sandboxes and escalate.
+    #
+    # ONE `yoloai ls --json` shared by the two steps here that need it, and
+    # taken only if one of them does (`_one_listing`).
+    at_start = _one_listing()
+    _record_reconciled(
+        reconcile.reconcile(root, manager, say, at_start=True, listing_of=at_start),
+        manager,
+        recorder,
+    )
+    # SCRUM-70, on the SAME listing reconcile just took: a slot held by a
+    # Worker with no claims is a project that cannot start work, and nothing
+    # reported one.
+    _record_idle_slots(root, manager, say, recorder, at_start)
 
     # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
     # ended having made no progress (`_session_was_idle`); cleared by anything that
@@ -1843,7 +2029,7 @@ def _supervise(
         # A Worker queued for want of a slot is asked for again here, at a
         # moment no session is running (the waits wake for a freed slot).
         if broker is not None and _queued_requests(root, manager):
-            _honour_worker_requests(root, manager, broker, say)
+            _honour_worker_requests(root, manager, broker, say, recorder)
         # ⚠ WHAT CAUSES THIS CYCLE. "" means the ordinary causes: the last
         # session ended cleanly and the board says continue. "mail" means a
         # wait below ended because mail is in the inbox (DF2), and then the
@@ -2553,13 +2739,43 @@ def _supervise(
             # first, and a delivery removes it (PB1).
             from rite_ai.publishing.requests import honour_deliveries
 
-            honour_deliveries(root, manager, say)
+            honour_deliveries(root, manager, say, recorder)
             # And the PRs delivered earlier: merged ones release their
             # claims, and `auto_merge` merges through its gate (PB1 piece 5).
             from rite_ai.publishing.merging import tick as watch_pull_requests
 
             watch_pull_requests(root, manager, say)
-            _honour_worker_requests(root, manager, broker, say)
+            # SCRUM-59: stop, destroy, restart, status and gate, after the
+            # deliveries (a delivery may already have removed the sandbox a
+            # request names) and before Worker starts (a destroy frees the
+            # slot a start in this same cycle needs).
+            from rite_ai.managers import lifecycle, reconcile
+
+            lifecycle.honour_requests(root, manager, say)
+            # SCRUM-72 §3.3b: this Manager's own plan-review verdicts, at the
+            # same boundary and for the same reason — the identity is the
+            # directory they were found in, which is this Manager's.
+            #
+            # ⚠ **Before the local tier below**, which is what ASKS: a verdict
+            # answered since the last cycle must be honoured before the pass
+            # that would otherwise re-ask for it.
+            from rite_ai.local.plan_review import honour_verdicts
+
+            honour_verdicts(root, manager, say)
+            # SCRUM-64: throttled per cycle (`reconcile` enforces the
+            # interval), after deliveries so a just-delivered sandbox reads
+            # as gone, before Worker starts so a freed claim can be retaken.
+            # One listing for THIS boundary, never the start pass's: a
+            # cycle-old picture of the sandboxes is exactly what reconcile
+            # must not act on.
+            per_cycle = _one_listing()
+            _record_reconciled(
+                reconcile.reconcile(root, manager, say, listing_of=per_cycle),
+                manager,
+                recorder,
+            )
+            _record_idle_slots(root, manager, say, recorder, per_cycle)
+            _honour_worker_requests(root, manager, broker, say, recorder)
             if callable(chores):
                 # TR9: at the boundary with the Worker requests, and for the
                 # same reason: it talks to the board, which the two-second
@@ -3709,7 +3925,14 @@ def _default_starter(
     # anything. A Manager that dies in its pane is the failure this replaces,
     # and it reports the missing binary rather than the missing platform.
     confinement = boundary_for()
-    profile = confinement.write_profile(root, manager)
+    from rite_ai.managers.enclosure import LinkedManagerPath
+
+    try:
+        profile = confinement.write_profile(root, manager)
+    except LinkedManagerPath as e:
+        # SCRUM-69 review: a Manager directory that is a link is never
+        # followed into a grant. Not started, and said, rather than a stack.
+        return StartResult(False, str(e))
     github_env = github_access.pane_environment(root, manager)
     handle_spelling = spelling_for(engine, agent)
     cursor = engine == "cursor"
@@ -3727,8 +3950,11 @@ def _default_starter(
                 if placement and placement[0] == "env"
                 else {}
             ),
-            # TMPDIR and Claude Code's own CLAUDE_CODE_TMPDIR (`temp_environment`).
-            **temp_environment(confinement.engine_tmp(root, manager)),
+            # TMPDIR and Claude Code's own CLAUDE_CODE_TMPDIR, and zsh's
+            # heredocs in the Manager's own directory (`temp_environment`).
+            **temp_environment(
+                confinement.engine_tmp(root, manager), heredoc_dir(root, manager)
+            ),
             **model_env,
             # C6/C26: WHERE the GitHub credential is, never the credential.
             # Derived from what `github_access.open_access` left on disk, so

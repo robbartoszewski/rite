@@ -41,11 +41,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rite_ai.local import decomposition as dec
+from rite_ai.local import stage as st
 
-DECOMPOSED = "decomposed"
-APPROVED = "approved"
-STEPPED = "stepped"
-DELIVERY_ASKED = "delivery requested"
+# ⚠ **One vocabulary, SCRUM-72.** These were this module's own labels for
+# "what a pass did"; they are now the pipeline's persisted stages
+# (`local.stage`), because a pass's report and the record of what has been
+# passed must not be two sets of words that drift apart. `STEPPED` keeps its
+# name — a pass that ran a subtask is what it reports — and is the STEPPING
+# stage.
+DECOMPOSED = st.DECOMPOSED
+APPROVED = st.APPROVED
+REJECTED = st.REJECTED
+STEPPED = st.STEPPING
+RECOMPOSED = st.RECOMPOSED
+DELIVERY_ASKED = st.DELIVERY_REQUESTED
+DEFINED = st.DEFINED
 
 
 @dataclass(frozen=True)
@@ -120,11 +130,29 @@ def advance_ticket(
     *,
     state=None,
     author_plan=None,
-    approve=None,
+    ask_review=None,
     step=None,
     ask_delivery=None,
+    recompose_with=None,
+    gate=None,
+    now: float | None = None,
 ) -> Advance:
     """Advance `ticket` by ONE stage, or say why it did not move.
+
+    🔴 **Dispatched from the PERSISTED stage (SCRUM-72, §3.3a), not derived
+    from the plan's shape.** This function used to decide what to do next by
+    asking what the plan looked like now: no plan means decompose, PENDING
+    means approve, a runnable subtask means step. That reads as an order and is
+    not one — the conditions are independent, so anything that produced a later
+    stage's SHAPE entered that stage, and nothing recorded that a stage had
+    been passed, so nothing could notice one that had not been. Now every move
+    goes through `stage.advance`, which refuses a transition the table does not
+    hold and a stage whose own artifact does not back it (`gates.gate_for`).
+
+    ⚠ **The artifact is written first and the stage follows.** Each branch does
+    its work, and only then asks for the move; the move is refused if the work
+    did not produce what the stage claims. The inverse order would make the
+    persisted stage a lie after a crash.
 
     Every dependency is injectable and every default is the production one, so a
     test drives the whole pipeline without a model on the machine — the same
@@ -132,9 +160,39 @@ def advance_ticket(
     """
     root = Path(root)
     if state is None:
-        from rite_ai.coordination.local_backend import LocalStateLayer
+        from rite_ai.local.plan_state import layer
 
-        state = LocalStateLayer(root / ".rite")
+        state = layer(root)
+    if gate is None:
+        from rite_ai.local.gates import gate_for
+
+        gate = gate_for(root, manager, ticket, state)
+
+    stage_read = st.read(state, ticket)
+    if stage_read.unavailable:
+        return Advance(
+            ticket, blocked=f"its stage could not be read: {stage_read.unavailable}"
+        )
+    if stage_read.error:
+        # ⚠ NOT treated as unstarted. A stage record edited into something this
+        # rite will not parse is the one case where restarting the pipeline
+        # would re-author a plan over work already approved.
+        return Advance(
+            ticket, blocked=f"its stage record will not parse: {stage_read.error}"
+        )
+
+    from rite_ai.local.gates import definition_snapshot
+
+    snapshot = definition_snapshot(root, manager, ticket)
+    pinned = "" if isinstance(snapshot, str) else str(snapshot.get("record_id", ""))
+
+    def moved_to(to: str, *, why: str, note: str = "") -> Advance:
+        got = st.advance(
+            state, ticket, to, why=why, gate=gate, now=now, definition=pinned
+        )
+        if isinstance(got, st.Refused):
+            return Advance(ticket, blocked=got.why)
+        return Advance(ticket, stage=to, note=note or why)
 
     read = dec.read(state, ticket)
     if read.unavailable:
@@ -146,10 +204,142 @@ def advance_ticket(
         return Advance(
             ticket, blocked=f"its decomposition will not parse: {read.error}"
         )
+    plan = read.plan
 
-    # 1. No plan yet — author one. It is written PENDING; nothing here can
-    #    write APPROVED, which is RL-6's gate and DD-3.5's rule.
-    if read.plan is None:
+    # A pipeline that was in flight when the stage machine landed has artifacts
+    # and no stage. Adopted once, off the artifacts, and only into a stage they
+    # support — see `stage.adopt`.
+    if stage_read.record is None:
+        derived = _stage_from_artifacts(root, manager, ticket, plan)
+        if derived:
+            adopted = st.adopt(
+                state, ticket, derived, gate=gate, now=now, definition=pinned
+            )
+            if isinstance(adopted, st.Refused):
+                return Advance(ticket, blocked=adopted.why)
+            return Advance(
+                ticket,
+                stage=derived,
+                note="adopted from the artifacts already on disk",
+            )
+
+    stage = stage_read.stage
+
+    # 0a. 🔴 **STALE (SCRUM-72d): the definition of done moved under the
+    #     pipeline.** The definition is read from the Worker's publish-record
+    #     snapshot, and that snapshot is rewritten when the Worker is started
+    #     again — on a re-refined ticket, or on a different one. A plan
+    #     authored against one definition must not go on being reviewed,
+    #     stepped and delivered against another, so this HALTS and reports
+    #     rather than advancing. Nothing is undone and nothing is guessed: the
+    #     plan on disk is the plan that was approved, and which definition of
+    #     done it is now meant to satisfy is not rite's to decide.
+    if (
+        stage != st.UNSTARTED
+        and stage_read.definition
+        and pinned != stage_read.definition
+    ):
+        unreadable = snapshot if isinstance(snapshot, str) else "it names no record_id"
+        now_on = pinned or f"none rite can read ({unreadable})"
+        return Advance(
+            ticket,
+            blocked=(
+                f"its definition of done CHANGED since it reached {stage}: the "
+                f"pipeline is pinned to refinement record "
+                f"{stage_read.definition}, and its Worker is now started on "
+                f"{now_on}. Nothing advances against a definition the plan was "
+                "not authored for. Decide which it is: re-refine and start the "
+                "Worker again to re-author the plan, or put back the record it "
+                "was planned against"
+            ),
+        )
+
+    # 0b. The plan may have been RETURNED to plan review from outside this loop
+    #    — a composition conflict, a recomposition failure, a rejection after
+    #    approval (`decomposition.returned_to_plan_review` drops the approval).
+    #    The artifact leads and the stage follows it back.
+    if stage in (st.APPROVED, st.STEPPING, st.RECOMPOSED) and (
+        plan is None or plan.approval != dec.APPROVED
+    ):
+        return moved_to(
+            st.DECOMPOSED,
+            why="its plan was returned to plan review",
+            note="its plan is no longer approved, so it goes back to review"
+            + (f": {plan.returns[-1]}" if plan is not None and plan.returns else ""),
+        )
+
+    # 1. The spec/definition session's artifact: the signed refinement record
+    #    this ticket's Worker was started on, pinned to the ticket. Before
+    #    SCRUM-72 the decomposer was called with no ticket text at all.
+    if stage == st.UNSTARTED:
+        return moved_to(
+            st.DEFINED,
+            why="its definition of done is pinned to the record its Worker was "
+            "started on",
+            note="defined",
+        )
+
+    # 1b. REJECTED — back to its planner, RE-AUTHORED, and bounded.
+    #
+    # 🔴 **§3.3b's new transition, and it lands with its bound (SCRUM-72f).**
+    # A REJECTED plan used to block for ever: `advance_ticket` re-authored
+    # only when there was no plan at all, so a reviewer that said no stopped
+    # the ticket rather than improving it. Re-authoring is only safe with a
+    # budget and an escalation past it, because an unbounded re-author is a
+    # loop and not a fix — and the budget is `Decomposition.returns`, the
+    # count RL-10 already keeps, shared with a failed RL-8.
+    if stage == st.REJECTED:
+        from rite_ai.local import recompose
+
+        spent = len(plan.returns) if plan is not None else 0
+        if spent >= recompose.MAX_RETURNS:
+            return Advance(
+                ticket,
+                blocked=(
+                    f"its plan has gone back to review {spent} times "
+                    f"({recompose.MAX_RETURNS} is the bound), so it is NOT "
+                    "re-authored again — somebody has to look at the ticket. "
+                    "The reasons so far: "
+                    + "; ".join(plan.returns if plan is not None else ())
+                ),
+            )
+        # ⚠ **RE-AUTHORED FIRST, then the stage moves.** `decomposed`'s gate
+        # wants a PENDING plan and a rejected one is REJECTED, so the move is
+        # only legal once a new plan exists. That is the rule everywhere here:
+        # the artifact leads and the stage follows, and the gate is what makes
+        # it true rather than a convention.
+        if author_plan is None:
+            from rite_ai.local.decompose import decompose_ticket
+
+            author_plan = decompose_ticket
+        again = author_plan(
+            root,
+            manager,
+            ticket,
+            ticket_text=_rejection_text(_definition_text(snapshot), plan),
+        )
+        if not getattr(again, "wrote", False):
+            why = getattr(again, "problem", "") or "the decomposer produced no plan"
+            reasons = getattr(again, "reasons", ()) or ()
+            if reasons:
+                why = f"{why or 'rejected'}: {reasons[-1]}"
+            return Advance(
+                ticket, blocked=f"not re-authored after its rejection: {why}"
+            )
+        return moved_to(
+            st.DECOMPOSED,
+            why=f"re-authored after rejection by {manager}",
+            note=(
+                f"re-authored with the rejection's reasons by {manager} "
+                f"({spent} of {recompose.MAX_RETURNS} returns spent)"
+            ),
+        )
+
+    # 2. DEFINED — author a plan. It is written PENDING; nothing here can
+    #    write APPROVED, which is RL-6's gate and DD-3.5's rule. (A plan sent
+    #    back is re-authored in the REJECTED branch above, which has the
+    #    reasons to give it.)
+    if stage == st.DEFINED:
         if author_plan is None:
             from rite_ai.local.decompose import decompose_ticket
 
@@ -163,45 +353,88 @@ def advance_ticket(
         # Fixing that matcher to a word boundary is right and is NOT done here:
         # it uncovers four unrelated functions the loose match was masking, and
         # this branch must not merge on someone else's cleanup. Filed separately.
-        result = author_plan(root, manager, ticket)
+        # 🔴 **The definition of done IS the decomposer's input (SCRUM-72d).**
+        # `advance_ticket` called `author_plan` with no ticket text at all, so
+        # the decomposer saw "(no ticket text was supplied)" and sliced a
+        # ticket by its id. The refinement record's own rendering is passed —
+        # the SAME text the Worker's start prompt carries
+        # (`record.render_for_worker`), so the plan and the work are judged
+        # against one definition rather than two.
+        result = author_plan(
+            root, manager, ticket, ticket_text=_definition_text(snapshot)
+        )
         # `DecomposeResult.wrote` — the field name matters: `ok`/`written` do not
         # exist on it, and a getattr default of False would have read every
         # successful decomposition as a failure.
         if getattr(result, "wrote", False):
-            return Advance(ticket, stage=DECOMPOSED, note=f"by {manager}")
+            return moved_to(
+                st.DECOMPOSED, why=f"decomposed by {manager}", note=f"by {manager}"
+            )
         why = getattr(result, "problem", "") or "the decomposer produced no plan"
         reasons = getattr(result, "reasons", ()) or ()
         if reasons:
             why = f"{why or 'rejected'}: {reasons[-1]}"
         return Advance(ticket, blocked=f"not decomposed: {why}")
 
-    plan = read.plan
+    if plan is None:
+        return Advance(
+            ticket,
+            blocked=f"it is at {stage} but has no decomposition, so nothing "
+            "says what that stage was reached with",
+        )
 
-    # 2. PENDING — have an INDEPENDENT plan-review holder approve it.
-    if plan.approval == dec.PENDING:
+    # 3. DECOMPOSED — ASK an independent plan-review holder to review it.
+    #
+    # 🔴 **The harness never approves (SCRUM-72 §3.3b).** This branch used to
+    # pick a reviewer and immediately call `approve_plan` in its name: no
+    # Manager was ever asked, nothing could ever write REJECTED, and RL-6's
+    # gate checked the rules about who COULD have reviewed against a review
+    # that did not happen. Now the reviewer is asked through its inbox — the
+    # channel every Manager reads whatever its engine — and the ticket waits
+    # here until a verdict is honoured (`plan_review.honour_verdicts`, at the cycle
+    # boundary). Approval is not something a pass can produce.
+    if stage == st.DECOMPOSED:
+        # A verdict honoured since the last pass has already written the
+        # artifact (`plan_review.honour_verdicts` -> `approve_plan`). The stage follows
+        # it, as everywhere else: the artifact leads.
+        if plan.approval == dec.APPROVED:
+            return moved_to(
+                st.APPROVED,
+                why=f"approved by {plan.approved_by}",
+                note=f"by {plan.approved_by}",
+            )
+        if plan.approval == dec.REJECTED:
+            return moved_to(
+                st.REJECTED,
+                why="its plan was rejected by review",
+                note="rejected: it goes back to its planner"
+                + (f" ({plan.returns[-1]})" if plan.returns else ""),
+            )
         reviewer, why = independent_reviewer(root, plan)
         if not reviewer:
             return Advance(ticket, blocked=f"its plan cannot be approved: {why}")
-        if approve is None:
-            from rite_ai.local.approve import approve_plan
-
-            approve = approve_plan
-        result = approve(root, ticket, reviewer)
-        if getattr(result, "why", ""):
-            return Advance(ticket, blocked=f"not approved: {result.why}")
-        return Advance(ticket, stage=APPROVED, note=f"by {reviewer}")
-
-    if plan.approval == dec.REJECTED:
-        return Advance(
+        if ask_review is None:
+            from rite_ai.local.plan_review import ask as ask_review
+        outcome = ask_review(
+            root,
+            manager,
             ticket,
-            blocked="its plan was rejected, so it goes back to its decomposer"
-            + (f": {plan.returns[-1]}" if plan.returns else ""),
+            reviewer,
+            plan.decomposed_by,
+            read.version,
+            now=now,
         )
+        if getattr(outcome, "sent", False):
+            # A request going out IS this pass's work: it is what the cycle
+            # engine reads as progress, the same way the free deterministic
+            # stages each take a pass.
+            return Advance(ticket, stage=st.DECOMPOSED, note=outcome.note)
+        return Advance(ticket, blocked=outcome.note)
 
-    # 3. APPROVED with work left — run the next subtask.
+    # 4. APPROVED or STEPPING with work left — run the next subtask.
     from rite_ai.local.step import next_subtask
 
-    if next_subtask(plan) is not None:
+    if stage in (st.APPROVED, st.STEPPING) and next_subtask(plan) is not None:
         if step is None:
             from rite_ai.local.step import take_one_step
 
@@ -214,29 +447,211 @@ def advance_ticket(
             if getattr(result, "accepted", False)
             else getattr(result, "status", "ran")
         )
-        return Advance(
-            ticket,
-            stage=STEPPED,
-            note=f"{getattr(result, 'subtask', '') or 'a subtask'} {verdict}",
+        note = f"{getattr(result, 'subtask', '') or 'a subtask'} {verdict}"
+        if stage == st.APPROVED:
+            return moved_to(st.STEPPING, why=f"first subtask ran: {note}", note=note)
+        # Already STEPPING: which subtask is where is the PLAN's business, and
+        # the table has no self-loop, so this is not a transition.
+        return Advance(ticket, stage=st.STEPPING, note=note)
+
+    # 5. Nothing left to run — RECOMPOSE, then move. RL-8: the ticket's own
+    #    agreed verify runs on the composed work before anything is delivered.
+    if stage in (st.APPROVED, st.STEPPING):
+        unfinished = [s.id for s in plan.subtasks if s.status != dec.ACCEPTED]
+        if unfinished:
+            return Advance(
+                ticket,
+                blocked=(
+                    f"nothing is planned and {', '.join(unfinished)} did not reach "
+                    "accepted, so the ticket is neither runnable nor finished"
+                ),
+            )
+        from rite_ai.local import level2, recompose
+
+        digests = level2.approved_digests(state, ticket)
+        if isinstance(digests, str):
+            return Advance(ticket, blocked=digests)
+        got = recompose.cleared_to_deliver(state, ticket, digests)
+        if isinstance(got, recompose.Blocked):
+            # Not recorded for this plan yet, or recorded as a failure. Run it.
+            result = (recompose_with or recompose.run_recomposition)(
+                root, manager, ticket, digests, now=now
+            )
+            written = recompose.write(state, result)
+            if not isinstance(written, dec.Written):
+                return Advance(
+                    ticket,
+                    blocked=(
+                        "its recomposition result could not be recorded, so it "
+                        "is not delivered on an unrecorded verify: "
+                        f"{getattr(written, 'reason', 'it changed under this write')}"
+                    ),
+                )
+            if result.problem:
+                # Could not RUN is not a failure (RL-47): nothing is returned
+                # to review for an outage, and it is tried again next pass.
+                return Advance(ticket, blocked=result.line())
+            if not result.cleared:
+                return _return_to_review(
+                    root, manager, ticket, state, plan, read.version, result, gate, now
+                )
+        return moved_to(
+            st.RECOMPOSED,
+            why="the composed work passed its agreed verify (RL-8)",
+            note=(
+                got.why
+                if isinstance(got, recompose.Cleared)
+                else "the composed work passed its agreed verify (RL-8)"
+            ),
         )
 
-    # 4. Every subtask accepted — ask rite to deliver (OL8's request path).
-    done = [s for s in plan.subtasks if s.status == dec.ACCEPTED]
-    if len(done) != len(plan.subtasks):
-        unfinished = [s.id for s in plan.subtasks if s.status != dec.ACCEPTED]
+    # 6. RECOMPOSED — ask rite to deliver (OL8's request path).
+    if stage == st.RECOMPOSED:
+        if ask_delivery is None:
+            ask_delivery = _ask_delivery
+        asked, why = ask_delivery(root, manager, ticket)
+        if not asked:
+            return Advance(ticket, blocked=f"delivery not requested: {why}")
+        return moved_to(
+            st.DELIVERY_REQUESTED,
+            why="rite was asked to deliver it",
+            note="rite will push past its gate",
+        )
+
+    # 7. DELIVERY_REQUESTED — the end of the pipeline. Not a fault: the
+    #    supervisor's own `honour_deliveries` is what happens next.
+    return Advance(
+        ticket,
+        blocked="its delivery has been requested; rite honours that at the "
+        "cycle boundary and the pipeline has nothing further to drive",
+    )
+
+
+def _rejection_text(definition: str, plan) -> str:
+    """The decomposer's input when it re-authors after a rejection or a failed
+    RL-8 (§3.3b: "with the reasons as decomposer input").
+
+    ⚠ The definition of done comes FIRST and the reasons are under their own
+    heading. A plan re-authored against the reasons alone would be a plan
+    answering the review rather than the ticket.
+    """
+    if plan is None or not plan.returns:
+        return definition
+    reasons = "\n".join(f"- {r}" for r in plan.returns)
+    return (
+        f"{definition}\n\n"
+        "A previous plan for this ticket was REJECTED, or failed its "
+        "recomposition verify, for the reasons below. Produce a plan that does "
+        "not repeat them; do not argue with them:\n" + reasons
+    )
+
+
+def _return_to_review(
+    root: Path, manager: str, ticket: str, state, plan, version: str, result, gate, now
+) -> Advance:
+    """A failed RL-8 sends the plan back to plan review — bounded.
+
+    🔴 **One budget for BOTH return paths** (`recompose.MAX_RETURNS`), counted
+    on `Decomposition.returns`, which RL-10 already keeps. A rejection (§3.3b)
+    and a failed recomposition are the same event from the plan's point of
+    view: it goes back to its planner with reasons. Two budgets would be two
+    numbers to keep in step, and the first thing to drift.
+
+    ⚠ **Past the bound it ESCALATES rather than returning again.** A plan that
+    has been re-sliced three times and still does not compose is not a plan
+    one more turn fixes; it is a ticket somebody has to look at, and saying so
+    is the whole point of a bound.
+    """
+    from rite_ai.local import recompose
+
+    spent = len(plan.returns)
+    if spent >= recompose.MAX_RETURNS:
         return Advance(
             ticket,
             blocked=(
-                f"nothing is planned and {', '.join(unfinished)} did not reach "
-                "accepted, so the ticket is neither runnable nor finished"
+                f"{result.line()} — and its plan has already gone back to review "
+                f"{spent} times ({recompose.MAX_RETURNS} is the bound), so it is "
+                "NOT sent back again. Each subtask passes its own check and the "
+                "composed work does not: the slicing is wrong in a way "
+                "re-slicing has not fixed, and somebody has to look at the "
+                "ticket. The reasons so far: " + "; ".join(plan.returns)
             ),
         )
-    if ask_delivery is None:
-        ask_delivery = _ask_delivery
-    asked, why = ask_delivery(root, manager, ticket)
-    if not asked:
-        return Advance(ticket, blocked=f"delivery not requested: {why}")
-    return Advance(ticket, stage=DELIVERY_ASKED, note="rite will push past its gate")
+    reason = f"RL-8: {result.line()}" + (
+        f" Output: {result.output[:500]}" if result.output else ""
+    )
+    written = dec.write(state, dec.returned_to_plan_review(plan, reason), version)
+    if not isinstance(written, dec.Written):
+        return Advance(
+            ticket,
+            blocked=(
+                "its plan could not be returned to review, so it is neither "
+                "delivered nor sent back: "
+                f"{getattr(written, 'reason', 'it changed under this write')}"
+            ),
+        )
+    got = st.advance(
+        state,
+        ticket,
+        st.DECOMPOSED,
+        why=f"RL-8 failed: {result.failed}",
+        gate=gate,
+        now=now,
+    )
+    if isinstance(got, st.Refused):
+        return Advance(ticket, blocked=got.why)
+    return Advance(
+        ticket,
+        stage=st.DECOMPOSED,
+        note=(
+            f"{result.line()} It goes back to plan review with the reasons "
+            f"({spent + 1} of {recompose.MAX_RETURNS} returns spent)"
+        ),
+    )
+
+
+def _definition_text(snapshot) -> str:
+    """The agreed definition of done, as the decomposer is given it.
+
+    ⚠ **`record.render_for_worker`, not a second rendering.** That function is
+    deterministic and is exactly what the Worker's start prompt carries, so the
+    planner slices against the text the Worker will be held to. A second
+    wording here would be a second definition of done, which is the shape §3.3a
+    is about.
+    """
+    if isinstance(snapshot, str) or not snapshot:
+        return ""
+    from rite_ai.refinement import record as rec
+
+    try:
+        return rec.render_for_worker(rec.from_payload(snapshot))
+    except Exception:  # noqa: BLE001 - a payload that will not render is no text
+        return ""
+
+
+def _stage_from_artifacts(root: Path, manager: str, ticket: str, plan) -> str:
+    """The stage `ticket`'s artifacts already evidence, or "" for a ticket the
+    pipeline has not started.
+
+    Only consulted for a ticket with NO stage record (`stage.adopt`), and every
+    answer is re-checked by that stage's own gate before it is written. "" for
+    a ticket with no plan: that one has nothing to adopt and starts normally at
+    DEFINED, so the ordinary first transition is never bypassed.
+    """
+    if plan is None:
+        return ""
+    if plan.approval == dec.REJECTED:
+        return st.REJECTED
+    if plan.approval != dec.APPROVED:
+        return st.DECOMPOSED
+    if plan.subtasks and all(s.status == dec.ACCEPTED for s in plan.subtasks):
+        from rite_ai.publishing import requests
+
+        asked = requests.requests_dir(root, manager) / f"{ticket}.json"
+        return st.DELIVERY_REQUESTED if asked.exists() else st.RECOMPOSED
+    if any(s.status != dec.PLANNED for s in plan.subtasks):
+        return st.STEPPING
+    return st.APPROVED
 
 
 def _ask_delivery(root: Path, manager: str, ticket: str) -> tuple[bool, str]:

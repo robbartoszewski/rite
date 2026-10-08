@@ -39,13 +39,34 @@ def _exists(ticket: str) -> bool:
     return ticket == "ABC-12"
 
 
+def _read(ticket: str):
+    """The board read `decide` makes to check a ticket's STATUS (SCRUM-73).
+
+    Live, not finished: this file's subject is what a request may carry, and
+    a Done ticket is refused wherever the rest of the request is clean.
+    `test_a_done_ticket_is_not_offered_again.py` is where that gate lives.
+    Passed explicitly because `read_ticket=None` refuses everything — a
+    caller that cannot say whether work is finished does not get a Worker.
+    """
+    from rite_ai.tickets import Ticket
+
+    if not _exists(ticket):
+        return None
+    return Ticket(id=ticket, title="a ticket", status="To Do")
+
+
 def _ask(**fields) -> str:
     return json.dumps(fields)
 
 
 class TestAWellFormedRequestIsHonoured:
     def test_a_declared_worker_and_a_real_ticket_pass(self):
-        decision = decide(_ask(worker="alpha", ticket="ABC-12"), _known, _exists)
+        decision = decide(
+            _ask(worker="alpha", ticket="ABC-12"),
+            _known,
+            _exists,
+            read_ticket=_read,
+        )
         assert decision.ok
         assert decision.request == Request("alpha", "ABC-12")
 
@@ -151,6 +172,7 @@ class TestTheThreeChecksTheBriefNamed:
             _exists,
             running=5,
             capacity=5,
+            read_ticket=_read,
         )
         assert not decision.ok
         assert "already running" in decision.reason
@@ -162,6 +184,7 @@ class TestTheThreeChecksTheBriefNamed:
             _exists,
             running=4,
             capacity=5,
+            read_ticket=_read,
         ).ok
 
 

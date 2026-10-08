@@ -199,6 +199,25 @@ def _tick(root: Path, manager: str, say, read, merge) -> None:
             continue
         if facts.merged:
             released = _release_claims(root, entry.worker)
+            # ⚠ Recorded from GitHub's OWN answer, at the one point rite
+            # observes a merge, because dropping the entry is how this
+            # function says "merged" and an absence says nothing: a closed
+            # unmerged PR is dropped here too, and its claims stay held
+            # deliberately. Without a positive record, a later reader
+            # (`reconcile`) cannot tell the two apart, and guessing wrong
+            # releases the paths of work somebody abandoned on purpose.
+            from rite_ai.reporting import events
+
+            events.record(
+                root,
+                "merged",
+                worker=entry.worker,
+                ticket=entry.ticket,
+                module=entry.module,
+                repo=entry.repo,
+                number=entry.number,
+                head=entry.head,
+            )
             tell(entry, f"{where} is merged; {released}")
             continue
         if facts.state != "open":

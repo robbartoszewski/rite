@@ -673,17 +673,77 @@ def shares_one_root(remote: str) -> bool:
     return not remote
 
 
+def _local_worker_problems(
+    roles: list[ManagerRole],
+    held: dict[str, frozenset[str]],
+    local_workers: tuple[str, ...],
+) -> list[str]:
+    """Why this fleet cannot drive its local Workers (SCRUM-72 §3.3b).
+
+    🔴 **A local Worker is driven ONLY by the staged pipeline** — a spec
+    session, a plan, its review, the approach, then the steps — and rite's own
+    code enforces every stage. So a fleet that cannot author the plan, or
+    cannot independently approve it, starts the Worker, lets it claim its
+    paths and never gives it a subtask. Nothing fails; it simply never
+    happens, which is the shape `configuration_problems` exists to report.
+
+    ⚠ **Reported for the WORKERS, not only for the decomposers.** The
+    `decomposers` loop below says "manager X decomposes and nobody
+    independent reviews"; it is silent for the two fleets that cannot start
+    at all — the one with no decomposer, and the one with a single Manager
+    that would have to approve its own plan (DD-3.5).
+    """
+    if not local_workers:
+        # A Claude-only fleet is under no obligation to hold `decompose`.
+        return []
+    which = ", ".join(sorted(local_workers))
+    preamble = f"worker(s) {which} run a local engine, and "
+    decomposers = [r.name for r in roles if DECOMPOSE in held.get(r.name, ())]
+    reviewers = [r.name for r in roles if PLAN_REVIEW in held.get(r.name, ())]
+    if not decomposers:
+        return [
+            preamble + "no manager holds 'decompose' — a local Worker's ticket "
+            "moves only through the staged pipeline, and nothing here can "
+            "author the plan that pipeline starts from. The Worker would "
+            "start, claim its paths and never be given a subtask"
+        ]
+    if not reviewers:
+        return [
+            preamble + "no manager holds 'plan-review' — their plans would "
+            "wait for a review nobody can give. rite asks a plan-review holder "
+            "and waits for its answer; it never approves a plan itself (RL-6)"
+        ]
+    if all(set(reviewers) <= {author} for author in decomposers):
+        # One Manager both authors and is the only reviewer: DD-3.5 forbids it
+        # approving its own plan, so the plan can never leave PENDING.
+        return [
+            preamble + f"the only manager that could review their plans "
+            f"({', '.join(sorted(set(reviewers)))}) is the one that would "
+            "author them — and a decomposer may never approve its own plan "
+            "(DD-3.5), so the plan would stay pending for ever. Declare a "
+            "second Manager holding 'plan-review' on a different model"
+        ]
+    return []
+
+
 def configuration_problems(
     roles: list[ManagerRole],
     names: list[str] | None = None,
     *,
     one_root: bool = False,
+    local_workers: tuple[str, ...] = (),
 ) -> list[str]:
     """What `rite doctor` reports about a set of Managers (RL-T3).
 
     Each is a configuration that parses and cannot work, which is exactly the
     class doctor exists for: a parse error stops a command, and these stop a
     pipeline at the moment it is first needed, which may be days later.
+
+    `local_workers` are this project's `local:` Workers, by name. They are
+    passed in rather than read here because this function is given the
+    coordination block and nothing else, and SCRUM-72 §3.3b's refusal is about
+    the two together: a local Worker is driven by the staged pipeline, and a
+    pipeline nobody can author or approve a plan for never starts.
     """
     problems_first: list[str] = []
     if names is not None:
@@ -709,12 +769,21 @@ def configuration_problems(
                     "they are for"
                 )
 
+    held = {r.name: effective_duties(r, len(roles)) for r in roles}
+    problems_first.extend(_local_worker_problems(roles, held, local_workers))
+
     if len(roles) <= 1:
         # A lone Manager holds every duty and has nobody to gate against. Every
         # rule below is about a division of labour that does not exist yet.
+        #
+        # ⚠ **Except the local-Worker rules above**, which are checked for a
+        # lone Manager too and which it is the sharpest case of: a lone
+        # Manager would author its Worker's plan and then be the only
+        # plan-review holder, so DD-3.5 makes approving it impossible. That is
+        # a division of labour the configuration REQUIRES and does not have,
+        # not one it has not reached yet.
         return problems_first
     problems: list[str] = list(problems_first)
-    held = {r.name: effective_duties(r, len(roles)) for r in roles}
 
     routers = [r.name for r in roles if ROUTE in held[r.name]]
     # ⚠ ONLY WHEN THEY SHARE THIS ROOT. `coordination.managers` is also the
@@ -736,6 +805,7 @@ def configuration_problems(
 
     decomposers = [r for r in roles if DECOMPOSE in held[r.name]]
     reviewers = [r for r in roles if PLAN_REVIEW in held[r.name]]
+
     for decomposer in decomposers:
         mine = engine_identity(decomposer)
         independent = [

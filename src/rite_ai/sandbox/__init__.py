@@ -2798,25 +2798,50 @@ def worker_sandbox_status(
     )
 
 
-def sandbox_status_named(names: str | set[str], binary: str = "") -> SandboxStatus:
-    """The same answer for a sandbox named directly rather than by Worker.
+@dataclass(frozen=True)
+class SandboxListing:
+    """Every sandbox `yoloai ls --json` reports, from ONE call.
 
-    ⚠ **Extracted rather than copied.** `worker_sandbox_status` is the only
-    reader of `yoloai ls --json`'s status field, and the one caller that knows a
-    sandbox NAME and not a Worker (`local/in_sandbox.exec_launcher`, deciding
-    whether a failed `yoloai exec` means the turn never ran) would otherwise
-    have been a second parse of the same output — and the four "I could not
-    ask" answers below are exactly the part a second copy gets wrong.
+    `by_name` maps an environment name to its status string. `known` is False
+    when yoloAI could not be asked at all — and then `by_name` is empty and
+    `unknown` carries the sentence, because "I could not ask" and "there are
+    no sandboxes" are opposite answers and only one of them is safe to act on.
+
+    ⚠ **Why this exists (SCRUM-64 follow-up review).** `worker_sandbox_status`
+    is one subprocess with a 30-second timeout, and `reconcile` called it once
+    PER WORKER on the `rite start` path — the same per-start cost the SCRUM-64
+    commit cites as its reason for keeping the self-test reap off that path.
+    One listing answers for every Worker, so a fleet of six costs one call
+    rather than six.
     """
-    wanted = {names} if isinstance(names, str) else set(names)
-    # ⚠ The caller's yoloAI when it named one. `exec_launcher` decides whether a
-    # turn RAN by comparing what `yoloai exec` did against what `yoloai ls` says
-    # — and two different binaries can hold two different sandbox libraries
-    # (`--data-dir`), so asking a different one would answer about a sandbox
-    # that was never execed.
+
+    by_name: dict[str, str]
+    known: bool = True
+    unknown: str = ""
+
+    def status_of(self, names: str | set[str]) -> SandboxStatus:
+        """This listing's answer for a sandbox under any of `names`."""
+        if not self.known:
+            return SandboxStatus(self.unknown, known=False)
+        wanted = {names} if isinstance(names, str) else set(names)
+        for name in wanted:
+            if name in self.by_name:
+                return SandboxStatus(self.by_name[name])
+        return SandboxStatus("not found")
+
+
+def list_sandboxes(binary: str = "") -> SandboxListing:
+    """One `yoloai ls --json`, parsed. The ONE reader of that output.
+
+    ⚠ The caller's yoloAI when it named one. `exec_launcher` decides whether a
+    turn RAN by comparing what `yoloai exec` did against what `yoloai ls` says
+    — and two different binaries can hold two different sandbox libraries
+    (`--data-dir`), so asking a different one would answer about a sandbox
+    that was never execed.
+    """
     binary = binary or _yoloai_binary()
     if binary is None:
-        return SandboxStatus("yoloai not found", known=False)
+        return SandboxListing({}, known=False, unknown="yoloai not found")
     proc = subprocess.run(
         [binary, "ls", "--json"],
         capture_output=True,
@@ -2826,26 +2851,50 @@ def sandbox_status_named(names: str | set[str], binary: str = "") -> SandboxStat
     )
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
-        return SandboxStatus(
-            f"unknown — `yoloai ls --json` exited {proc.returncode}: {detail[:200]}",
+        return SandboxListing(
+            {},
             known=False,
+            unknown=(
+                f"unknown — `yoloai ls --json` exited {proc.returncode}: {detail[:200]}"
+            ),
         )
     try:
         data = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        return SandboxStatus(
-            "unknown — `yoloai ls --json` did not return JSON", known=False
+        return SandboxListing(
+            {}, known=False, unknown="unknown — `yoloai ls --json` did not return JSON"
         )
     if not isinstance(data, dict):
-        return SandboxStatus(
-            "unknown — `yoloai ls --json` returned unexpected JSON", known=False
+        return SandboxListing(
+            {},
+            known=False,
+            unknown="unknown — `yoloai ls --json` returned unexpected JSON",
         )
     # Both forms: a sandbox started before §8.10 still answers `status`
     # rather than reporting "not found" for something plainly running.
+    found: dict[str, str] = {}
     for entry in data.get("sandboxes", []):
-        if entry.get("environment", {}).get("name") in wanted:
-            return SandboxStatus(str(entry.get("status", "unknown")))
-    return SandboxStatus("not found")
+        name = entry.get("environment", {}).get("name")
+        if isinstance(name, str) and name:
+            found[name] = str(entry.get("status", "unknown"))
+    return SandboxListing(found)
+
+
+def sandbox_status_named(names: str | set[str], binary: str = "") -> SandboxStatus:
+    """The same answer for a sandbox named directly rather than by Worker.
+
+    ⚠ **Extracted rather than copied.** `worker_sandbox_status` is the only
+    reader of `yoloai ls --json`'s status field, and the one caller that knows a
+    sandbox NAME and not a Worker (`local/in_sandbox.exec_launcher`, deciding
+    whether a failed `yoloai exec` means the turn never ran) would otherwise
+    have been a second parse of the same output — and the four "I could not
+    ask" answers below are exactly the part a second copy gets wrong.
+
+    One call, one answer. A caller asking about SEVERAL Workers uses
+    `list_sandboxes` once and `SandboxListing.status_of` per Worker, which is
+    the same parse without the subprocess per Worker.
+    """
+    return list_sandboxes(binary).status_of(names)
 
 
 _GITHUB_URL_RE = re.compile(

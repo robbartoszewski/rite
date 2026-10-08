@@ -57,7 +57,7 @@ def test_the_owner_is_told_it_routes_and_to_whom(tmp_path, monkeypatch, board):
     said = _start(tmp_path, monkeypatch, TWO, "lead", board=board)
     assert "You are the OWNER" in said
     assert "- 'helper': engine claude; duties execute" in said
-    assert " route --ticket <ID> <manager> - <<'RITE_TEXT_" in said
+    assert " route --ticket <ID> <manager> --from-file " in said
     assert " chore <message-id>" in said
     assert "no authority over you" in said
     # A6: a reply is verified before a person is told it happened.
@@ -84,7 +84,7 @@ def test_a_lone_managers_prompt_is_unchanged(tmp_path, monkeypatch):
     assert "Other Managers" not in said
 
 
-def test_with_no_single_owner_they_are_told_nobody_routes():
+def test_with_no_single_owner_they_are_told_nobody_routes(tmp_path):
     from rite_ai.config.managers import parse_managers
     from rite_ai.managers.routing import briefing
 
@@ -94,7 +94,7 @@ def test_with_no_single_owner_they_are_told_nobody_routes():
             {"name": "b", "engine": "claude", "preset": "executor"},
         ]
     ).roles
-    said = briefing("a", "", list(roles))
+    said = briefing("a", "", list(roles), root=tmp_path)
     assert "No Manager here holds 'route'" in said
     assert "Work only on instructions from this machine" in said
 
@@ -109,7 +109,7 @@ def test_the_owner_is_told_to_ask_the_user_before_routing(tmp_path, monkeypatch,
     # kept beside the new one.
     assert "asking you back" not in said
     assert "ask the User before you" in said
-    assert " ask -`, as above" in said
+    assert " ask`, as above" in said
     assert "Never route a guess" in said
 
 

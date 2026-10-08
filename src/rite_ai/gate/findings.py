@@ -13,6 +13,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from rite_ai.githost import hardened_git_env
+
 # "fail" blocks publish. "warn" is surfaced but does not block — currently
 # only used for stale suppression entries, never for an actual finding: a
 # real leak is always "fail". A future severity-tiered rule set could extend
@@ -163,6 +165,7 @@ def publishable_scope(root: Path) -> list[str]:
         proc = subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
             cwd=root,
+            env=hardened_git_env(),
             capture_output=True,
             text=True,
             errors="replace",
@@ -242,6 +245,7 @@ def iter_commit_messages(
         proc = subprocess.run(
             args,
             cwd=root,
+            env=hardened_git_env(),
             capture_output=True,
             text=True,
             errors="replace",

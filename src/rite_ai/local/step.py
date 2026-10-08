@@ -85,12 +85,39 @@ class Step:
     which is a result and not a problem with asking."""
 
 
-def _slice_for(root: Path, cites: tuple[str, ...]) -> tuple[str, str]:
+def _definition_for(root: Path, manager: str, ticket: str) -> str:
+    """The ticket's agreed definition of done, as the slice carries it, or "".
+
+    ⚠ **"" rather than a refusal, and that is not a hole.** The stage machine
+    will not let a ticket reach a step without having passed `defined`
+    (`stage.TRANSITIONS`, `gates.gate_for`), so a step with no definition can
+    only be one driven by hand through `rite local step`. Refusing here would
+    put a second copy of that gate in the executor, where it would be the one
+    somebody later changes; the pipeline's guard is the guard.
+    """
+    from rite_ai.local.gates import definition_snapshot
+    from rite_ai.local.loop import _definition_text
+
+    return _definition_text(definition_snapshot(Path(root), manager, ticket))
+
+
+def _slice_for(
+    root: Path, cites: tuple[str, ...], definition: str = ""
+) -> tuple[str, str]:
     """(the cited spec text, or a problem). Never a silent empty slice.
 
     The slice IS the context the model gets instead of the spec, so sending
     nothing would quietly reproduce the free-form run this replaces. A cite
     rite cannot resolve is a refusal, not a shrug.
+
+    🔴 **The agreed definition of done comes FIRST (SCRUM-72d, §3.3a: the
+    snapshot is fed "to the decomposer and the slice").** Without it a subtask
+    ran against spec units and its own one-line intent, with the signed
+    definition of done — the thing `deliver` later holds the work against —
+    sitting in a record nothing in this path read. The ticket's definition and
+    the subtask's spec are different kinds of context and the model needs
+    both: the spec says how this codebase does things, the definition says
+    what done means for this ticket.
     """
     from rite_ai.spec.digest_files import unit_filename, units_dir
 
@@ -112,7 +139,14 @@ def _slice_for(root: Path, cites: tuple[str, ...]) -> tuple[str, str]:
             "because a subtask run without its slice is the free-form run "
             "this path exists to replace"
         )
-    return "\n\n".join(parts), ""
+    text = "\n\n".join(parts)
+    if definition:
+        text = (
+            f"{definition}\n\n"
+            "The spec units this subtask cites, which are how this codebase "
+            "does the thing above:\n\n" + text
+        )
+    return text, ""
 
 
 @dataclass
@@ -123,13 +157,26 @@ class _LedgerClaims:
     claims ledger exists for, and a local tier with its own would be a second
     answer to "who holds this path". `manager=` is passed so a force-release
     cannot reach across Managers (MM3).
+
+    ⚠ `ticket=` is passed for the same reason every other claim carries one:
+    a claim that names no ticket cannot be matched to the work it was taken
+    for, so nothing can ever tell whether it went stale. `reconcile` releases
+    only on an exact ticket match, and a whole tier claiming `""` would have
+    been a tier whose claims no reconciliation could ever reason about
+    (SCRUM-64 follow-up). `harness.Claims.take` carries no ticket — a subtask
+    claim is for the ticket the plan is for, which is fixed for the life of
+    this adapter, so it is held here rather than threaded through the
+    protocol.
     """
 
     ledger: object
     manager: str = ""
+    ticket: str = ""
 
     def take(self, paths: tuple[str, ...], worker: str) -> bool:
-        return bool(self.ledger.claim(list(paths), worker, manager=self.manager).ok)
+        return bool(
+            self.ledger.claim(list(paths), worker, self.ticket, manager=self.manager).ok
+        )
 
     def release(self, paths: tuple[str, ...], worker: str) -> None:
         self.ledger.release(worker, list(paths))
@@ -158,6 +205,7 @@ def take_one_step(
     committer=None,
     claims=None,
     placement=None,
+    approach_for=None,
 ) -> Step:
     """Run the next planned subtask of `ticket`, or say why nothing ran.
 
@@ -169,14 +217,18 @@ def take_one_step(
     claim identity all come from it, so a test that could only substitute the
     agent could not reach them. Left unset — and with no agent passed either —
     it is resolved from the project, which is the production path.
+
+    `approach_for` is Level 2's producer (SCRUM-72e), injectable for the same
+    reason: the approach is REQUIRED now, so a test that could not substitute
+    it could only ever test the refusal.
     """
     root = Path(root)
     step = Step(ticket=ticket)
 
     if state is None:
-        from rite_ai.coordination.local_backend import LocalStateLayer
+        from rite_ai.local.plan_state import layer
 
-        state = LocalStateLayer(root / ".rite")
+        state = layer(root)
 
     read = dec.read(state, ticket)
     if read.unavailable:
@@ -214,7 +266,9 @@ def take_one_step(
         )
         return step
 
-    spec_slice, slice_problem = _slice_for(root, subtask.cites)
+    spec_slice, slice_problem = _slice_for(
+        root, subtask.cites, _definition_for(root, manager, ticket)
+    )
     if slice_problem:
         step.problem = f"{ticket} {subtask.id}: {slice_problem}"
         return step
@@ -273,29 +327,54 @@ def take_one_step(
         from rite_ai.claims.ledger import ClaimsLedger
 
         claims = _LedgerClaims(
-            ClaimsLedger(root / ".rite" / "claims.json"), manager=manager
+            ClaimsLedger(root / ".rite" / "claims.json"),
+            manager=manager,
+            ticket=ticket,
         )
 
-    # Level 2 (DD-2.4, OL6): the unit's own steps, with its DECOMPOSITION model,
-    # before it edits anything. Advisory by design — a unit with no decomposition
-    # model, or a Level-2 turn that could not run, executes exactly as before.
-    approach, approach_note = _approach_for(
-        root, manager, subtask, spec_slice, placement if placed else None
-    )
+    # Level 2 (SCRUM-72e, overriding DD-2.4's fail-open per Robert's §5.5):
+    # the unit's own steps, with its DECOMPOSITION model, before it edits
+    # anything — REQUIRED and PERSISTED. Written here if it is not stored yet,
+    # then the guard decides whether this subtask may run at all.
+    from rite_ai.local import level2
 
-    # ⚠ The boundary, checked rather than trusted (DD-2.4). Level 2 runs between
-    # approval and execution, so a subtask it altered would be rewriting what
-    # plan review passed — and `scope` is the committer's allowlist while
-    # `verify` is the only thing RL-7 trusts. `_approach_for` is given no way to
-    # return a subtask, so this is belt and braces; the design asks for a check
-    # and not a convention, and a structural guarantee somebody can refactor
-    # away is a convention.
-    from rite_ai.local.approach import boundary_problem
+    approach_note = ""
+    stored = level2.read_approach(state, ticket, subtask.id)
+    if stored is None or (
+        not isinstance(stored, str) and stored.digest != level2.digest(subtask)
+    ):
+        # None yet, or written for a subtask this one is no longer — either
+        # way this turn produces one. ⚠ A failure here is NOT a failed
+        # subtask (RL-47): the guard below refuses the step and the caller
+        # reports it, keeping the subtask's status and burning no attempt. An
+        # endpoint that was down did not produce a bad approach.
+        produce = approach_for or _approach_for
+        produced, approach_note = produce(
+            root, manager, subtask, spec_slice, placement if placed else None
+        )
+        if produced:
+            written = level2.write_approach(state, ticket, subtask, produced)
+            if not isinstance(written, dec.Written):
+                approach_note = (
+                    f"its Level-2 approach could not be persisted: "
+                    f"{getattr(written, 'reason', 'it changed under this write')}"
+                )
 
-    drifted = boundary_problem(plan.subtask(subtask.id) or subtask, subtask)
-    if drifted:
-        step.problem = f"{ticket} {subtask.id}: {drifted}"
+    # ⚠ **The boundary, against APPROVAL TIME.** The old check was
+    # `boundary_problem(plan.subtask(subtask.id) or subtask, subtask)` — both
+    # sides from the one read, so it could only ever pass, and what it exists
+    # for is a subtask edited between approval and execution. `cleared_to_run`
+    # compares the executing subtask against the digest `approve_plan`
+    # recorded, and also refuses a step with no persisted approach. `scope` is
+    # the committer's allowlist and `verify` is the only thing RL-7 trusts, so
+    # a change to either turns the gates into decoration.
+    verdict = level2.cleared_to_run(state, ticket, subtask)
+    if isinstance(verdict, level2.Blocked):
+        step.problem = f"{ticket} {subtask.id}: {verdict.why}" + (
+            f" ({approach_note})" if approach_note else ""
+        )
         return step
+    approach = verdict.steps
 
     outcome = run_subtask(
         state=state,

@@ -26,8 +26,8 @@ from pathlib import Path
 
 import pytest
 
-from rite_ai.coordination.local_backend import LocalStateLayer
 from rite_ai.local import decomposition as dec
+from rite_ai.local import plan_state
 from rite_ai.local import step as st
 from rite_ai.local.harness import AgentReport, Commit, VerifyResult
 
@@ -107,11 +107,37 @@ def project(tmp_path):
 
 
 def _seed(root: Path, plan: dec.Decomposition):
-    state = LocalStateLayer(root / ".rite")
+    state = plan_state.layer(root)
     read = dec.read(state, plan.ticket)
     written = dec.write(state, plan, read.version)
     assert type(written).__name__ == "Written", written
+    if plan.approval == dec.APPROVED:
+        _clear_level2(state, plan)
     return state
+
+
+def _clear_level2(state, plan, steps="1. do the thing") -> None:
+    """Record what approval recorded, and persist an approach per subtask —
+    what the real pipeline leaves behind by the time a step runs (SCRUM-72e).
+
+    ⚠ **Not a stub of the guard, a set-up of its inputs.** Level 2 is required
+    and persisted now, and `cleared_to_run` refuses a step without it; these
+    tests are about the EXECUTOR, so they arrive at it the way a driven
+    pipeline does. The guard's own refusals are tested where they belong.
+    """
+    from rite_ai.local import level2
+
+    recorded = level2.record_approval(
+        state,
+        plan.ticket,
+        plan.approved_by or "reviewer",
+        plan.subtasks,
+        expected=level2.approval_version(state, plan.ticket),
+    )
+    assert type(recorded).__name__ == "Written", recorded
+    for sub in plan.subtasks:
+        written = level2.write_approach(state, plan.ticket, sub, steps)
+        assert type(written).__name__ == "Written", written
 
 
 def _approved(subtasks=None) -> dec.Decomposition:
@@ -283,7 +309,7 @@ class TestNothingRunsFromAnUnapprovedPlan:
     def test_no_decomposition_says_the_decomposer_does_not_exist(self, project):
         """Honest about the hole rather than silent: rite cannot produce a
         plan yet, so a project with none is told that."""
-        state = LocalStateLayer(project / ".rite")
+        state = plan_state.layer(project)
 
         step = st.take_one_step(
             project,

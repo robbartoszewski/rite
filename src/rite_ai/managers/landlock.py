@@ -59,6 +59,7 @@ import ctypes.util
 import json
 import os
 import shlex
+import stat
 import struct
 import sys
 from pathlib import Path
@@ -66,9 +67,11 @@ from pathlib import Path
 from rite_ai.managers import manager_dir, user_dir
 from rite_ai.managers.enclosure import (  # noqa: PLC2701
     _engine_state_paths,
+    _own_subdirs,
     _running_rite,
     _tool_paths,
     engine_tmp,
+    refuse_linked_manager_paths,
 )
 
 # ⚠ **SHARED WITH SEATBELT ON PURPOSE, NOT DUPLICATED.** These four carry
@@ -181,6 +184,14 @@ def abi() -> int:
     except OSError:
         return 0
     return result if result > 0 else 0
+
+
+MANAGER_OWNED_WITHHELD = (
+    A_MAKE_SYM | A_MAKE_FIFO | A_MAKE_CHAR | A_MAKE_BLOCK | A_MAKE_SOCK | A_REFER
+)
+"""Rights a Manager does not get in its own directory or outbox (SCRUM-69
+follow-up review): rite reads and writes there from outside every boundary,
+so only regular files and directories made there belong there."""
 
 
 def _handled(level: int) -> int:
@@ -484,6 +495,35 @@ def compose_policy(root: Path, manager: str, home: Path | None = None) -> dict:
         # from inside one, so it asks the supervisor.
         "readable": [str(p) for p in dict.fromkeys(readable)],
         "writable": [str(p) for p in dict.fromkeys(writable)],
+        # 🔴 Granted only if NOT a link, checked at the moment the rule is
+        # added (SCRUM-69 round-3 review): a Landlock rule names the inode a
+        # path opens to, and `engine_tmp` sits in `.rite/user/`, which every
+        # Manager in the root can write, so a sibling could swap it for a
+        # link to `$HOME` between `write_profile` and the launch.
+        "no_follow": [
+            str(p)
+            for p in (
+                manager_dir(root, manager),
+                mail / OUTBOX,
+                engine_tmp(root, manager),
+            )
+        ],
+        # ⚠ And in these two, no link, FIFO or device is made, and nothing is
+        # moved in from elsewhere (REFER): rite works there from outside every
+        # boundary (`own_dir`), and a directory moved in from the project
+        # could carry a link (SCRUM-69 follow-up review). The seatbelt
+        # profile refuses the same.
+        "manager_owned": [str(manager_dir(root, manager)), str(mail / OUTBOX)],
+        # Walked from the project, one component at a time without following
+        # a link, and granted through that walk's own descriptor: every
+        # component of `engine_tmp` sits in the project tree, which every
+        # Manager in the root can write.
+        "walked_from_project": [
+            [
+                str(engine_tmp(root, manager)),
+                str(engine_tmp(root, manager).relative_to(root)),
+            ],
+        ],
         # Read-only although they sit under a granted tree elsewhere: an agent
         # that can rewrite git config can change what every later commit
         # claims.
@@ -590,6 +630,9 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     Rewritten every run, for the reason the seatbelt profile is: a write-once
     file pins a project to whatever shipped the day it was created.
     """
+    # A Landlock rule names the inode the path opens to, so a linked
+    # Manager directory would grant its target (SCRUM-69 review).
+    refuse_linked_manager_paths(root, manager)
     path = policy_path(root, manager, home)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     _legacy_policy_path(root, manager).unlink(missing_ok=True)
@@ -609,6 +652,10 @@ def write_profile(root: Path, manager: str, home: Path | None = None) -> Path:
     # It is under rite's data directory now (DF3), not the project, and
     # granted by exact path.
     manager_dir(root, manager).mkdir(parents=True, exist_ok=True)
+    # And inside it, the two directories a Manager's text passes through
+    # (SCRUM-69): zsh's heredocs (`boundaries.heredoc_dir`), which zsh will
+    # not create, and the drafts `rite reply --from-file` reads.
+    _own_subdirs(root, manager)
     mailbox_dir(root, manager, OUTBOX).mkdir(parents=True, exist_ok=True)
     mailbox_dir(root, manager, INBOX).mkdir(parents=True, exist_ok=True)
     # ⚠ Before composing, for the same reason and with the same resolution of
@@ -731,14 +778,52 @@ def why_it_was_refused(root: Path, manager: str) -> str:
 FILE_ONLY = A_EXECUTE | A_READ_FILE | A_WRITE_FILE | A_TRUNCATE
 
 
-def _add_rule(ruleset_fd: int, path: str, access: int) -> None:
-    if not os.path.isdir(path):
+def _walk_no_follow(base: str, rel: str) -> int:
+    """`base/rel` opened `O_PATH`, every component of `rel` without following
+    a link and required to be a directory. Raises OSError otherwise."""
+    fd = os.open(base, os.O_PATH | os.O_CLOEXEC | os.O_DIRECTORY)
+    try:
+        for part in Path(rel).parts:
+            nxt = os.open(
+                part,
+                os.O_PATH | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=fd,
+            )
+            os.close(fd)
+            fd = nxt
+            if not stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(
+                    f"refusing to grant {base}/{rel}: {part} is a link, not "
+                    "rite's directory"
+                )
+        return os.dup(fd)
+    finally:
+        os.close(fd)
+
+
+def _add_rule(
+    ruleset_fd: int,
+    path: str,
+    access: int,
+    *,
+    no_follow: bool = False,
+    opened: int | None = None,
+) -> None:
+    if opened is None and not os.path.isdir(path):
         access &= FILE_ONLY
     if access == 0:
         # Nothing this node can be granted; a zero-right rule is also EINVAL.
         return
-    fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
+    if opened is not None:
+        fd = opened
+    else:
+        flags = os.O_PATH | os.O_CLOEXEC | (os.O_NOFOLLOW if no_follow else 0)
+        fd = os.open(path, flags)
     try:
+        if no_follow and not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(
+                f"refusing to grant {path}: it is a link, not rite's directory"
+            )
         attr = _path_beneath(access, fd)
         result, err = _syscall(
             SYS_ADD_RULE,
@@ -788,6 +873,10 @@ def apply(policy: dict) -> int:
 
     try:
         readonly = {str(p) for p in policy.get("readonly_overrides", ())}
+        no_follow = {str(p) for p in policy.get("no_follow", ())}
+        owned = {str(p) for p in policy.get("manager_owned", ())}
+        project = str(policy.get("project", ""))
+        walked = {str(p): rel for p, rel in policy.get("walked_from_project", ())}
         for path in policy.get("readable", ()):
             if os.path.exists(path):
                 _add_rule(ruleset_fd, path, READ_ONLY & _handled(level))
@@ -800,7 +889,18 @@ def apply(policy: dict) -> int:
             # the only one that names it, and the writable trees above never
             # name these two directly.
             access = READ_ONLY if path in readonly else _handled(level)
-            _add_rule(ruleset_fd, path, access)
+            if path in owned:
+                access &= ~MANAGER_OWNED_WITHHELD
+            if path in walked:
+                _add_rule(
+                    ruleset_fd,
+                    path,
+                    access,
+                    no_follow=True,
+                    opened=_walk_no_follow(project, walked[path]),
+                )
+                continue
+            _add_rule(ruleset_fd, path, access, no_follow=path in no_follow)
         for path in readonly:
             if os.path.exists(path):
                 _add_rule(ruleset_fd, path, READ_ONLY & _handled(level))

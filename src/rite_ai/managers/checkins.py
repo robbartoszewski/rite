@@ -34,14 +34,12 @@ exist.
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rite_ai.managers import manager_dir
-from rite_ai.state import write_atomic
+from rite_ai.managers import manager_dir, own_dir
 
 CHECKINS_DIRNAME = "checkins"
 QUEUE_DIRNAME = "queue"
@@ -91,8 +89,10 @@ def defer(root: Path, manager: str, text: str, meanwhile: str) -> Question:
     qid = "q" + secrets.token_hex(3)
     where = _queue_dir(root, manager)
     path = where / f"{int(queued_at * 1000)}_{qid}.json"
-    write_atomic(
-        path,
+    own_dir.write_text(
+        root,
+        manager,
+        f"{CHECKINS_DIRNAME}/{QUEUE_DIRNAME}/{path.name}",
         json.dumps(
             {"id": qid, "text": text, "meanwhile": meanwhile, "queued_at": queued_at}
         )
@@ -109,13 +109,22 @@ def _queued(root: Path, manager: str) -> list[Question]:
     It is returned with its raw content as the text rather than skipped. A
     question skipped here would never be asked, and rite would never say so.
     """
+    # Through `own_dir`, following no link the Manager planted (SCRUM-69
+    # round-3 review): a queue linked elsewhere would be read, and its files
+    # removed, wherever it pointed. A link in it is not a question.
+    from rite_ai.managers import own_dir
+
     where = _queue_dir(root, manager)
-    if not where.is_dir():
+    queue = f"{CHECKINS_DIRNAME}/{QUEUE_DIRNAME}"
+    try:
+        names = own_dir.names(root, manager, queue, ".json")
+    except OSError:
         return []
     out: list[Question] = []
-    for path in sorted(where.glob("*.json")):
+    for name in names:
+        path = where / name
         try:
-            raw = path.read_text()
+            raw = own_dir.read(root, manager, queue, name, 256 * 1024)
         except OSError:
             continue
         try:
@@ -136,6 +145,14 @@ def _queued(root: Path, manager: str) -> list[Question]:
     return out
 
 
+def _drop(root: Path, manager: str, q: Question) -> None:
+    """Remove an asked or withdrawn question, through the queue's own
+    descriptor: an `unlink` by path follows a linked directory above it."""
+    from rite_ai.managers import own_dir
+
+    own_dir.unlink_in(root, manager, f"{CHECKINS_DIRNAME}/{QUEUE_DIRNAME}", q.path.name)
+
+
 def record(root: Path, manager: str, event: dict) -> None:
     """Append one event to the Manager's check-in ledger.
 
@@ -143,21 +160,22 @@ def record(root: Path, manager: str, event: dict) -> None:
     how many questions were queued, withdrawn before asking, and asked.
     One JSON object per line, appended in one write.
     """
-    path = _checkins_dir(root, manager) / LEDGER_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event, sort_keys=True) + "\n"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    try:
-        os.write(fd, line.encode())
-    finally:
-        os.close(fd)
+    # 🔴 Through the layer (`own_dir`): measured, a `checkins/` moved in with
+    # its ledger linked to `~/.zshrc` had this append a `$(…)` line there.
+    own_dir.append_text(
+        root,
+        manager,
+        f"{CHECKINS_DIRNAME}/{LEDGER_FILENAME}",
+        json.dumps(event, sort_keys=True) + "\n",
+    )
 
 
 def ledger(root: Path, manager: str) -> list[dict]:
     """Every recorded event, oldest first. Unreadable lines are skipped."""
-    path = _checkins_dir(root, manager) / LEDGER_FILENAME
     try:
-        lines = path.read_text().splitlines()
+        lines = own_dir.read_text(
+            root, manager, f"{CHECKINS_DIRNAME}/{LEDGER_FILENAME}"
+        ).splitlines()
     except OSError:
         return []
     out: list[dict] = []
@@ -205,10 +223,7 @@ def ask_now(
     now = time.time()
     for q in questions:
         record(root, manager, {"event": "asked", "id": q.id, "at": now, "how": how})
-        try:
-            q.path.unlink()
-        except FileNotFoundError:
-            pass
+        _drop(root, manager, q)
     return path
 
 
@@ -297,28 +312,23 @@ REEVALUATING_FILENAME = "reevaluating.json"
 LAST_CHECKIN_FILENAME = "last.json"
 
 
-def _reevaluating_path(root: Path, manager: str) -> Path:
-    return _checkins_dir(root, manager) / REEVALUATING_FILENAME
+_REEVALUATING = f"{CHECKINS_DIRNAME}/{REEVALUATING_FILENAME}"
+_LAST = f"{CHECKINS_DIRNAME}/{LAST_CHECKIN_FILENAME}"
 
 
 def _reevaluating(root: Path, manager: str) -> bool:
     """Has a re-evaluation cycle been composed and not yet delivered?"""
-    return _reevaluating_path(root, manager).exists()
+    return own_dir.exists(root, manager, _REEVALUATING)
 
 
 def _clear_reevaluation(root: Path, manager: str) -> None:
-    try:
-        _reevaluating_path(root, manager).unlink()
-    except FileNotFoundError:
-        pass
+    own_dir.unlink(root, manager, _REEVALUATING)
 
 
 def _last_checkin(root: Path, manager: str) -> float:
     """When the last check-in was delivered, or 0.0 if none ever was."""
     try:
-        data = json.loads(
-            (_checkins_dir(root, manager) / LAST_CHECKIN_FILENAME).read_text()
-        )
+        data = json.loads(own_dir.read_text(root, manager, _LAST))
         return float(data.get("at") or 0.0) if isinstance(data, dict) else 0.0
     except (OSError, ValueError, TypeError):
         return 0.0
@@ -358,8 +368,10 @@ def at_boundary(root: Path, manager: str) -> Boundary:
     if not state.open_now or checkin_done_this_window(root, manager, state):
         return Boundary()
     waiting = _queued(root, manager)
-    write_atomic(
-        _reevaluating_path(root, manager),
+    own_dir.write_text(
+        root,
+        manager,
+        _REEVALUATING,
         json.dumps({"ids": [q.id for q in waiting], "at": time.time()}) + "\n",
     )
     instruction = _standup_instruction(root, manager)
@@ -523,10 +535,7 @@ def withdraw(root: Path, manager: str, qid: str, answered_by: str) -> str:
                     "answered_by": answered_by,
                 },
             )
-            try:
-                q.path.unlink()
-            except FileNotFoundError:
-                pass
+            _drop(root, manager, q)
             return ""
     waiting = ", ".join(q.id for q in _queued(root, manager)) or "none"
     return (
@@ -686,14 +695,8 @@ def _deliver_checkin(root: Path, manager: str) -> str:
         record(
             root, manager, {"event": "asked", "id": q.id, "at": now, "how": "checkin"}
         )
-        try:
-            q.path.unlink()
-        except FileNotFoundError:
-            pass
-    write_atomic(
-        _checkins_dir(root, manager) / LAST_CHECKIN_FILENAME,
-        json.dumps({"at": now}) + "\n",
-    )
+        _drop(root, manager, q)
+    own_dir.write_text(root, manager, _LAST, json.dumps({"at": now}) + "\n")
     _clear_reevaluation(root, manager)
     return f"check-in: {counts.line()} (`rite replies` shows the check-in)"
 
@@ -724,17 +727,22 @@ def instructions(root: Path, manager: str) -> str:
         "default, and every doubt is resolved by asking now.",
         "",
         "To ask now:",
-        stdin_text.heredoc(f"{rite} ask --manager {manager} -", "<question>"),
-        stdin_text.RULE,
+        stdin_text.file_form(
+            root, manager, f"{rite} ask --manager {manager}", "ask.md", "the question"
+        ),
+        stdin_text.FILE_RULE,
         "",
         "Only when a question is CLEARLY deferrable, meaning you have real "
         "work to do meanwhile that does not depend on the answer, you may "
         "defer it to the User's next check-in:",
-        # SCRUM-33: the meanwhile is the heredoc's first line, never a
+        # SCRUM-33: the meanwhile is the file's first line, never a
         # double-quoted argument; it names tickets other people wrote.
-        stdin_text.heredoc(
-            f"{rite} ask --manager {manager} --defer --while - -",
-            "<what you will do meanwhile, on this one line>\n<question>",
+        stdin_text.file_form(
+            root,
+            manager,
+            f"{rite} ask --manager {manager} --defer --while -",
+            "ask.md",
+            "what you will do meanwhile on the first line, then the question",
         ),
         "The first line is what you will do meanwhile, the rest is the "
         "question. If you cannot name that work, the question blocks you: ask "

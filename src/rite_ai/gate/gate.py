@@ -54,6 +54,10 @@ class GateReport:
     # `_split_off_pre_existing`.
     pre_existing: list[Finding] = field(default_factory=list)
     stale_suppressions: list[Suppression] = field(default_factory=list)
+    # ⚠ Always EMPTY for a range-scoped run, and that is not the same claim
+    # as "none are stale": a range cannot tell. `stale_unknown` says which it
+    # is, so a reader is never told a clean bill of health nobody checked.
+    stale_unknown: bool = False
     # Every entry that parsed, stale or not — so a report can say how many
     # findings one of them is covering.
     suppressions: list[Suppression] = field(default_factory=list)
@@ -425,7 +429,24 @@ def _run_gate(
         )
 
     blocking, suppressed = supp_mod.apply(merged, suppressions)
-    stale = supp_mod.find_stale(suppressions, merged)
+    # ⚠ **A RANGE CANNOT ANSWER "IS THIS ENTRY STALE" (SCRUM-39).** Stale
+    # means "this entry matches nothing, so look at it before trusting it" —
+    # a statement about the whole repository. Under a range the scan
+    # deliberately did not look at most of history, so an entry pinned to a
+    # commit outside it matches nothing for a reason that says nothing about
+    # the entry.
+    #
+    # Measured on rite's own repository, 2026-10-07: `rite publish check
+    # --ci-range --strict` reported 10 stale suppressions and exited 1, where
+    # the same command without a range exits 0 — including the very entry
+    # #186 had to land in main. Shipping that in the generated template would
+    # have turned the required check red on every pull request of every
+    # project rite creates: a worse failure than the coupling SCRUM-39 fixes,
+    # and introduced by the fix for it.
+    #
+    # It also makes the pre-push hook's output honest, which it was not: the
+    # hook has always passed a range and has always listed these.
+    stale = [] if rev_range else supp_mod.find_stale(suppressions, merged)
 
     blocking, pre_existing = _split_off_pre_existing(root, rev_range, blocking)
 
@@ -434,6 +455,7 @@ def _run_gate(
         suppressed=suppressed,
         pre_existing=pre_existing,
         stale_suppressions=stale,
+        stale_unknown=bool(rev_range) and bool(suppressions),
         suppressions=suppressions,
         files_scanned=len(tracked),
         unreadable_files=unreadable,
@@ -449,8 +471,11 @@ def _looks_like_a_repo(root: Path) -> bool:
     import subprocess
 
     try:
+        from rite_ai.githost import hardened_git_env
+
         proc = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--git-dir"],
+            env=hardened_git_env(),
             capture_output=True,
             text=True,
             errors="replace",
@@ -529,9 +554,17 @@ def _count_commits(root: Path, rev_range: str | None) -> int | None:
 
     scope = rev_range_args(rev_range) if rev_range else publishable_scope(root)
     args = ["git", "rev-list", "--count", *scope]
+    from rite_ai.githost import hardened_git_env
+
     try:
         proc = subprocess.run(
-            args, cwd=root, capture_output=True, text=True, errors="replace", timeout=60
+            args,
+            cwd=root,
+            env=hardened_git_env(),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=60,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -717,6 +750,25 @@ def _commit_clause(report: GateReport) -> str:
     return f" and {n} commit(s) of history"
 
 
+def brief(report: GateReport, limit: int = 10) -> list[str]:
+    """The gate's findings in a few lines, for a NOTE to a Manager (SCRUM-59):
+    a refused delivery, or `rite request gate`. What and where, never the
+    match itself: a note is mail, and a real secret must not ride in it.
+    "" findings and no error is said as clean, never as nothing."""
+    if report.errors:
+        return [f"could not complete: {e}" for e in report.errors[:limit]]
+    lines = []
+    for f in report.findings[:limit]:
+        loc = f"{f.file}:{f.line}" if f.line else f.file
+        commit = f" ({f.commit[:8]})" if f.commit else ""
+        lines.append(f"[{f.rule_id}] {loc}{commit} — {f.description}")
+    if len(report.findings) > limit:
+        lines.append(f"… and {len(report.findings) - limit} more")
+    if not lines:
+        lines.append("no blocking findings")
+    return lines
+
+
 def format_report(report: GateReport) -> str:
     """Human-readable summary — used by both the standalone `__main__` CLI
     and (once wired) the `rite publish check` command."""
@@ -777,6 +829,16 @@ def format_report(report: GateReport) -> str:
         lines.append(
             "  Blocking this push would not unpublish them. Run `rite publish "
             "check` to see all of them and decide."
+        )
+    if report.stale_unknown:
+        # Said, not left out. A range-scoped run that printed nothing here
+        # would read as "every suppression still earns its place", which is
+        # the one thing it cannot know (SCRUM-39).
+        lines.append(
+            "\nstale suppressions: not checked — this run scanned a range, "
+            "and an entry pinned outside it matches nothing for a reason "
+            "that says nothing about the entry. The scheduled full-history "
+            "run is what checks them."
         )
     if report.stale_suppressions:
         n = len(report.stale_suppressions)

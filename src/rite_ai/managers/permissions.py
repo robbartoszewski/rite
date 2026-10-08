@@ -465,8 +465,9 @@ def refusal(command: str, root: Path, manager: str) -> str:
             f"engine refused that part, so the whole call did not run and "
             f"nothing was sent. rite's own command was not what was refused, "
             f"and nothing should be added to the allowlist: the end line "
-            f"changes with every instruction. The Manager's instructions say "
-            f"to write it once, with nothing after it."
+            "changes with every instruction. The Manager's instructions no "
+            "longer teach a heredoc at all: its text goes in a draft file, "
+            "named with `--from-file`, which has no end line to repeat."
         )
     if command in _TOOL_NAMES:
         head = command

@@ -1,6 +1,6 @@
 # rite — Multi-session Claude coordination for teams
 
-**Version:** 0.24.85 · **Date:** 2026-10-03
+**Version:** 0.24.92 · **Date:** 2026-10-07
 
 **Revision history** is at the end of this document (§14) — it records what
 each version corrected and why, including the claims that did not survive
@@ -6673,6 +6673,86 @@ Whether it is the right answer for a command that also releases claims is an
 because guessing at it is how the `start` collision became three meanings
 for one positional.
 
+#### 9.14.14. Dogfood fixes: lifecycle requests, reconciliation, local Workers under any Manager (DESIGN; lifecycle requests BUILT)
+
+Planned in `docs/design/V071_DOGFOOD_FIXES.md`. The decided directions:
+
+- **Lifecycle requests (SCRUM-59). BUILT (0.24.89).** A Manager never runs
+  `rite sandbox …` or `rite publish check` itself; its boundary cannot, and it
+  is not widened.
+  - It runs `rite request {stop|destroy|restart|status|gate} <worker>`, which
+    writes the request in Python (no shell substitution), and `rite request
+    {start|deliver} <worker> --ticket <id>` for the two request kinds that
+    already existed, in their existing shapes. No instruction teaches `echo …
+    > …/$(date +%s).json` any more.
+  - The supervisor carries the request out at the cycle boundary, after
+    deliveries and before Worker starts, claiming each by a rename so none is
+    done twice, and tells the Manager the outcome (`lifecycle.honour_requests`).
+    It reads the Manager's `lifecycle/` through descriptors, following no link.
+  - A request carries op, worker and ticket and nothing else; `destroy` can
+    never be forced. Only the Manager rite started a Worker for may act on it
+    (recorded outside every boundary when its start request is honoured, and
+    forgotten when its sandbox is destroyed or delivered); a Worker rite has
+    no record of is refused, being the person's. Not "the routing Manager":
+    who routes is in `config.yaml`, which a Manager can write (review,
+    measured).
+  - Requests are read, claimed and removed through `own_dir`, which follows
+    no link: the Manager can replace any directory inside its own, and the
+    supervisor acts on these outside every boundary. `requests/`,
+    `deliveries/` and `chores/` moved onto it too.
+  - A module's `branch` must be a branch name and its `path` relative and
+    inside the project (`parse.branch_problem`, `module_path_problem`), and
+    the gate runs on full ref names: `modules.yaml` is Manager-writable, and
+    a branch holding a git option made the host's `git log` write a file of
+    the Manager's choosing (review, measured).
+  - `restart` is limited and backed off with recovery: a requested restart is
+    counted under its own key, which recovery's per-cycle prune leaves alone,
+    one recovery gave up on is refused, and the ledger moved out of the
+    project (`recovery._ledger_path`), where a Manager could zero it;
+    `destroy` releases the Worker's claims; `status` says the sandbox state, the started
+    ticket, a pending question and unpushed work; `gate` runs the publish gate
+    on the ticket's collected branch. A refused delivery's note carries the
+    gate's findings (`gate.brief`: rule, file, line, commit; never the match).
+  - Asking to stop, destroy or restart counts as progress
+    (`progress.Footprint.lifecycle`, `COORDINATION`); `status` and `gate` only
+    look, and an unchanged answer is not told again, so a Manager asking
+    every turn does not wake itself every turn. Requests left by a stopped
+    run are honoured when the supervisor starts.
+- **Reconciliation (SCRUM-64). BUILT (0.24.92).** At `rite start` and throttled
+  per cycle, the supervisor compares each of this Manager's Workers against
+  ground truth (`managers/reconcile`): claims vs the live sandbox, a handback,
+  a delivered event, and a watched pull request.
+  - It acts only on known facts: a sandbox yoloAI cannot be asked about, an
+    unreadable claim ledger, and a Worker still running are all no action.
+  - It releases a claim only when the sandbox is known gone (`status.value ==
+    "not found"`, not merely stopped) **and** the work left the sandbox
+    (delivered, a PR open, or handed back); a gone sandbox whose work has NOT
+    landed keeps its claim and is reported, not released.
+  - A pure planner (`plan`) decides from a `Facts` triple; the applier
+    (`reconcile`) releases through `deliver._release_claims` and forgets the
+    owner, and tells the Manager every outcome. At start it also reaps dead
+    self-test sandboxes.
+- **Local Workers under any Manager (SCRUM-72).** The local tier is driven per
+  local **Worker**, not per local Manager.
+  - The plan gates are unchanged, and each stage (definition, plan, plan
+    review, approach, step, verify, recomposition verify) is a persisted state
+    that code will not let the model skip or reorder.
+  - **A local `planner` Manager writes the plan, and a Manager approves it,
+    whatever its engine** (Robert, 2026-10-05). Approval is the `plan-review`
+    duty plus independence: not the author (DD-3.5), a different model (RL-6),
+    and a known author (RL-67). No condition on the approval path admits or
+    excludes a Manager by its engine kind.
+  - The reviewer is asked through its inbox and answers with
+    `rite plan approve|reject`, honoured by the supervisor. Its identity comes
+    from where the answer was found, and the harness never approves on its own.
+  - Plan state moves out of the project tree, beyond every Manager's write
+    access. Today any Manager can edit a plan's approval or run
+    `rite local approve` in any reviewer's name from inside its boundary.
+- **The relay reads a file, not a heredoc (SCRUM-69). BUILT (0.24.88).** The
+  Manager's text travels as `--from-file <draft>`, written with its own
+  file-writing tool (not the shell) into its own drafts directory (`manager_dir/drafts`, granted to its own
+  profile alone). See §9.16's F14 paragraph.
+
 ### 9.15. The Manager's process journal — a diagnostic mode, off by default
 
 **Feedback about how rite is WORKING currently only exists where a human is
@@ -7182,6 +7262,41 @@ command injection, observed: in the v0.6.0 dogfood a Claude Owner's
 allows a substitution whose inner command is on the allowlist — and the
 output reached the person. A Manager's text often quotes a ticket, an issue or
 another Manager, so double quotes let whoever wrote that text run commands.
+**Since 0.24.88 (SCRUM-69) the taught form is a file, not a heredoc.** The
+Manager writes its text with its own file-writing tool, not the shell, into
+its drafts directory (`stdin_text.drafts_dir`, under its own `manager_dir`,
+which no other Manager's profile grants) and runs `rite reply|ask|route|refine
+ask --from-file <draft>`. `read_draft` accepts only a regular file directly in
+that directory, with one hard link and owned by the user, and follows no link
+from the Manager's own directory down: not at the leaf, not at `drafts`, and
+not at the Manager's directory itself, any of which the Manager could
+otherwise point anywhere for a person at the host to read through. The
+seatbelt profile also refuses a write to the Manager's directory and outbox
+THEMSELVES (`literal` beside the `subpath` grant: measured, a subpath grant
+let the Manager rename its directory away and link another's in its place,
+and the next profile's `.resolve()` would have granted the link's target);
+both boundaries' `write_profile` refuse to start a Manager whose directory or
+mail box is a link (`enclosure.refuse_linked_manager_paths`). A relative path is from the current directory. So what
+goes out in a Manager's name is only what that Manager wrote. A draft is
+LOCKED (`flock`) from reading until it is removed, and rechecked under the
+lock, so two sends of one draft at the same moment deliver it once; it is
+removed once its message is queued, so the same command cannot send it twice;
+a send that failed, or a refusal after reading, keeps it where it was written.
+Removal renames the draft to a name of rite's own first and unlinks only the
+file that was read, so a newer draft written meanwhile is kept, and said. The heredoc on stdin
+is still accepted and no longer taught. Why: zsh writes every here-document to
+a file under `TMPPREFIX` (default `/tmp/zsh`), which the Manager profile stopped
+granting with SB8, so mid-session heredocs failed ("can't create temp file for
+here document: operation not permitted", measured inside the profile); and a
+doubled end line made the engine refuse the whole call (SCRUM-45).
+`boundaries.temp_environment` now also puts `TMPPREFIX` inside the boundary,
+for the heredocs a Manager writes for itself: in its own `heredoc_dir`, not
+`engine_tmp`, which every Manager in the root can write (a sibling could read
+or replace a heredoc there). A refusal teaches the file form to a Manager
+(`RITE_MANAGER` set) and the heredoc to a person at the host: the
+command-line and `--while` refusals word for word as before (pinned against
+195d79d); with no text at all a person now gets "refusing: no text" and the
+heredoc, where click's usage error was.
 **Not covered:** rite cannot stop a model putting a substitution into some
 other command (`gh issue comment --body "…"`); and the refusal cannot un-run a
 substitution the shell already ran, only keep its output from being sent.
@@ -8449,6 +8564,20 @@ happened once already and left no trace until this review found it.
 Kept at the end deliberately. It is a record of what this document got wrong
 and when, which is useful for judging how much to trust a section — and useless
 as an introduction to the tool.
+
+**Changes in 0.24.92 — a restarted Manager reconciles instead of escalating (SCRUM-64), and the last two host-git sites are hardened (SCRUM-75 follow-up).** §9.14.14's reconciliation bullet is BUILT. `managers/reconcile`: `plan(worker, Facts) -> Action` (RELEASE only when `sandbox_gone` and `work_landed`; REPORT when gone and not landed; HELD otherwise, which covers a live sandbox, an unknown one, and no claim), `facts_for`/`_sandbox_gone`/`_work_landed`/`_claim_paths` (the host readers; a handback, a delivered event or a watched PR each count as the work having left the sandbox), `_mine` (this Manager's Workers, `worker_handbacks._mine`'s rule plus the SCRUM-59 owner record), and `reconcile(...)` wired in `supervise._supervise` before the first session (`at_start=True`) and at the cycle boundary after deliveries and before Worker starts, throttled `THROTTLE_SECONDS`. It releases through `deliver._release_claims` + `lifecycle.forget_owner` and tells the Manager; every dependency is injectable. The Option A review then measured two host-git sites that escaped 0.24.91: `publishing.scope_budget.measure`'s `git diff` ran a repository-defined textconv on the host every delivery (now `--no-textconv` and `githost.hardened_git_env`), and `workspace.git_ops._run`'s `git status` ran a repository-defined fsmonitor every cycle through `workspace.prepare` (now hardened); `local.runners._git` is hardened for consistency, and `own_dir` now maps a unix socket (`EOPNOTSUPP`) to `NotARegularFile` so one planted in a request directory is set aside, not skipped. Tests: `tests/test_a_restarted_manager_reconciles.py` (the named dogfood scenario converging with no escalation, the two controls, the gone-but-undelivered report, the real claim+handback+release path, the `not found`-only liveness mapping, the throttle, the supervisor wiring; eleven mutations each red) and the two host-git sites pinned in `tests/test_host_git_runs_no_repo_configured_program.py`. One `facts_for` dead-wiring exemption recorded.
+
+**Changes in 0.24.91 — host git runs no program a Manager-writable repository names (SCRUM-75 follow-up; SCRUM-59 final review, measured).** rite runs git on the host in the project and each module checkout — `git status` every cycle (`progress._git_state`), the publish gate, a delivery — and those trees are Manager-writable. git executes programs a repository's own config names: a `core.fsmonitor` on `git status`, a `diff.<driver>.textconv` on `git log -p` (gitleaks' history scan), a hook on many commands. `githost.hardened_git_env` appends `core.fsmonitor=false`, `core.hooksPath=/dev/null` and `core.useBuiltinFSMonitor=false` through `GIT_CONFIG_*` (same precedence as `-c`, so it overrides the repo's config; additive, so a host-side delivery still commits under the operator's identity, and the `["git", …]` lists `tests/test_blast_radius.py` audits are untouched). Wired at every host-side site: `progress`, `deliver._run`, the gate (`findings`, `pattern_scan`, `gate`), and `gitleaks_runner`, whose history scan also gets `--no-textconv` (gitleaks forwards `--log-opts` to `git log`; measured to disable the driver against the installed gitleaks). Tests: `tests/test_host_git_runs_no_repo_configured_program.py` — a repo-set fsmonitor and a repo-set textconv each drop a marker when they run; under the hardened env and `--no-textconv` the marker never appears, and a control shows each WOULD run otherwise.
+
+**Changes in 0.24.90 — rite follows no link a Manager planted (SCRUM-69 round-3 and SCRUM-59 final reviews, measured).** A Manager can create links inside its own directory and outbox, and the supervisor works there outside every boundary. Measured through a link: the cycle's prompt overwrote any file the person owns (`prompt.txt`), another Manager's route was taken as this one's (`routes/`), and any readable JSON file was relayed as the Manager's message (the outbox); a linked `engine_tmp` would be granted on Linux. Now: `session.write_prompt` (`O_NOFOLLOW`); `routing.take`, `refinement.protocol.take` and the check-ins queue through `own_dir` (nested directories, and an entry that is not a regular file renamed to `.refused` and told, not left to wake the loop); `mailbox.read` opens messages `O_NOFOLLOW` and removes a link; `engine_tmp` joins `refuse_linked_manager_paths`, and Landlock's `apply` grants the Manager's directory, outbox and `engine_tmp` only if they are not links (`no_follow`); seatbelt also refuses creating a link in the Manager's directory or outbox (defence in depth: a directory renamed in can carry one). From the SCRUM-59 final review: `parse.module_dir_problem` at the point of use (a module directory that is a link, or resolves outside the project), the owner record forgotten on a person's `rite sandbox start`/`destroy` and on recovery's re-stage, `status`/`gate`'s no-repeat rule said in the instructions, and `branch_problem` accepting `#`, `+` and `@` (never `@{`) as git does. Tests: `tests/test_rite_follows_no_link_a_manager_planted.py`; ten mutations, each red. **Open, not in this change:** git run on the host in a Manager-writable repository executes that repository's configuration (measured: a repo-configured `core.fsmonitor` runs on `git status`, which the progress footprint runs every cycle; `textconv` and hooks reach the gate and a delivery); and rite's other ledgers in the Manager's directory are still read by path.
+
+**Changes in 0.24.89 — a Manager asks rite to act on a Worker (SCRUM-59).** §9.14.14's lifecycle bullet is BUILT. `rite request {start|deliver|stop|destroy|restart|status|gate} <worker> [--ticket]` (a Manager only) writes the request with `write_atomic` under a unique, oldest-first name (`lifecycle.request_name`: `time_ns` alone let two requests in one tick replace each other). `managers/lifecycle`: `decide` (op, worker, ticket; unknown keys refused, so no `force`), `ticket_problem` (a letter or digit first, no `..`), `record_owner`/`_owner_of`/`_may_act` (owner records beside the publish records, under no granted path), `take`/`interrupted` (claimed by rename, a crashed claim said and not retried; through `O_NOFOLLOW` descriptors), `honour_requests` (wired in `supervise` between deliveries and Worker starts; every outcome said and told), and the five operations. `supervise._record_owner` on a started Worker. `prompt.for_manager`, `broker.instructions` and `publishing.requests.instructions` teach the command; `lifecycle.instructions` is added to the Manager prompt. `deliver._publish`'s gate refusal quotes `gate.brief`. Tests: `tests/test_a_manager_asks_rite_to_act_on_a_worker.py` (the taught command filing its request inside the real Manager profile; each op written; start and deliver read by their honour steps; refusals writing nothing; another Manager's Worker refused; once only; a crashed claim; a linked `lifecycle` or request file not followed; destroy never forced; restart under recovery's backoff and limit; gate findings without the match; the refused delivery's findings; asking is progress; the honour order). Four existing assertions moved from the `echo` form to the command. Eighteen mutations, each red on its own test; two survived a first draft (the claim rename and the interrupted-claim rule) until a test killed the supervisor mid-request. Then from the security and correctness reviews: `own_dir` for all four request directories (`broker.requeue` now takes `root` and `manager` and creates without following); `parse.branch_problem` and `module_path_problem`; full ref names in the gate and in `deliver._publish`; no owner fallback (`lifecycle.forget_owner` on destroy and delivery); the requested-restart key `recovery.REQUESTED` and the ledger moved out of `.rite/`; `lifecycle.ACTING`, `acting_requests` and the unchanged-look rule; honoured at supervisor start; the delivery note says a delivery collects the fix; status names an unreadable start record, an unknown question, and the Worker's question as its words. Twelve more mutations red (two more were equivalent: `O_NOFOLLOW` beside `O_EXCL`, and a no-op).
+
+**Changes in 0.24.88 — the relay reads a file, not a heredoc (SCRUM-69, absorbing SCRUM-45 and SCRUM-22's transport residual).** `rite reply`, `ask`, `route` and `refine ask` take `--from-file <draft>`; every Manager instruction teaches only that form (`stdin_text.file_form`, `FILE_RULE`), and the heredoc on stdin stays accepted. `stdin_text.drafts_dir`, `read_draft` (regular file directly in the Manager's own drafts directory, opened through directory descriptors with no link followed from `manager_dir` down, one hard link, the user's, at most `DRAFT_LIMIT`, `flock`ed and rechecked under the lock), `stdin_text.Draft.consume` (after the message is queued, only the inode that was read: deliver exactly once, a failed send keeps the draft). `routing.briefing` takes `root`. `boundaries.temp_environment` adds `TMPPREFIX`, in the Manager's own `boundaries.heredoc_dir` (created with the drafts directory by both `write_profile`s), because zsh's here-document temp file under `/tmp` is what SB8's profile refused, and `TMPPREFIX` joins `ALLOWED_ON_TMUX_ARGV`. The command-line and `--while` refusals for a person at the host are unchanged (`_teach`, pinned as text). A second review measured that a subpath grant let a Manager rename its own directory away and link another's in its place: the seatbelt profile denies writes to the Manager's directory and outbox themselves, both `write_profile`s refuse a linked Manager directory or mail box (`enclosure.refuse_linked_manager_paths`, `LinkedManagerPath`), and the drafts are opened `O_NOFOLLOW` from the Manager's directory down. `Draft.consume` renames to a private name before unlinking, and the draft is read to its end. A deferred question's draft is consumed the moment it is queued, before it is asked now. Tickets are shell-quoted in a taught command. Tests: `tests/test_the_relay_reads_a_file.py` (the EPERM reproduced inside the real Manager profile and its carve-out; the taught file form delivering inside that profile; a sibling's profile unable to reach a Manager's heredocs; the file form delivering under bash and zsh where no heredoc can be made; every refusal of a path that is not this Manager's draft, a linked `drafts` and a hard link included; exactly-once, with a second process holding the draft and with the draft removed between open and lock; a refusal after reading keeping the draft; the swap refused inside the real profile, a linked Manager directory neither read through nor started; the starter's `TMPPREFIX`; a deferred question consumed before it is asked now), and F14's shell tests rewritten on the file form. Twenty-three mutations, each red on its own tests.
+
+**Changes in 0.24.87 — SCRUM-72's approval decided (design only).** A local `planner` Manager writes a GPU Worker's plan, and a Manager approves it whatever its engine (Robert, 2026-10-05): no engine-kind condition on the approval path, and the harness's automatic approval is withdrawn in favour of a real review through the reviewer's inbox, and plan state moves out of every Manager's write access (§9.14.14; `V071_DOGFOOD_FIXES.md` §3.3b). The local tier's stages become persisted, code-enforced states (§3.3a there). The §9.15 heading, dropped by 0.24.86, is restored.
+
+**Changes in 0.24.86 — v0.7.1 dogfood fixes, designed (SCRUM-59, 64, 72, 69).** New §9.14.14, design only, nothing built. Lifecycle requests through the supervisor; reconciliation at start and per cycle; the local tier driven per local Worker under any Manager; the relay reads a file instead of a heredoc. Plan, order, acceptance gate and open decisions: `docs/design/V071_DOGFOOD_FIXES.md`. `V070_RELEASE_PLAN.md` corrected: DF16 deferred to v0.7.1 (Robert, 2026-10-03), and the Claude-Manager-plus-GPU-Worker fleet does not run in a9 (SCRUM-72).
 
 **Changes in 0.24.85 — a GPU Worker runs a subtask, and is declared through the CLI (v0.7.0, SCRUM-54/SCRUM-55).** §9.6 gains the engine flags. **SCRUM-54:** the local tier ran at MANAGER tier — `local/step.py` passed `worker=manager` and `workspace=<project root>`, the operator's own tree — while `local/in_sandbox.exec_launcher`, `local/in_sandbox.instruction_dir_for` and `sandbox.goose_path_root` had no caller in `src/` at all, the defect class `tests/test_no_dead_wiring.py` exists for. So a mixed Claude+GPU fleet was configurable (OL3's five keys on `WorkerManifest`) and not runnable. `local/worker_step.placement_for` is the join, asked by `take_one_step`, which keeps every gate: the agent runs inside the Worker's sandbox and the verify and commit run on the HOST against that sandbox's copy. Measured against a fixture under an ungranted root, with controls: a turn writing inside left the original host file untouched (so a verify in the project root would test a tree the model never touched), and a host `git commit` into the copy succeeded with the sandbox still active — so `SubprocessVerifier` and `GitCommitter` are reused unchanged, and the branch lands where `publishing/deliver.py` already collects it. The branch is the TICKET, not `rite-local/<ticket>/<subtask>`: `deliver` collects `refs/heads/<ticket>` and nothing else, so subtasks compose by being committed in sequence onto it, which is why this path does not need RL-T30 and the Manager path still does. Two defects found by wiring it: `GooseAgent.run` built `dict(os.environ)` — right on the host — and `exec_argv` refuses a secret-shaped name on argv (SB12), so with `GITHUB_TOKEN` merely PRESENT a sandboxed turn returned `could not start goose: SecretOnArgv` and was recorded as a failed ATTEMPT, breaking RL-47 too; `inherit_environment` closes it, and nothing is lost because `env KEY=VAL cmd` adds to the sandbox's own environment rather than replacing it. And `yoloai exec` has no `--cwd` and starts in the copy's ROOT while a Worker's modules are clones one level down, so `exec_argv` gained `subdir`, placed with `env -C` (measured: macOS's own `env` honours it inside a sandbox) rather than a shell, which keeps `local/runners.py`'s "no shell" property true of the half that runs a model. A multi-module local Worker is REFUSED rather than guessed at: a `Subtask` names paths and no module, and a wrong guess commits to the wrong module's branch where `deliver` collects it into the wrong checkout, both halves succeeding. **SCRUM-55:** `rite add worker` gains `--engine`, `--endpoint`, `--model`, `--agent` and `--context-window`; `_write_worker_manifest` had written those keys since OL3 and nothing could set them. Validated with `engine_shape_problem` and `window_problem` — the parser's own rules — before the Worker directory is created, plus two refusals of this command's own (no window; an agent other than `goose`), each of which would otherwise create a Worker that passes `rite doctor` and refuses every turn. Two local Workers on different models are allowed and REPORTED, not refused: sharing is the schedule's lever and rite gains no budget concept. ⚠ **Not measured: a real sandboxed GPU turn.** DF16 (the Worker sandbox escape) is open on this machine — re-measured with controls against yoloAI 0.11.0 `95a6b8e`, the commit DF16 names: a direct write to an ungranted path was refused and `tmux -S <host socket> new-window "touch <same path>"` created it — and Robert's gate holds the live Worker run while it is. What IS measured is the whole path with the model replaced by a scripted command inside a real sandbox, and the engine environment rite builds, verified from inside. **Four rules that were stated and not in force, found by review and fixed on the same branch.** `SandboxStatus.container_is_down` replaces `== "active"`: `yoloai ls --json`'s `status` is mostly about the AGENT ("active=working, idle=waiting at prompt, done=finished, failed=error", plus `stopped`), so three of five words describe a container that is UP, and every other reader in `src/` already tested the negative. Measured: a local Worker's sandbox runs the `idle` NO-OP agent and reports `active`, so nothing was refused in the field — but the same literal in `exec_launcher` would have read every genuine `goose` failure on an idle sandbox as "the sandbox is gone", discarding the model's output as a turn that never happened and inverting the RL-47 fix it was added for. `Outcome.counts_as_attempt` states RL-47 and had NO reader in `src/` — `step._record` incremented unconditionally — so an endpoint that was down, a sandbox a delivery had stopped, a launch refused by rite's own leak guard, a claim held by a neighbour and an unapproved plan each spent one of the subtask's attempts; `_record` now asks the property and `run_subtask`'s own two "nothing ran" returns set the fault (the claim-conflict path said so in its note already). `GooseAgent`'s launch-failure branch was missing `infrastructure_fault` and a `TimeoutExpired` must NOT have it — a turn stopped at twenty minutes ran, and may have edited files. And Level 2 was not placed: `step._approach_for` resolved the MANAGER's role and ran its Goose on the HOST with `workspace=<project root>`, which is a write-capable auto-mode model turn in the operator's real tree, planning against a tree where the subtask's module-relative scope paths do not exist and the earlier subtasks' commits are absent, with OL3's model split ignored so a CLAUDE Manager driving a GPU Worker produced no approach at all and `worker_decomposition_model` had no caller. `Placement.approach` now runs Level 2 inside the sandbox with the Worker's own model against the module clone, still advisory and fail-open, and a placed turn never falls back to the host one; `GooseProposer` needed the same `inherit_environment` fix for the same measured reason. Re-proven end to end on the fixed code: Level 2's prompt file is created in the sandbox's own exchange directory, so OL5's leak fix covers the planning half too. Tests: `tests/test_a_gpu_worker_runs_a_subtask.py`, `tests/test_a_gpu_worker_is_added_through_the_cli.py`.
 

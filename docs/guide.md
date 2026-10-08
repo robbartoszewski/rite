@@ -272,17 +272,21 @@ keeps reading a waiting question's thread for as long as it waits. Answer in
 the question's own thread: a message elsewhere cannot be matched to it.
 
 A Manager can also **defer** a question to your next check-in, but only by
-naming what it will do meanwhile, on the first line:
+naming what it will do meanwhile, on the first line of its text:
 
-    rite ask --defer --while - - <<'RITE_TEXT_1f2e3d'
     tickets 8 and 9, which do not touch the CLI
     rename --out to --output?
-    RITE_TEXT_1f2e3d
 
-A Manager's text always goes on stdin like this, never in double quotes on
-the command line: there the shell runs anything in backticks or `$( )`, and
-the text often quotes a ticket someone else wrote. rite refuses text given as
-an argument, `--while` included.
+It writes that to a file in its own drafts directory with its file-writing
+tool (not the shell), and runs `rite ask --defer --while - --from-file <that
+file>`.
+
+A Manager's text always travels as a file like this (SCRUM-69), never in
+double quotes on the command line: there the shell runs anything in
+backticks or `$( )`, and the text often quotes a ticket someone else wrote.
+rite refuses text given as an argument, `--while` included. It reads only a
+file in that Manager's own drafts directory, and removes it once sent. From
+your own shell, `-` with the text on stdin still works.
 
 ⚠ **The rule every Manager is given, in these words: ask now unless the
 question is clearly deferrable; if you are unsure whether it blocks you, it
@@ -742,7 +746,8 @@ rite start lead --sessions 3 --minutes 90
 One without the other is refused: they catch different runaways and neither
 suffices alone, so rite will not guess the one you left out.
 
-The Owner hands work down with `rite route --ticket RT-12 helper -` (the text on stdin), and
+The Owner hands work down with `rite route --ticket RT-12 helper --from-file <draft>`
+(the text in a file it wrote, SCRUM-69), and
 `helper` answers with `rite reply`. Every route names the ticket the work is
 for, and rite refuses one whose ticket it cannot read on the board; work you
 asked for in a message becomes a chore ticket first (`rite chore`). The Owner cannot wait inside a session, so its

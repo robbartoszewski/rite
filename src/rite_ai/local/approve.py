@@ -44,11 +44,49 @@ class Refused:
     why: str
 
 
-def approve_plan(
-    root: Path | str, ticket: str, reviewer: str, *, state=None
-) -> Approved | Refused:
-    """Mark `ticket`'s decomposition APPROVED on `reviewer`'s authority, or say
-    why not.
+@dataclass(frozen=True)
+class Rejected:
+    ticket: str
+    by: str
+    reason: str = ""
+
+    def note(self) -> str:
+        return (
+            f"{self.ticket} was rejected by {self.by}"
+            + (f": {self.reason}" if self.reason else "")
+            + " — it goes back to its decomposer with the reasons"
+        )
+
+
+@dataclass(frozen=True)
+class _Standing:
+    """What both verdicts need once the reviewer's authority holds: the plan
+    as read, the version to compare-and-swap against, and the roles already
+    parsed — so neither verdict re-reads config.yaml to find what the other
+    just looked up."""
+
+    plan: dec.Decomposition
+    version: str
+    state: object
+    roles: tuple
+    author: object
+
+
+def _may_review(root: Path, ticket: str, reviewer: str, state):
+    """`_Standing` when `reviewer` may decide `ticket`'s plan, else `Refused`.
+
+    🔴 **Shared by `approve_plan` and `reject_plan`, not respelled in each.**
+    A rejection is as much an act of authority as an approval — it sends the
+    plan back and spends one of RL-10's returns — so the two must apply the
+    SAME rule. Two copies of RL-6 would be two chances for one of them to
+    drift, which is the mistake the config-vs-router split already made once
+    (OL7).
+
+    ⚠ **No engine-kind condition appears here, and none may (§3.3b).**
+    SCRUM-72's root cause was `if role.is_local`; the approval path must not
+    reintroduce one. The only place this reads an engine is `engine_identity`,
+    which decides INDEPENDENCE — the model for a local engine, the engine kind
+    otherwise — and never who may approve.
 
     The order of the checks is deliberate: who is asking, then what they are
     asking about, then whether they may. A reviewer that does not hold the duty
@@ -61,7 +99,6 @@ def approve_plan(
     )
     from rite_ai.config.parse import ParseError, parse_config
 
-    root = Path(root)
     parsed = parse_config(root / ".rite" / "config.yaml")
     if isinstance(parsed, ParseError):
         return Refused(f"this project's config.yaml will not parse: {parsed.message}")
@@ -75,10 +112,6 @@ def approve_plan(
             "decomposition (RL-6). Give it the duty, or ask a Manager that holds it"
         )
 
-    if state is None:
-        from rite_ai.coordination.local_backend import LocalStateLayer
-
-        state = LocalStateLayer(root / ".rite")
     read = dec.read(state, ticket)
     if read.unavailable:
         return Refused(
@@ -127,9 +160,88 @@ def approve_plan(
             "is not an independent reviewer (RL-6). Two 'local:' classes serving "
             "one model are one model, however they are labelled"
         )
+    return _Standing(
+        plan=plan,
+        version=read.version,
+        state=state,
+        roles=tuple(roles),
+        author=author,
+    )
+
+
+def reject_plan(
+    root: Path | str, ticket: str, reviewer: str, reason: str, *, state=None
+) -> Rejected | Refused:
+    """Mark `ticket`'s decomposition REJECTED on `reviewer`'s authority, with
+    reasons, or say why not.
+
+    🔴 **A new verdict (SCRUM-72 §3.3b).** Nothing could write REJECTED
+    before: plan review was a stamp that only ever wrote APPROVED, so a
+    reviewer that disagreed had no way to say so and the one artifact three
+    gates read could not carry a "no". The reasons are REQUIRED — RL-10 counts
+    returns per parent ticket, and a count with no reasons is a number nobody
+    can act on, and a rejection the planner cannot re-author against is a
+    dead end rather than a review.
+    """
+    root = Path(root)
+    if state is None:
+        from rite_ai.local.plan_state import layer
+
+        state = layer(root)
+    standing = _may_review(root, ticket, reviewer, state)
+    if isinstance(standing, Refused):
+        return standing
+    if not (reason or "").strip():
+        return Refused(
+            f"{ticket} was not rejected: a rejection carries its reasons, "
+            "because the plan goes back to its decomposer with them and RL-10 "
+            "counts a return nobody can act on as a return all the same"
+        )
+    plan = standing.plan
+    written = dec.write(
+        standing.state,
+        dec.Decomposition(
+            ticket=plan.ticket,
+            subtasks=plan.subtasks,
+            decomposed_by=plan.decomposed_by,
+            approval=dec.REJECTED,
+            approved_by="",
+            returns=(*plan.returns, f"{reviewer}: {reason.strip()}"),
+        ),
+        standing.version,
+    )
+    if not isinstance(written, dec.Written):
+        if isinstance(written, dec.Unavailable):
+            return Refused(
+                f"{ticket} was not rejected: the state layer could not be "
+                f"written ({written.reason})"
+            )
+        return Refused(
+            f"{ticket} was not rejected: its decomposition changed while this "
+            "ran, so the rejection would have been given to a plan nobody read"
+        )
+    return Rejected(ticket=ticket, by=reviewer, reason=reason.strip())
+
+
+def approve_plan(
+    root: Path | str, ticket: str, reviewer: str, *, state=None
+) -> Approved | Refused:
+    """Mark `ticket`'s decomposition APPROVED on `reviewer`'s authority, or say
+    why not. The only writer of APPROVED, by design and by test."""
+    root = Path(root)
+    if state is None:
+        from rite_ai.local.plan_state import layer
+
+        state = layer(root)
+    standing = _may_review(root, ticket, reviewer, state)
+    if isinstance(standing, Refused):
+        return standing
+    plan = standing.plan
+    roles = list(standing.roles)
 
     # The shape, re-checked. The plan may have been edited since it was written,
     # and this is the last point before its subtasks may run.
+    from rite_ai.config.managers import effective_duties
     from rite_ai.local.plan_validation import candidate_problems
 
     holders = {r.name for r in roles if "decompose" in effective_duties(r, len(roles))}
@@ -152,7 +264,7 @@ def approve_plan(
         )
 
     written = dec.write(
-        state,
+        standing.state,
         dec.Decomposition(
             ticket=plan.ticket,
             subtasks=plan.subtasks,
@@ -161,7 +273,7 @@ def approve_plan(
             approved_by=reviewer,
             returns=plan.returns,
         ),
-        read.version,
+        standing.version,
     )
     # ⚠ Compare-and-swap, and the failure is NOT reported as success. `write`
     # returns one of three things (`Written` | `Conflict` | `Unavailable`), and
@@ -179,4 +291,29 @@ def approve_plan(
             "ran, so the approval would have been given to a plan nobody read. "
             "Read it again and decide on what is there now"
         )
-    return Approved(ticket=ticket, by=reviewer, author=author.name)
+    # SCRUM-72e: record a digest per subtask AT APPROVAL TIME, so the boundary
+    # check before a step compares the executing subtask against what was
+    # approved rather than against the plan rite just read (which is what it
+    # compared before, and so could only ever pass).
+    #
+    # ⚠ **After the plan write, and fail-closed if it fails.** The plan is
+    # APPROVED either way; with no digests recorded every step is REFUSED
+    # (`level2.cleared_to_run`), which is the safe direction and is said here
+    # rather than discovered at the first step. The other order would leave
+    # digests for an approval that did not happen.
+    from rite_ai.local import level2
+
+    recorded = level2.record_approval(
+        standing.state,
+        ticket,
+        reviewer,
+        plan.subtasks,
+        expected=level2.approval_version(standing.state, ticket),
+    )
+    if not isinstance(recorded, dec.Written):
+        return Refused(
+            f"{ticket} IS now approved, but what was approved could not be "
+            "recorded, so no subtask of it may run until the plan is reviewed "
+            f"again: {getattr(recorded, 'reason', 'the record changed under this')}"
+        )
+    return Approved(ticket=ticket, by=reviewer, author=standing.author.name)

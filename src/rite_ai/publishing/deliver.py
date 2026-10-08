@@ -107,11 +107,15 @@ def _run(
     that prepends "git": `tests/test_blast_radius.py` finds git verbs by
     enumerating those lists, and a `["git", *args]` wrapper would hide every
     verb in this file from it."""
+    # Host-side git in a Manager-writable repo: fsmonitor and hooks forced
+    # off, whatever the repo's own config says (SCRUM-75; `githost`).
+    from rite_ai.githost import hardened_git_env
+
     return subprocess.run(
         args,
         cwd=cwd,
         input=stdin,
-        env=env,
+        env=hardened_git_env(env),
         capture_output=True,
         text=True,
         errors="replace",
@@ -297,7 +301,7 @@ def _publish(
     """Push, or push and open a pull request, after the gate passes (PB1
     piece 4). Called only with the work already collected, so a refusal here
     loses nothing: it is on `branch` in the project's checkout."""
-    from rite_ai.gate.gate import EXIT_CLEAN, run_gate
+    from rite_ai.gate.gate import EXIT_CLEAN, brief, run_gate
 
     project = root / module.path
     home = f"committed locally on {branch} in {module.path}"
@@ -314,12 +318,25 @@ def _publish(
     # (🔴 SCRUM-60) or drops every suppression the project declared.
     rng = f"{module.branch}..{branch}"
     _record_scope_budget(root, worker, module, ticket, project, rng, config)
-    report = run_gate(project, rev_range=rng, config_root=root)
+    # Full ref names, so no tag or other ref of the same name is what is
+    # gated; the branch is a checked name (`parse.branch_problem`, SCRUM-59).
+    report = run_gate(
+        project,
+        rev_range=f"refs/heads/{module.branch}..refs/heads/{branch}",
+        config_root=root,
+    )
     if report.exit_code != EXIT_CLEAN:
+        # 🔴 SCRUM-59: the findings themselves, in the note. "Run `rite
+        # publish check`" was a host command a sandboxed Manager cannot run,
+        # so a refused delivery told it what to do and not what was wrong.
+        found = "; ".join(brief(report, 10))
         return no(
-            f"the publish gate did not pass (exit {report.exit_code})",
-            f"Run `rite publish check --rev-range {module.branch}..{branch}` in "
-            f"{module.path} and fix what it names",
+            f"the publish gate did not pass (exit {report.exit_code}): {found}",
+            "Have the Worker fix what it names and commit it, then ask for the "
+            "delivery again: the delivery collects the fix and gates it. "
+            f"`rite request gate {worker} --ticket {ticket}` re-reads what was "
+            f"last collected, on {branch} (from the host: `rite publish check "
+            f"--rev-range {rng}` in {module.path})",
         )
     env = _remote_environment(root, worker, module, config)
     if isinstance(env, str):
@@ -637,6 +654,53 @@ def _release_claims(root: Path, worker: str) -> str:
     return f"released {n} claim(s)"
 
 
+def _gate_suppression_verdict(repo: Path, base: str, branch: str, config):
+    """Which publish-gate files this branch changed (SCRUM-62), or a string
+    saying why that could not be established.
+
+    Read from the COLLECTED branch rather than from the sandbox's clone:
+    that is the history the push would publish, so it is the history the
+    question is about.
+
+    ⚠ **What it sees is the DELIVERED history, which is strategy-dependent,
+    and that is the honest answer rather than a leak in the check.** Under
+    `squash` the delivered history is one commit carrying the branch tip's
+    TREE, so a Worker that added a suppression and then reverted it delivers
+    nothing containing one — measured, 2026-10-07 — and there is nothing for
+    the Owner to approve and nothing to govern a later gate run. Without
+    squash every commit is published, so the intermediate one counts and the
+    same branch is refused. An earlier docstring here claimed both paths
+    refused, which was simply untrue; both behaviours are now pinned by
+    tests.
+
+    `config` supplies `publish_gate.gitleaks_config`, since that key may
+    name any path and the gate reads whatever it names, and lets a
+    `config.yaml` change be judged on its `publish_gate` section rather than
+    on the whole file.
+    """
+    from rite_ai.gate import pattern_scan
+    from rite_ai.publishing import gate_suppression
+
+    touched = pattern_scan.files_touched_by(repo, f"{base}..{branch}")
+    if isinstance(touched, pattern_scan.ScanError):
+        return touched.message
+
+    ruleset = ""
+    gate_config = getattr(getattr(config, "publish_gate", None), "gitleaks_config", "")
+    if isinstance(gate_config, str):
+        ruleset = gate_config.strip()
+
+    def read_at(which: str, path: str) -> str | None:
+        """One file at one end of the range, or None when git cannot show
+        it. None is "cannot tell", never "unchanged" — `inspect` refuses on
+        it."""
+        rev = base if which == "base" else branch
+        shown = _run(["git", "show", f"{rev}:{path}"], repo)
+        return shown.stdout if shown.returncode == 0 else None
+
+    return gate_suppression.inspect(touched, ruleset=ruleset, read_at=read_at)
+
+
 def _worker_modules(root: Path, worker: str, modules: list[Module]) -> list[Module]:
     from rite_ai.config.parse import ParseError, parse_worker
 
@@ -746,6 +810,12 @@ def deliver(
         return Refused(str(e))
     if not modules:
         return Refused(f"{worker} has no module in this project's modules.yaml")
+    from rite_ai.config.parse import module_dir_problem
+
+    for module in modules:
+        problem = module_dir_problem(root, module.path)
+        if problem:
+            return Refused(f"module {module.name}: {problem}")
 
     status = worker_sandbox_status(worker, root)
     if not status.known:
@@ -811,6 +881,50 @@ def deliver(
             outcomes.append(got)
             continue
         where = f"committed locally on {got} in {module.path}"
+
+        # 🔴 **SCRUM-62. A Worker may not edit the gate that governs it.**
+        # Checked AFTER the collect, deliberately, and on the same branch the
+        # push would use: the work must reach the host so the Owner can look
+        # at the change, and a refusal that lost it would teach a Worker to
+        # try again without the change — which is to say, to hide it. The
+        # shape is S31's host-measurement hold below: collected, not pushed.
+        suppression_verdict = _gate_suppression_verdict(
+            root / module.path, module.branch, got, config
+        )
+        if isinstance(suppression_verdict, str):
+            # The paths could not be listed, so rite cannot say whether the
+            # branch touches them. Not pushed: this is a governance control,
+            # and "could not check" is not "nothing to check".
+            outcomes.append(
+                Outcome(
+                    module.name,
+                    ticket,
+                    False,
+                    f"rite could not tell whether {worker} changed the publish "
+                    f"gate's own configuration on this branch "
+                    f"({suppression_verdict}); {where}, not pushed",
+                    "Look at the branch yourself, then deliver again",
+                )
+            )
+            continue
+        if suppression_verdict.refused:
+            from rite_ai.publishing import gate_suppression
+
+            outcomes.append(
+                Outcome(
+                    module.name,
+                    ticket,
+                    False,
+                    gate_suppression.refusal(
+                        suppression_verdict, worker=worker, ticket=ticket
+                    )
+                    + f" It is {where}.",
+                    gate_suppression.how_the_owner_decides(
+                        suppression_verdict, ticket=ticket
+                    ),
+                )
+            )
+            continue
         if diverged:
             was = then["strategy"] if isinstance(then, dict) else "unrecorded"
             is_now = now.strategy if now is not None else "unreadable"
@@ -856,13 +970,26 @@ def deliver(
     # both still apply. Never `force`. A divergence keeps it too, so the
     # User's `rite deliver` has the sandbox to deliver from.
     released = ""
-    if outcomes and all(o.ok for o in outcomes) and applied == {"commit"}:
-        # D-41 holds a claim until the work lands where it goes. Under
-        # `commit` that is now: it is on the project's own branch. Under a
-        # push strategy it is the merge, so the claim stays held.
+    # D-41 holds a claim until the work lands where it goes. Under `commit`
+    # that is now: it is on the project's own branch. Under a push strategy it
+    # is the merge, so the claim stays held.
+    #
+    # ⚠ Named, because `reconcile` reads it. This condition — and NOT "a
+    # delivery happened" — is the one under which a delivery has put the work
+    # where it goes with nothing still pending, which is why it is both the
+    # test for releasing the claims here and the `landed` field of the event
+    # below. A reconciler that re-derived it would be a second answer to the
+    # same question, and the first version of `reconcile` got that answer
+    # wrong (SCRUM-64 follow-up).
+    landed = bool(outcomes) and all(o.ok for o in outcomes) and applied == {"commit"}
+    if landed:
         released = _release_claims(root, worker)
     if outcomes and all(o.ok for o in outcomes):
         gone = destroy_worker(worker, root)
+        if gone.ok:
+            from rite_ai.managers.lifecycle import forget_owner
+
+            forget_owner(root, worker)
         sandbox = (
             f"sandbox removed; {worker} can start its next ticket"
             if gone.ok
@@ -917,6 +1044,15 @@ def deliver(
         worker=worker,
         ticket=ticket,
         by_user=by_user,
+        # ⚠ **This event is recorded for a FAILED delivery too** — a gate
+        # refusal, a held host measurement, a module that could not be
+        # pushed all reach this one return. So "a delivered event exists" is
+        # not "the work was delivered", and these two fields are what a
+        # reader must go by. `ok`: every module succeeded. `landed`: the work
+        # is where it goes and nothing is still pending, the same condition
+        # on which the claims were released above.
+        ok=bool(outcomes) and all(o.ok for o in outcomes),
+        landed=landed,
         outcomes=[o.note() for o in outcomes],
         sandbox=sandbox,
     )

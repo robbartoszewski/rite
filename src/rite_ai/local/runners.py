@@ -119,10 +119,42 @@ class SubprocessVerifier:
         return VerifyResult(done.returncode == 0, output)
 
 
+HOOKS_DID_NOT_RUN = (
+    "committed with this project's git hooks DISABLED, so a `pre-commit` it "
+    "relies on did not run. rite will not execute a hook from this tree: the "
+    "agent writes it, and `core.hooksPath` is read from the repository the "
+    "agent just edited (SCRUM-75). What checks this work instead is rite's "
+    "own: the subtask's verify (RL-7), the ticket's agreed verify on the "
+    "composed work (RL-8), and the publish gate before anything leaves this "
+    "machine"
+)
+"""⚠ **SAID, not silent, and the silence was the defect** (SCRUM-64 follow-up
+review: "`local/runners`'s hardened env sets `core.hooksPath=/dev/null`
+around a `git commit`, silently disabling a project's pre-commit hooks").
+
+🔴 **The hooks stay off, and that is a decision rather than an oversight.** A
+hook is code execution, and `core.hooksPath` is read from the repository
+the agent has just been editing — for a Manager-tier placement that
+repository is the operator's own project root. Running it would execute a
+program a Worker could have planted, on the host, which is the whole class
+SCRUM-75 closed. The alternative was never "run the project's hook safely";
+there is no safe copy of it to run.
+
+So what was wrong is that a reader was not told. A local-tier commit differs
+from a person's commit, and the difference now reaches the step's own notes
+(`harness.Commit.note`) where whoever reads the run sees it."""
+
+
 def _git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
+    # fsmonitor and hooks forced off (SCRUM-75): consistent with every other
+    # host-side git, whether this runs on the host or inside a Worker sandbox.
+    # ⚠ Hooks being off is REPORTED, not silent — see `HOOKS_DID_NOT_RUN`.
+    from rite_ai.githost import hardened_git_env
+
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
+        env=hardened_git_env(),
         capture_output=True,
         text=True,
         # git hands back path bytes as they are on disk, which need not be
@@ -207,4 +239,4 @@ class GitCommitter:
                 error=f"the commit was made but `git rev-parse HEAD` "
                 f"could not say which: {detail}"
             )
-        return Commit(sha=recorded)
+        return Commit(sha=recorded, note=HOOKS_DID_NOT_RUN)

@@ -12,6 +12,9 @@ name: Publish gate
 # here without an extra install step (see src/rite_ai/gate/__main__.py's module
 # docstring for why the standalone path exists at all).
 
+# Scoped to what the run introduces (SCRUM-39), not to every fetched ref —
+# see the `--ci-range` comment on the gate step for the measurement.
+#
 # Deliberately UNFILTERED, matching the workflow `rite init` generates — and
 # for the reason that template's header gives at length: a Worker never pushes
 # to the root branch, so every push this gate exists to catch lands on a
@@ -30,9 +33,14 @@ jobs:
   publish-gate:
     runs-on: ubuntu-latest
     steps:
+      # ⚠ STILL `fetch-depth: 0`, and for a DIFFERENT reason since SCRUM-39.
+      # It is no longer "the gate scans all of it": the scan is scoped to this
+      # run's own commits below. The full fetch is what puts the BASE branch in
+      # the checkout, and without it `ci_range` cannot tell this pull request's
+      # commits from the trunk's and falls back to scanning everything.
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history — the gate scans all of it, not just HEAD
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -68,5 +76,25 @@ jobs:
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
+      # 🔴 **SCRUM-39: `--ci-range`, not a bare `check`.** A bare check scans
+      # every commit the repository can reach, and the fetch above has fetched
+      # every ref — so a secret-shaped string on ANY open branch failed this
+      # gate on every unrelated pull request. Measured live on 2026-10-02: a
+      # fake `ghp_…` fixture on `fix/credentials-doctor-setup` (#183) failed
+      # #184 and effectively every pull request to main, and the suppression
+      # had to be landed in main (#186) before anything could merge.
+      #
+      # The range is decided in `rite_ai.gate.ci_range`, which is tested, and
+      # not in shell here, which is not. It narrows ONLY when git resolved the
+      # base ref and falls back to the full scan otherwise, saying which it
+      # did — too strict is recoverable, a gate that checked nothing is not.
+      #
+      # The whole history is still scanned, on a schedule, by
+      # `publish-gate-history.yml`.
       - name: Run publish gate
-        run: uv run python -m rite_ai.gate check
+        env:
+          # Not a GitHub-provided variable: the default branch is only in the
+          # event payload. A push event has no base ref, so this is how its
+          # own commits are told from the trunk's.
+          RITE_GATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: uv run python -m rite_ai.gate check --ci-range

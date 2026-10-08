@@ -39,8 +39,10 @@ class TestItSaysWhatToRun:
         # ⚠ CHANGED BY B9: a Manager no longer runs `rite sandbox start` —
         # it is inside a sandbox, and a sandbox cannot create another one,
         # so the old command would fail every time. It writes a request.
-        assert '"ticket"' in text and '"worker"' in text
-        assert "requests" in text
+        # And since SCRUM-59 it asks with a command, which writes the request
+        # itself: the `echo … > …/$(date +%s).json` it was taught was refused.
+        assert " request start <name> --ticket <ID>" in text
+        assert "$(date" not in text
 
     def test_it_says_workers_must_exist_first(self):
         assert "rite add worker" in for_manager("lead", root=PROJECT)

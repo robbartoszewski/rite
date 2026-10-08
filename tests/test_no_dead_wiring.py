@@ -50,6 +50,27 @@ WATCHED = (
 
 # name -> why nothing calls it. A reason is required; "not yet" is not one.
 UNCALLED_ON_PURPOSE = {
+    "facts_for": (
+        "What `reconcile`, in the same file, reads about one Worker to plan "
+        "with (SCRUM-64): the production default behind its injected "
+        "`facts_of`. Public so the applier's and the planner's tests name it "
+        "and the one gatherer is tested directly."
+    ),
+    "governs_the_gate": (
+        "SCRUM-62's predicate — whether a path is part of the publish gate's "
+        "own configuration. Called by `inspect` in the same file, which is "
+        "the production entry point (`publishing/deliver._gate_suppression_"
+        "verdict` calls that). Public because it IS the policy: what a "
+        "Worker may not author is a governance property, and the tests "
+        "assert it path by path rather than through a git range, the way "
+        "`broker.decide`'s predicates are tested."
+    ),
+    "lifecycle_dir": (
+        "Where `request`, in the same file, writes a Manager's lifecycle "
+        "requests and `honour_requests` names in what it says (SCRUM-59). "
+        "Public so tests name the directory from its one spelling, as "
+        "`drafts_dir` is for drafts."
+    ),
     "compose_policy": (
         "Landlock's half of `compose`, called by `write_profile` in the same "
         "file. Public for the same reason: it IS the boundary — the set of "
