@@ -293,7 +293,9 @@ def test_the_supervisor_runs_reconcile_at_start_and_per_cycle():
     from rite_ai.managers import supervise
 
     src = inspect.getsource(supervise._supervise)
-    start = src.index("reconcile.reconcile(root, manager, say, at_start=True)")
+    start = src.index(
+        "reconcile.reconcile(root, manager, say, at_start=True, listing_of=at_start)"
+    )
     first_session = src.index("stalled: _Stalled | None = None")
     assert start < first_session, "the start pass must run before the first session"
     # And a per-cycle pass at the boundary, after deliveries, before starts.
@@ -303,7 +305,7 @@ def test_the_supervisor_runs_reconcile_at_start_and_per_cycle():
     # been failing since — unnoticed, because no topic grep matches this
     # file's name. Written as the full call so a future argument breaks it
     # loudly rather than letting a prefix match hide the change.
-    cycle = src.index("reconcile.reconcile(root, manager, say), manager, recorder")
+    cycle = src.index("reconcile.reconcile(root, manager, say, listing_of=per_cycle)")
     deliveries = src.index("honour_deliveries(root, manager, say, recorder)")
     starts = src.index(
         "_honour_worker_requests(root, manager, broker, say, recorder)", cycle
@@ -1092,3 +1094,25 @@ def test_a_pass_with_nothing_to_reconcile_makes_NO_yoloai_call(tmp_path, monkeyp
         workers_of=lambda: ["w0", "w1"],
     )
     assert calls == []
+
+
+def test_each_boundary_takes_its_OWN_listing():
+    """⚠ Never a cached one. The listing's whole value is that it is what the
+    sandboxes look like NOW; one shared across cycles would make reconcile act
+    on a cycle-old picture and release a claim whose sandbox came back. Each
+    boundary builds its own with `_one_listing`, and the SCRUM-70 held-slot
+    check shares that boundary's rather than taking a second `yoloai ls`."""
+    import inspect
+
+    from rite_ai.managers import supervise
+
+    src = inspect.getsource(supervise._supervise)
+    assert src.count("_one_listing()") == 2, "one per boundary, no more and no fewer"
+    assert src.index("at_start = _one_listing()") < src.index(
+        "reconcile.reconcile(root, manager, say, at_start=True, listing_of=at_start)"
+    )
+    assert src.index("per_cycle = _one_listing()") < src.index(
+        "reconcile.reconcile(root, manager, say, listing_of=per_cycle)"
+    )
+    assert "_record_idle_slots(root, manager, say, recorder, at_start)" in src
+    assert "_record_idle_slots(root, manager, say, recorder, per_cycle)" in src

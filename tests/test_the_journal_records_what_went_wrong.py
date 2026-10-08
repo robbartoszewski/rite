@@ -179,18 +179,23 @@ class TestTheVocabularyIsClosed:
 
         assert _recorder(root)(_an_event(kind=kind))
 
-    def test_the_classes_nothing_can_record_yet_are_named_with_their_reason(self):
-        """⚠ The ticket asks for reconciliation actions and a slot held by
-        an idle sandbox, and neither existed to be recorded. Reconciliation
-        LEFT this dict once SCRUM-64 landed and gave it something to record
-        — an entry leaving is the shape to want, because it means the gap
-        closed rather than the claim being quietly widened. A slot held by
-        an idle sandbox is still SCRUM-70's."""
-        assert set(recording.NOT_YET) == {"idle-slot-held"}
+    def test_nothing_the_ticket_names_is_still_unrecordable(self):
+        """⚠ The ticket asks for reconciliation actions and a slot held by an
+        idle sandbox, and neither existed to be recorded when it was written.
+        Reconciliation LEFT this dict once SCRUM-64 landed, and the held slot
+        left once SCRUM-70 did — **an entry leaving is the shape to want**,
+        because it means the gap closed rather than the claim being quietly
+        widened.
+
+        `NOT_YET` is EMPTY now, which is the state this ticket was for: the
+        journal covers every class it claims to. An entry added back must
+        still carry its reason, which the loop below keeps asserting."""
+        assert set(recording.NOT_YET) == set()
         for why in recording.NOT_YET.values():
             assert "SCRUM-" in why
         assert not set(recording.NOT_YET) & set(recording.EVENTS)
         assert recording.RECONCILED in recording.EVENTS
+        assert recording.IDLE_SLOT_HELD in recording.EVENTS
 
 
 class TestTheEntryItself:
@@ -777,8 +782,16 @@ class TestReconciliationIsRecorded:
             "two call sites plus the definition; a reconcile pass whose "
             "actions are not recorded is one the Owner never hears about"
         )
-        assert "reconcile.reconcile(root, manager, say, at_start=True), manager" in (
-            source
+        assert "listing_of=at_start)," in source, (
+            "the start pass's reconcile is recorded, and shares that "
+            "boundary's one `yoloai ls` (SCRUM-64 follow-up, SCRUM-70)"
+        )
+        assert "listing_of=per_cycle)," in source
+        # SCRUM-70: the held-slot check is recorded at both boundaries too,
+        # and `NOT_YET` is empty because of it.
+        assert source.count("_record_idle_slots(") == 3, (
+            "two call sites plus the definition; a slot held by a Worker with "
+            "no claims is a project that cannot start work"
         )
 
 

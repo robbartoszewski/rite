@@ -388,6 +388,7 @@ def reconcile(
     workers_of=None,
     facts_of=None,
     release=None,
+    listing_of=None,
     throttle: float = THROTTLE_SECONDS,
 ) -> list[Action]:
     """Reconcile this Manager's Workers against ground truth; return the
@@ -413,17 +414,25 @@ def reconcile(
         # subprocess with a 30-second timeout per Worker on the `rite start`
         # path — the cost SCRUM-64's own commit message gives as its reason
         # for keeping the self-test reap off that path.
-        listed: list = []
+        #
+        # `listing_of` is accepted from the caller so the supervise boundary
+        # can SHARE one listing with the other step that needs it
+        # (SCRUM-70's held-slot check). Still lazy either way: a pass whose
+        # Workers hold no claims takes none.
+        if listing_of is None:
+            listed: list = []
 
-        def listing_of():
-            if not listed:
-                from rite_ai.sandbox import list_sandboxes
+            def listing_of():
+                if not listed:
+                    from rite_ai.sandbox import list_sandboxes
 
-                listed.append(list_sandboxes())
-            return listed[0]
+                    listed.append(list_sandboxes())
+                return listed[0]
+
+        taken = listing_of
 
         def facts_of(worker: str) -> Facts:
-            return facts_for(root, worker, listing_of)
+            return facts_for(root, worker, taken)
 
     release = release or (lambda worker: _release(root, worker))
 

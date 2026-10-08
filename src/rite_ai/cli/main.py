@@ -2032,6 +2032,37 @@ def claim(paths: tuple[str, ...], worker: str, ticket: str) -> None:
         raise SystemExit(4)
 
 
+def _say_held_slots(root, released_workers) -> None:
+    """After a release: which of those Workers still holds a SLOT (SCRUM-70).
+
+    🔴 **The sentence this exists to stop being the only one.** `rite release
+    --force` printed "force-released 2 claim(s)" and the next Worker still
+    could not start, because a Worker's claims and its slot against
+    `sandbox.max_concurrent_workers` are freed by different commands — only a
+    `destroy` frees the slot (`count_active_sandboxes`: "a stopped-but-not
+    destroyed sandbox counts"). The release message was true about claims and
+    read as a message about capacity.
+
+    Says nothing when nothing is held. "Could not ask yoloAI" IS said, because
+    a release that cannot tell whether the slot came with it is exactly when
+    somebody is about to wait for a Worker that will never start.
+    """
+    from rite_ai.managers import current_manager
+    from rite_ai.reporting.held_slots import held_slots
+
+    names = sorted({w for w in released_workers if w})
+    if not names:
+        return
+    slots = held_slots(root, names)
+    if isinstance(slots, str):
+        click.echo(f"  {slots}")
+        return
+    manager = current_manager()
+    for slot in slots:
+        click.echo(f"  SLOT STILL HELD — {slot.line()}")
+        click.echo(f"    {slot.how_to_free_it(manager)}")
+
+
 @cli.command()
 @click.option(
     "--worker", "-w", default=None, help="Worker name (not used with --force)"
@@ -2150,6 +2181,8 @@ def release(
                     "asked for. `--force` matches paths exactly, so it was "
                     "left alone — name it directly to release it too"
                 )
+        # SCRUM-70: the paths are free and the SLOT may not be.
+        _say_held_slots(_find_project_root(), ledger.last_released_workers)
         _warn_if_unpublished(ledger)
         return
 
@@ -2160,6 +2193,9 @@ def release(
     layer, machine = claims_channel(_find_project_root())
     released = ledger.release(worker, path_list, layer=layer, machine=machine)
     click.echo(f"released {released} claim(s) for {worker}")
+    # SCRUM-70, and it matters MORE here: this is the command somebody runs to
+    # free a Worker up, and it does not free its slot.
+    _say_held_slots(_find_project_root(), [worker])
     _warn_if_unpublished(ledger)
 
 

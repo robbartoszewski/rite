@@ -45,12 +45,12 @@ records them, from facts it holds, and the model is not asked.
    is said once and the cycle goes on.
 
 ⚠ **Two classes the ticket names are NOT here, deliberately.**
-*Reconciliation actions* need SCRUM-64, which builds reconciliation; there is
-nothing to record until it exists, and a declared-but-unwired class is a
-claim about coverage that nothing honours. *A slot held by an idle sandbox*
-is SCRUM-70's, for the same reason. Both are named in `NOT_YET` so the gap is
-visible here rather than discovered by someone reading the journal and
-finding neither.
+*Reconciliation actions* needed SCRUM-64, which builds reconciliation, and *a
+slot held by an idle sandbox* needed SCRUM-70, which builds the thing that can
+report one. Both were named in `NOT_YET` so the gap was visible here rather
+than discovered by someone reading the journal and finding neither. **Both have
+landed, and `NOT_YET` is empty** — which is the state this ticket was for: the
+journal now covers every class it claims to.
 """
 
 from __future__ import annotations
@@ -91,6 +91,21 @@ still in it. The reconciler is the thing that notices, which is exactly why
 the Owner should hear about it — a fleet that silently needs reconciling
 every cycle is a fleet with a leak somewhere upstream."""
 
+IDLE_SLOT_HELD = "idle-slot-held"
+"""A slot held by a Worker with no claims left (SCRUM-70).
+
+⚠ **The failure it records is a project that cannot start work and is told
+nothing.** A Worker's claims and its SLOT against
+`sandbox.max_concurrent_workers` are released by different commands — only a
+`destroy` frees the slot — so `rite release` could clear every claim and the
+next Worker still could not start. `rite status` said "no active claims" at
+the same time, which is the most reassuring thing it can say about the state
+that stops all work.
+
+This class was in `NOT_YET` until SCRUM-70 built the thing that can report
+one (`reporting.held_slots`).
+"""
+
 EVENTS = (
     RELAY_FAILED,
     DELIVERY_REFUSED,
@@ -100,12 +115,11 @@ EVENTS = (
     RECOVERY_EXHAUSTED,
     ROUTING_ANOMALY,
     RECONCILED,
+    IDLE_SLOT_HELD,
 )
 """The whole set. See rule 1: a class outside this is refused."""
 
-NOT_YET = {
-    "idle-slot-held": "SCRUM-70 fixes the held slot; nothing reports one yet",
-}
+NOT_YET: dict[str, str] = {}
 """Classes the ticket names that nothing can record yet, and why.
 
 ⚠ Here rather than in `EVENTS`. A class declared and never written is a

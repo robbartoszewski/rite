@@ -485,6 +485,75 @@ def _with_a_freed_slot(root: Path, manager: str, wake, clock):
     return combined
 
 
+def _one_listing():
+    """A zero-argument callable giving ONE `yoloai ls --json` for the steps at
+    THIS boundary that need it (SCRUM-64 follow-up, SCRUM-70).
+
+    ⚠ Fresh per boundary, never a module-level cache: the whole point of the
+    listing is that it is what the sandboxes look like NOW, and a cached one
+    would make `reconcile` act on a cycle-old picture. Lazy, so a boundary
+    where neither step needs it takes none.
+    """
+    held: list = []
+
+    def get():
+        if not held:
+            from rite_ai.sandbox import list_sandboxes
+
+            held.append(list_sandboxes())
+        return held[0]
+
+    return get
+
+
+def _record_idle_slots(root, manager: str, say, recorder, listing_of=None) -> None:
+    """One journal entry per slot held by a Worker with no claims (SCRUM-70).
+
+    ⚠ **A Manager cannot record this either**, for `_record_reconciled`'s
+    reason: it is a comparison between the claims ledger and the host's live
+    sandboxes, and it happens out here while the Manager is mid-session. The
+    failure it catches is a project that cannot start work and is told
+    nothing — `rite release` clears claims, only a `destroy` frees a slot,
+    and `rite status` said "no active claims" the whole time.
+
+    Shares the pass's ONE `yoloai ls --json` with `reconcile`; never raises.
+    """
+    if recorder is None:
+        return
+    try:
+        from rite_ai.config.parse import load_project
+        from rite_ai.managers import recording
+        from rite_ai.reporting.held_slots import held_slots, idle_only
+
+        project = load_project(Path(root))
+        workers = [w.name for w in getattr(project, "workers", []) or []]
+        if not workers:
+            return
+        listing = (listing_of or (lambda: None))()
+        slots = held_slots(Path(root), workers, listing=listing)
+        if isinstance(slots, str):
+            # "Could not ask" is not "no slots held", and it is not a journal
+            # entry either: the journal records failures that happened, and
+            # an unreachable yoloAI is said to the terminal.
+            say(slots)
+            return
+        for slot in idle_only(slots):
+            recorder(
+                recording.Event(
+                    recording.IDLE_SLOT_HELD,
+                    slot.worker,
+                    slot.line(),
+                    "a Worker's slot ends with its work, so the next Worker can start",
+                    anchor=f"manager {manager} worker {slot.worker} idle-slot",
+                )
+            )
+    except Exception as e:  # noqa: BLE001 - a journal write never ends a run
+        try:
+            say(f"could not check for held slots this cycle: {e!r}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _record_reconciled(actions, manager: str, recorder) -> None:
     """One journal entry per reconciliation the supervisor acted on
     (SCRUM-71, unblocked by SCRUM-64).
@@ -1898,9 +1967,19 @@ def _supervise(
     lifecycle.honour_requests(root, manager, say)
     # SCRUM-64: reconcile against ground truth BEFORE the first session, so a
     # restarted Manager does not resume stale claims/sandboxes and escalate.
+    #
+    # ONE `yoloai ls --json` shared by the two steps here that need it, and
+    # taken only if one of them does (`_one_listing`).
+    at_start = _one_listing()
     _record_reconciled(
-        reconcile.reconcile(root, manager, say, at_start=True), manager, recorder
+        reconcile.reconcile(root, manager, say, at_start=True, listing_of=at_start),
+        manager,
+        recorder,
     )
+    # SCRUM-70, on the SAME listing reconcile just took: a slot held by a
+    # Worker with no claims is a project that cannot start work, and nothing
+    # reported one.
+    _record_idle_slots(root, manager, say, recorder, at_start)
 
     # ⚠ THE NO-PROGRESS GUARD (F22). Set when a session the BOARD started
     # ended having made no progress (`_session_was_idle`); cleared by anything that
@@ -2686,9 +2765,16 @@ def _supervise(
             # SCRUM-64: throttled per cycle (`reconcile` enforces the
             # interval), after deliveries so a just-delivered sandbox reads
             # as gone, before Worker starts so a freed claim can be retaken.
+            # One listing for THIS boundary, never the start pass's: a
+            # cycle-old picture of the sandboxes is exactly what reconcile
+            # must not act on.
+            per_cycle = _one_listing()
             _record_reconciled(
-                reconcile.reconcile(root, manager, say), manager, recorder
+                reconcile.reconcile(root, manager, say, listing_of=per_cycle),
+                manager,
+                recorder,
             )
+            _record_idle_slots(root, manager, say, recorder, per_cycle)
             _honour_worker_requests(root, manager, broker, say, recorder)
             if callable(chores):
                 # TR9: at the boundary with the Worker requests, and for the

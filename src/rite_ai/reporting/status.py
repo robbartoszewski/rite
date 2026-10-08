@@ -69,6 +69,14 @@ class ProjectStatus:
     modules: list[Module] = field(default_factory=list)
     workers: list[WorkerManifest] = field(default_factory=list)
     claims: list[Claim] = field(default_factory=list)
+    held_slots: list = field(default_factory=list)
+    """SCRUM-70: Workers whose sandbox still occupies a slot. Separate from
+    `claims` because they are freed by different commands, which is the whole
+    confusion this field exists to end."""
+    held_slots_unknown: str = ""
+    """Why the held slots could not be told, when they could not. ⚠ Not an
+    empty list: "rite could not ask yoloAI" and "no slots are held" are
+    opposite answers about capacity."""
     suspect_claims: list = field(default_factory=list)
     """Claims whose HOLDER has gone quiet, not merely old ones. `STALE?`
     below flags age alone; this crosses the claim against the heartbeat, which
@@ -260,6 +268,17 @@ def collect_status(root: Path, board: bool = False) -> ProjectStatus:
         * project.config.heartbeat.stall_threshold
     )
     names = [w.name for w in project.workers]
+    # SCRUM-70, here and not beside the claims above: it needs the project's
+    # Workers, which only parse below. From the claims already read and ONE
+    # `yoloai ls --json`.
+    if project.workers:
+        from rite_ai.reporting.held_slots import held_slots as _held_slots
+
+        found = _held_slots(root, names, claims=status.claims)
+        if isinstance(found, str):
+            status.held_slots_unknown = found
+        else:
+            status.held_slots = found
     if project.workers:
         from rite_ai.handback import read_all as read_handbacks
 
@@ -673,6 +692,23 @@ def format_status(status: ProjectStatus) -> str:
             )
     else:
         lines.append("\nno active claims")
+
+    # 🔴 SCRUM-70: **"no active claims" is the most reassuring thing this
+    # command can say, and it was being said about the state that stops all
+    # work.** A Worker's claims and its SLOT against
+    # `sandbox.max_concurrent_workers` are freed by different commands — only
+    # a `destroy` frees the slot — so a project with every slot occupied and
+    # every claim released read as idle and healthy. Said beside the claims
+    # whether or not there are any, because the misleading case is exactly
+    # the one with none.
+    if status.held_slots:
+        lines.append(f"\nslots held ({len(status.held_slots)}):")
+        for slot in status.held_slots:
+            lines.append(f"  {slot.line()}")
+    elif status.held_slots_unknown:
+        # Not silence: a capacity question rite could not answer is not the
+        # same as capacity being free.
+        lines.append(f"\nslots held: {status.held_slots_unknown}")
 
     if status.suspect_claims:
         # Age alone is `STALE?` above. This is age AND the holder having gone
