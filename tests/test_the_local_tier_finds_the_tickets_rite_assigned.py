@@ -38,6 +38,8 @@ from rite_ai.tickets.interface import Ticket, TicketFilter, TicketPage
 TICKET = "T-1"
 MANAGER = "lead"
 
+from rite_ai.coordination.ticket_labels import SCHEDULED  # noqa: E402
+
 
 class _BoardThatAnswersTheFilter:
     """A board with GitHub's semantics: `assignee` is the backend's own
@@ -109,9 +111,9 @@ def test_the_board_here_can_tell_the_two_apart():
     """The CONTROL. Without it, a board that always returned the ticket would
     make the test below pass for the wrong reason — which is the exact way
     this defect survived its own tests."""
-    board = _BoardThatAnswersTheFilter([(TICKET, [MANAGER], "")])
+    board = _BoardThatAnswersTheFilter([(TICKET, [SCHEDULED], "")])
     assert [t.id for t in board.list_tickets(TicketFilter())] == [TICKET]
-    assert [t.id for t in board.list_tickets(TicketFilter(label=MANAGER))] == [TICKET]
+    assert [t.id for t in board.list_tickets(TicketFilter(label=SCHEDULED))] == [TICKET]
     assert [t.id for t in board.list_tickets(TicketFilter(assignee=MANAGER))] == []
     # ...and it says yes to a real assignee, so it is not simply refusing.
     other = _BoardThatAnswersTheFilter([(TICKET, [], MANAGER)])
@@ -125,14 +127,17 @@ def test_the_driver_finds_a_ticket_assigned_the_way_rite_assigns_it(tmp_path):
     LOCAL Worker — everything the pipeline needs — and the driver sees none."""
     root = _project(tmp_path)
     _local_worker(root)
-    board = _BoardThatAnswersTheFilter([(TICKET, [MANAGER], "")])
+    board = _BoardThatAnswersTheFilter([(TICKET, [SCHEDULED], "")])
     with _refined():
         found, why = _local_tier_tickets(root, board, MANAGER)
     assert why == "", why
     assert found == [TICKET], (
-        "the local tier found no ticket for a Manager whose refined ticket is "
-        "labelled for it and held by its local Worker. The driver asks the "
-        "board `assignee=<manager>`; rite assigns by LABEL, so on a GitHub or "
-        "JIRA board this returns nothing every cycle and the GPU Worker is "
-        "never driven."
+        "the local tier found no ticket for a refined, SCHEDULED ticket held by "
+        "this Manager's local Worker. The board read must ask the BACKLOG's "
+        "question (`label=SCHEDULED`, as `loop._ready` asks it); the "
+        "per-Manager scoping is `_local_worker_holds`'s job and is exact. "
+        "Asking the board to scope produced two wrong spellings (SCRUM-79): "
+        "`assignee=<manager>`, which no rite flow ever sets, and "
+        "`label=<manager>`, which is how work is ROUTED to another Manager and "
+        "is on nothing in a single-Owner project."
     )

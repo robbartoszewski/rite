@@ -31,19 +31,27 @@ REPO = Path(__file__).resolve().parent.parent
 
 # Where "which tickets are this Manager's" is asked. Named, because a test that
 # discovered these would stop covering a call site the day one was renamed.
-_MANAGER_SCOPED_READS = (
+_BACKLOG_READS = (
     ("src/rite_ai/cli/main.py", "_local_tier_tickets"),
-    ("src/rite_ai/coordination/distribution.py", None),
+    ("src/rite_ai/loop/__init__.py", "_ready"),
 )
+"""The two places that ask the board "what work is in the backlog".
+
+Compared against `loop._ready` and NOT against `coordination.distribution`:
+distribution asks `label=<manager>`, which is how the Owner ROUTES a ticket to
+another Manager, and comparing against it is what produced SCRUM-79's second
+wrong answer. The backlog's question is `label=SCHEDULED`, and the local tier's
+per-Manager scoping is `_local_worker_holds`'s job, not the board's.
+"""
 
 
-def _ticket_filter_keywords(path: Path, inside: str | None) -> list[frozenset[str]]:
-    """The keyword names of every `TicketFilter(...)` built in `path`.
+def _ticket_filter_questions(path: Path, inside: str | None) -> list[tuple[str, str]]:
+    """Every `TicketFilter(...)` in `path` as (keyword, the name it is given).
 
-    By AST, not by grep: a docstring in this very file names
-    `TicketFilter(assignee=...)` while explaining that nothing may construct
-    one, and a source-text check would match the prose. That is the lesson
-    SCRUM-72's own §3.3b control taught, twice.
+    The VALUE matters, not just the keyword: `label=SCHEDULED` and
+    `label=manager` are both "by label" and only one of them is the backlog.
+    A test that compared keywords alone passed under SCRUM-79's second wrong
+    answer.
     """
     tree = ast.parse((REPO / path).read_text(encoding="utf-8"))
     scopes: list[ast.AST] = []
@@ -54,7 +62,7 @@ def _ticket_filter_keywords(path: Path, inside: str | None) -> list[frozenset[st
             if isinstance(node, ast.FunctionDef) and node.name == inside:
                 scopes.append(node)
     assert scopes, f"{path}: no scope {inside!r} to look in"
-    found: list[frozenset[str]] = []
+    found: list[tuple[str, str]] = []
     for scope in scopes:
         for node in ast.walk(scope):
             if (
@@ -62,40 +70,45 @@ def _ticket_filter_keywords(path: Path, inside: str | None) -> list[frozenset[st
                 and isinstance(node.func, ast.Name)
                 and node.func.id == "TicketFilter"
             ):
-                names = {kw.arg for kw in node.keywords if kw.arg}
-                if names:
-                    found.append(frozenset(names))
+                for kw in node.keywords:
+                    if not kw.arg or kw.arg == "status":
+                        continue
+                    if isinstance(kw.value, ast.Name):
+                        found.append((kw.arg, kw.value.id))
+                    elif isinstance(kw.value, ast.Constant):
+                        found.append((kw.arg, repr(kw.value.value)))
+                    else:
+                        found.append((kw.arg, "<computed>"))
     return found
 
 
-def test_both_manager_scoped_board_reads_ask_the_same_question():
+def test_both_backlog_reads_ask_the_board_the_same_question():
     """🔴 SCRUM-79 in one assertion, with no board needed.
 
-    `coordination.distribution` reads a Manager's tickets with
-    `TicketFilter(label=manager)`, which is what `rite board label` — "the
-    assignment mechanism" — writes. The local tier's driver asked
-    `assignee=manager`, the backend's own field, which nothing in rite's
-    automated flow ever sets to a Manager's name.
+    `loop._ready` reads the backlog with `TicketFilter(label=SCHEDULED)`. The
+    local tier's driver must ask the same question: it asked
+    `assignee=<manager>` (which no rite flow sets) and then `label=<manager>`
+    (which is how work is routed to ANOTHER Manager, and is on nothing in a
+    single-Owner project). Both returned nothing on a real board, silently.
     """
-    asked: dict[str, set[str]] = {}
-    for path, inside in _MANAGER_SCOPED_READS:
-        keywords = _ticket_filter_keywords(Path(path), inside)
-        assert keywords, f"{path}: builds no TicketFilter — has this read moved?"
-        asked[path] = {name for names in keywords for name in names}
+    asked = {
+        path: sorted(set(_ticket_filter_questions(Path(path), inside)))
+        for path, inside in _BACKLOG_READS
+    }
+    for path, questions in asked.items():
+        assert questions, f"{path}: builds no TicketFilter — has this read moved?"
 
-    by_path = {p: names - {"status"} for p, names in asked.items()}
-    distinct = {frozenset(v) for v in by_path.values()}
+    distinct = {tuple(q) for q in asked.values()}
     assert len(distinct) == 1, (
-        "the two places that ask which tickets are a Manager's ask different "
-        f"questions: {json.dumps({k: sorted(v) for k, v in by_path.items()}, indent=2)}"
-        ". On a real board only one of them can be right, and the wrong one "
-        "returns nothing, silently, every cycle (SCRUM-79)."
+        "the two backlog reads ask the board different questions: "
+        f"{json.dumps(asked, indent=2)}. On a real board only one can be "
+        "right, and the wrong one returns nothing, silently, every cycle "
+        "(SCRUM-79)."
     )
-    assert distinct == {frozenset({"label"})}, (
-        f"both reads now ask by {sorted(next(iter(distinct)))}. rite assigns a "
-        "ticket to a Manager with a label; a backend's `assignee` is its own "
-        "field (a GitHub login, a JIRA account) and `backend.assign` has one "
-        "caller, the operator-run `rite board assign`."
+    assert distinct == {(("label", "SCHEDULED"),)}, (
+        f"both reads now ask {sorted(next(iter(distinct)))}. The backlog's "
+        "question is `label=SCHEDULED`; per-Manager scoping belongs to "
+        "`_local_worker_holds`, which reads what `rite sandbox start` recorded."
     )
 
 

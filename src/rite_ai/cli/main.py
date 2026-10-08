@@ -10254,22 +10254,33 @@ def _local_worker_holds(root, manager: str, ticket: str) -> bool:
 def _local_tier_tickets(root, board, manager: str) -> tuple[list[str], str]:
     """(the REFINED tickets assigned to `manager`, or why they could not be read).
 
-    🔴 **`TicketFilter(assignee=...)` WAS HERE, and on a real board it matched
-    nothing.** A backend's `assignee` is the backend's OWN assignee field — a
-    GitHub login, a JIRA account — and nothing in rite's automated flow ever
-    puts a Manager's name there: `backend.assign` has one caller, the
-    operator-run `rite board assign`. What rite writes when it assigns a ticket
-    to a Manager is the LABEL (`rite board label`, "the assignment mechanism"),
-    and `coordination.distribution` reads it back the same way. Measured
-    2026-10-08 against a private GitHub board, one refined ticket labelled
-    `lead`: no filter -> ['1'], `label='lead'` -> ['1'], `assignee='lead'` ->
-    []. So the staged pipeline's driver found nothing every cycle and SCRUM-72's
-    headline mixed fleet was wired correctly and never ran.
+    🔴 **SCRUM-79, and it took TWO wrong answers to find the right one.**
 
-    ⚠ The suite could not see it: every test here used a board whose
-    `list_tickets` ignored `filters`, so `assignee=` and `label=` were
-    indistinguishable. `tests/test_the_local_tier_finds_the_tickets_rite_assigned.py`
-    answers the filter, and carries the control that keeps it honest.
+    It asked `TicketFilter(assignee=<manager>)` first. A backend's `assignee` is
+    the backend's OWN field — a GitHub login, a JIRA account — and nothing in
+    rite's automated flow puts a Manager's name there (`backend.assign` has one
+    caller, the operator-run `rite board assign`). Measured against a real
+    board: no filter -> ['1'], `assignee='lead'` -> []. The driver found nothing
+    every cycle, silently, and SCRUM-72's headline mixed fleet was wired
+    correctly and never ran.
+
+    ⚠ Then it asked `label=<manager>`, which is no better and was caught by the
+    e2e's own pickup guard before a fleet ran on it. A Manager's NAME on a
+    ticket is how the Owner ROUTES work to another Manager
+    (`coordination.distribution`); it is not how an Owner's own backlog is
+    marked, and a project with one Owner has no such label on anything.
+
+    **The question is the BACKLOG's, and `loop._ready` already asks it:**
+    `label=SCHEDULED`. The per-Manager scoping does not belong in the board read
+    at all — `_local_worker_holds` below is exact about it, because it reads
+    what `rite sandbox start` recorded. Asking the board to scope as well was
+    what produced two wrong spellings of a question that did not need asking.
+
+    ⚠ The suite could not see any of this: every test here used a board whose
+    `list_tickets` ignored `filters`, so every spelling was indistinguishable.
+    `tests/test_the_local_tier_finds_the_tickets_rite_assigned.py` answers the
+    filter, and `tools/e2e_v071/board_pickup.py` asks a REAL board before a
+    fleet starts — which is what caught the second wrong answer.
 
     A `BackendError` is returned rather than raised: a board that cannot be
     read is a cycle that advanced nothing, not a run that ends.
@@ -10285,10 +10296,11 @@ def _local_tier_tickets(root, board, manager: str) -> tuple[list[str], str]:
     Owner's to refine (TR2), it is not this Manager's to complain about, and a
     line per unrefined ticket per cycle would bury the local tier's own notes.
     """
+    from rite_ai.coordination.ticket_labels import SCHEDULED
     from rite_ai.refinement import status as refinement_status
     from rite_ai.tickets.interface import BackendError, TicketFilter
 
-    page = board.list_tickets(TicketFilter(label=manager))
+    page = board.list_tickets(TicketFilter(label=SCHEDULED))
     if isinstance(page, BackendError):
         return [], page.message
     found = getattr(page, "tickets", page) or []

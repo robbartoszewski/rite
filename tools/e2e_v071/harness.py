@@ -251,7 +251,9 @@ def setup(fleet: Fleet, runs_root: Path, *, offline: bool, create_repo: bool) ->
             "rite: the e2e gate's project and fleet",
         ]
     )
-    if repo:
+    if repo and not fleet.board_only_repo:
+        # Nothing to push to under `board_only_repo`: the repo is the board, and
+        # the app deliberately has no origin.
         p(["git", "push", "-q", "origin", "main"])
 
     tickets: dict[str, str] = {}
