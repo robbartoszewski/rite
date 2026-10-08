@@ -10277,7 +10277,16 @@ def _local_worker_holds(root, manager: str, ticket: str) -> bool:
         worker = _worker_for(Path(root), manager, ticket)
         if not worker:
             return False
-        return bool(getattr(worker_manifest(Path(root), worker), "is_local", False))
+        # ⚠ **The CAPABILITY, not the provider.** This asked `is_local`, which
+        # is a question about which engine a Worker runs; the question the
+        # driver actually has is whether rite must author this Worker's plan.
+        # Same answer today, and the difference is that a new provider declares
+        # the capability instead of this line needing to learn its name
+        # (Robert, 2026-10-08: the Manager/Worker interfaces are to be provider-
+        # and platform-agnostic).
+        return bool(
+            getattr(worker_manifest(Path(root), worker), "needs_authored_plan", False)
+        )
     except Exception:  # noqa: BLE001 - cannot tell is not a reason to drive
         return False
 

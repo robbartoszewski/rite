@@ -669,7 +669,9 @@ def _honour_worker_requests(
 
     told = _QUEUED_TOLD.setdefault((str(root), manager), set())
     for path, raw in pending:
-        ok, message = broker(raw)
+        # SCRUM-83: the broker needs to know WHICH Manager is asking, to
+        # refuse a Worker to one that could not drive it.
+        ok, message = broker(raw, manager)
         if ok is NO_SLOT:
             # 🔴 Queued, not dropped: a discarded request is a lost
             # instruction. It goes back where it was and is asked for again

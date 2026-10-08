@@ -657,6 +657,25 @@ class WorkerManifest:
     def is_local(self) -> bool:
         return is_local_engine(self.engine)
 
+    @property
+    def needs_authored_plan(self) -> bool:
+        """Whether rite must author this Worker's plan before it can work.
+
+        🔴 **A CAPABILITY, and the one question a caller may ask about this.**
+        Robert, 2026-10-08: the Manager/Worker interfaces must be provider- and
+        platform-agnostic — gate on duty and capability, never on which engine
+        or provider a unit runs. Callers that branched on `is_local` were
+        branching on a provider, and every new provider meant another
+        special-case in another file.
+
+        It is derived from the engine HERE because the engine is the only
+        declaration rite has today. That makes this property the single place a
+        new provider touches: one that plans its own work says so and nothing
+        else changes. Nothing outside this file should read `is_local` to decide
+        how a Worker is driven.
+        """
+        return self.is_local
+
 
 def worker_decomposition_model(worker: WorkerManifest) -> str:
     """The model a Worker plans its own approach with (Level 2, RL-61).
