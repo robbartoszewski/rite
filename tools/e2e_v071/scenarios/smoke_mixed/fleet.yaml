@@ -45,7 +45,19 @@ managers:
 
 workers:
   - name: gpu1
-    manager: lead
+    # 🔴 **Reports to `planner`, not `lead`, and that is load-bearing.** The
+    # local tier's driver only sees a ticket held by a local Worker of the
+    # Manager whose cycle is running (`_local_worker_holds`), and only the
+    # DECOMPOSE duty holder can author a plan. With the Worker under `lead`:
+    # lead saw the ticket and could not decompose it ("'lead' does not hold
+    # the decompose duty — holders: planner"), planner held the duty and never
+    # saw the ticket. No Manager could advance it past `defined`.
+    #
+    # RL-6 forces two Managers (author != approver, on different models), so
+    # the Worker necessarily sits with one of them — and it has to sit with the
+    # AUTHOR. `lead` can still start it: `broker.decide`'s `known_worker` asks
+    # whether a Worker exists, not whose it is.
+    manager: planner
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"
