@@ -195,6 +195,15 @@ def decompose_ticket(
             reasons = problems.refusals
 
         result.reasons = reasons
+        # 🔴 SCRUM-87: the model's own output, kept beside the refusal. Written
+        # for EVERY refused attempt, not only a parse failure — a candidate
+        # refused by validation is just as hard to argue with when nobody can
+        # see it.
+        kept = keep_rejected(
+            root, manager, ticket, result.attempts, reasons, proposal.bytes
+        )
+        if kept:
+            result.lines.append(f"the refused candidate was kept at {kept}")
         # RL-69 — identical reasons mean the loop has converged on failure.
         if previous is not None and reasons == previous:
             result.converged_early = True
@@ -247,6 +256,81 @@ def _roles_for(root: Path):
     if isinstance(parsed, ParseError):
         return [], f"this project's config.yaml will not parse: {parsed.message}"
     return parsed.coordination.manager_roles, ""
+
+
+REJECTED_DIRNAME = "rejected-plans"
+"""Where a refused candidate's own bytes are kept, under the Manager's state
+directory. ⚠ **Not the journal**: `test_nothing_in_rite_reads_the_journal`
+forbids any module outside `journal.py` from even locating that, and these are
+not journal entries — they are an artefact a person opens when a plan would not
+parse."""
+
+MAX_KEPT_BYTES = 64 * 1024
+"""Enough to see what the model did, capped so a runaway turn cannot fill a
+disk. A truncated capture says so in the file."""
+
+
+def rejected_dir(root: Path, manager: str) -> Path:
+    from rite_ai.managers import manager_dir
+
+    return manager_dir(Path(root), manager) / "state" / REJECTED_DIRNAME
+
+
+def keep_rejected(
+    root: Path,
+    manager: str,
+    ticket: str,
+    attempt: int,
+    reasons: tuple[str, ...],
+    raw: bytes,
+) -> str:
+    """Write a refused candidate's own output beside why it was refused.
+
+    🔴 **SCRUM-87.** A candidate that would not parse was reported as "the
+    bytes are not a decomposition" and the bytes were then dropped — captured
+    in-process with `capture_output=True` and never written anywhere. So the
+    one artefact needed to tell "the model wrote prose", "it fenced the JSON"
+    and "it emitted a different schema" apart was the one thing not kept, and
+    a format failure could only be guessed at. Measured 2026-10-08: a 17 GB
+    local author failed both attempts with `Expecting value: line 2 column 5`
+    and left nothing behind to read.
+
+    Returns the path written, or "" — and NEVER raises. A capture that could
+    not be written must not end a decomposition that was going to fail anyway;
+    losing the diagnostic is bad, turning it into a crash is worse.
+    """
+    try:
+        from rite_ai.names import require_safe_name
+
+        safe = require_safe_name(ticket, kind="ticket")
+        where = rejected_dir(root, manager)
+        where.mkdir(parents=True, exist_ok=True)
+        body = raw or b""
+        clipped = body[:MAX_KEPT_BYTES]
+        header = [
+            f"# the candidate plan {manager!r} refused for ticket {safe}",
+            f"# attempt: {attempt}",
+            f"# bytes: {len(body)}"
+            + (
+                f" (showing the first {MAX_KEPT_BYTES})"
+                if len(body) > len(clipped)
+                else ""
+            ),
+            "# refused because:",
+            *(f"#   - {r}" for r in reasons or ()),
+            "#",
+            "# Everything below is the MODEL'S OWN OUTPUT, verbatim and",
+            "# unparsed. It is kept so a format failure can be read rather",
+            "# than guessed at (SCRUM-87).",
+            "",
+        ]
+        path = where / f"{safe}-attempt{attempt}.txt"
+        with path.open("wb") as f:
+            f.write(("\n".join(header)).encode("utf-8", "replace"))
+            f.write(clipped)
+        return str(path)
+    except Exception:  # noqa: BLE001 - see the docstring
+        return ""
 
 
 def _decompose_holders(roles: list[ManagerRole]) -> set[str]:
