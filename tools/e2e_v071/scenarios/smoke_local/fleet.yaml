@@ -33,12 +33,18 @@ github:
   # No GitHub App: see the full scenarios. Delivery here does not open a PR.
 
 managers:
-  # 🔴 **A FASTER author, for the delivery demo only** (Robert, 2026-10-08).
-  # The designed 17 GB author is proven on wiring, step 1 and the pipeline
-  # advancing, and it emitted a VALID plan — but at ~4 tok/s one decompose turn
-  # ran 83+ minutes, so a full delivery is a many-hour proposition. The demo
-  # uses a smaller author to get one complete end-to-end delivery; the 17 GB
-  # result is documented separately as proven-but-slow.
+  # 🔴 **The author is the 17 GB model because the smaller ones cannot drive
+  # step 1.** Measured 2026-10-08, one session each and consistent:
+  #   qwen3.8 (17 GB)  claimed the ticket, requested the Worker, owned it, and
+  #                    (once SCRUM-88 stopped discarding it) emitted a VALID
+  #                    two-subtask plan.
+  #   qwen3:14b        wrote placeholder refinement questions for an already
+  #                    refined ticket, then a malformed command; no progress.
+  #   qwen3:8b         "session 1 made no progress (no claim, route, Worker
+  #                    request or delivery)"; rite parked it.
+  # So a faster author is not available, and a full delivery is a multi-hour
+  # run. The approver is the SMALLEST different model (RL-6), to make each
+  # author/approver hand-off reload as little as possible.
   # 🔴 **Duties, not presets, and the split is load-bearing.** rite decides
   # three things independently, and a smoke needs them to line up:
   #   - the Manager that STARTS a Worker owns it ("'gpu1' was started for
@@ -64,14 +70,14 @@ managers:
     duties: "plan-review,integrate"
     engine: "local:small"
     endpoint: "http://localhost:11434"
-    model: "qwen3:14b"
+    model: "qwen3:8b"
     agent: goose
     context_window: 32768
   - name: planner              # writes the GPU Worker's plan (decompose)
     duties: "decide,board,route,spec,decompose,execute"
     engine: "local:large"
     endpoint: "http://localhost:11434"
-    model: "qwen3:8b"
+    model: "qwen3.8:latest"
     agent: goose
     context_window: 32768
 
