@@ -169,7 +169,9 @@ def decompose_ticket(
             return result
 
         result.attempts += 1
-        parsed = dec.parse(proposal.bytes)
+        # SCRUM-88: the agent's stdout is a transcript; the plan is inside it.
+        bytes_for_parse = plan_document(proposal.bytes)
+        parsed = dec.parse(bytes_for_parse)
         if isinstance(parsed, str):
             reasons: tuple[str, ...] = (f"the bytes are not a decomposition: {parsed}",)
         else:
@@ -270,10 +272,77 @@ MAX_KEPT_BYTES = 64 * 1024
 disk. A truncated capture says so in the file."""
 
 
+def plan_document(raw: bytes) -> bytes:
+    """The decomposition inside an agent's output, or `raw` unchanged.
+
+    🔴 **SCRUM-88, and it was never a model-capability problem.** `_propose`
+    returns the WHOLE of the agent's stdout, and for goose that is an
+    interactive transcript: an ASCII-art banner, a `▸ tree` / `▸ shell` trace
+    per tool call, and every command's output. `parse` was handed all 58 KB of
+    it and said `Expecting value: line 2 column 5 (char 5)` — which is exactly
+    where `__( O)>` sits on line 2 of goose's banner.
+
+    Measured 2026-10-08: a 17 GB local author emitted a completely valid
+    two-subtask plan, with real verifies it had checked fail today, inside a
+    ```json fence at the end of its transcript. rite threw it away and the
+    ticket escalated. Nothing was wrong with the model.
+
+    ⚠ **A fenced block is preferred, and the LAST decomposition-shaped
+    candidate wins.** A transcript legitimately contains other JSON — this one
+    carried `.rite/events.jsonl` lines (`{"at": ..., "event":
+    "sandbox-started", "ticket": "1", ...}`) that `cat`-ing a file put there —
+    so "the last balanced object" alone would pick an event. Candidates are
+    filtered to ones that look like a decomposition, and the last is taken
+    because an agent that revises its answer leaves the earlier attempt above.
+
+    ⚠ **`raw` is returned unchanged when nothing qualifies**, so a genuinely
+    unparseable output still produces `parse`'s own message about the real
+    bytes rather than a tidier lie about a slice of them.
+    """
+    import json as _json
+    import re as _re
+
+    text = (raw or b"").decode("utf-8", "replace")
+    candidates: list[str] = []
+    # Fenced blocks first: ```json ... ``` or a bare ``` ... ```
+    for m in _re.finditer(r"```(?:json)?\s*\n(.*?)```", text, _re.S):
+        candidates.append(m.group(1))
+    # Then every balanced top-level object, for an agent that fenced nothing.
+    depth, start = 0, -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidates.append(text[start : i + 1])
+                start = -1
+
+    chosen = ""
+    for candidate in candidates:
+        body = candidate.strip()
+        if not body.startswith("{"):
+            continue
+        try:
+            parsed = _json.loads(body)
+        except ValueError:
+            continue
+        # It must LOOK like a decomposition; a transcript's other JSON must not
+        # be mistaken for one.
+        if isinstance(parsed, dict) and "subtasks" in parsed:
+            chosen = body
+    return chosen.encode("utf-8") if chosen else (raw or b"")
+
+
 def rejected_dir(root: Path, manager: str) -> Path:
+    # ⚠ `manager_dir` ALREADY ends in `state/` (its docstring:
+    # `<data>/rite/mail/<checkout>/<name>/state/`). Appending another put the
+    # first captures under `state/state/`, which is how this was found.
     from rite_ai.managers import manager_dir
 
-    return manager_dir(Path(root), manager) / "state" / REJECTED_DIRNAME
+    return manager_dir(Path(root), manager) / REJECTED_DIRNAME
 
 
 def keep_rejected(
@@ -302,7 +371,11 @@ def keep_rejected(
     try:
         from rite_ai.names import require_safe_name
 
-        safe = require_safe_name(ticket, kind="ticket")
+        # ⚠ `require_safe_name` RAISES or returns None — it is a validator, not
+        # a sanitiser. Assigning its result named the first captures
+        # `None-attempt1.txt`, losing which ticket they belonged to.
+        require_safe_name(ticket, kind="ticket")
+        safe = str(ticket)
         where = rejected_dir(root, manager)
         where.mkdir(parents=True, exist_ok=True)
         body = raw or b""
