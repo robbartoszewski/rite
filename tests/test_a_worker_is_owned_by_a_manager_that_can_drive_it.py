@@ -71,7 +71,7 @@ def test_an_owner_that_can_DELEGATE_the_authoring_duty_may_own_the_worker(tmp_pa
     one that authors reaches step 1 only sometimes.
     """
     root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine="local:small")
-    assert broker.may_own_worker(root, "lead", "gpu1") == "", (
+    assert broker._may_own_worker(root, "lead", "gpu1") == "", (
         "an owner that delegates authoring to the one Manager holding the duty "
         "was refused the Worker"
     )
@@ -92,7 +92,7 @@ def test_the_delegation_does_not_reintroduce_the_deadlock(tmp_path):
     roles = parse_config(root / ".rite" / "config.yaml").coordination.manager_roles
 
     # the gate lets `lead` own it...
-    assert broker.may_own_worker(root, "lead", "gpu1") == ""
+    assert broker._may_own_worker(root, "lead", "gpu1") == ""
     # ...and the authoring path agrees who writes the plan, rather than
     # refusing `lead` as it used to.
     author, problem = author_for(roles, "lead")
@@ -106,7 +106,7 @@ def test_the_gate_and_the_authoring_path_cannot_disagree(tmp_path):
     import ast
     import inspect
 
-    src = inspect.getsource(broker.may_own_worker)
+    src = inspect.getsource(broker._may_own_worker)
     assert "author_for" in src, (
         "the gate decides ownership by its own rule instead of the one the "
         "decomposer uses"
@@ -117,7 +117,7 @@ def test_the_gate_and_the_authoring_path_cannot_disagree(tmp_path):
 def test_the_manager_that_authors_may_own_it(tmp_path):
     """The control that keeps the gate from refusing everything."""
     root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine="local:small")
-    assert broker.may_own_worker(root, "planner", "gpu1") == ""
+    assert broker._may_own_worker(root, "planner", "gpu1") == ""
 
 
 def test_a_worker_that_plans_its_own_work_may_be_owned_by_anyone(tmp_path):
@@ -125,13 +125,13 @@ def test_a_worker_that_plans_its_own_work_may_be_owned_by_anyone(tmp_path):
     Claude Managers: a Worker rite does not author for is nobody's special
     case, and the Manager holding only `plan-review` may own it."""
     root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine="claude")
-    assert broker.may_own_worker(root, "lead", "gpu1") == ""
+    assert broker._may_own_worker(root, "lead", "gpu1") == ""
 
 
 def test_an_unreadable_manifest_is_a_refusal(tmp_path):
     root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine="local:small")
     (root / "workers" / "gpu1" / "worker.yml").write_text("{{{ not yaml")
-    why = broker.may_own_worker(root, "planner", "gpu1")
+    why = broker._may_own_worker(root, "planner", "gpu1")
     assert why, "an unreadable Worker was handed over anyway"
 
 
@@ -140,7 +140,7 @@ def test_an_unreadable_project_is_a_refusal(tmp_path):
     required"."""
     root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine="local:small")
     (root / ".rite" / "config.yaml").write_text("coordination: [[[")
-    assert broker.may_own_worker(root, "planner", "gpu1") != ""
+    assert broker._may_own_worker(root, "planner", "gpu1") != ""
 
 
 def test_nobody_holding_the_duty_is_a_refusal_that_says_so(tmp_path):
@@ -150,7 +150,7 @@ def test_nobody_holding_the_duty_is_a_refusal_that_says_so(tmp_path):
         "  - name: other\n    engine: claude\n    duties: [board]\n"
     )
     root = _project(tmp_path, roles=roles, worker_engine="local:small")
-    why = broker.may_own_worker(root, "lead", "gpu1")
+    why = broker._may_own_worker(root, "lead", "gpu1")
     assert why, "a Worker was handed over with nobody able to author its plan"
     assert "no Manager in this project does" in why, why
 
@@ -169,7 +169,7 @@ def test_several_holders_is_also_a_refusal_rather_than_a_guess(tmp_path):
         "    context_window: 32768\n    duties: [decompose]\n"
     )
     root = _project(tmp_path, roles=roles, worker_engine="local:small")
-    why = broker.may_own_worker(root, "lead", "gpu1")
+    why = broker._may_own_worker(root, "lead", "gpu1")
     assert why, "rite guessed which of two Managers should author"
     assert "cannot tell which" in why, why
 
@@ -185,7 +185,7 @@ def test_the_gate_names_no_provider():
     this was measured, and the first version of this test failed on its own
     explanation.
     """
-    tree = ast.parse(inspect.getsource(broker.may_own_worker))
+    tree = ast.parse(inspect.getsource(broker._may_own_worker))
     fn = tree.body[0]
     assert isinstance(fn, ast.FunctionDef)
     body_nodes = fn.body[1:] if ast.get_docstring(fn) else fn.body
@@ -224,7 +224,7 @@ def test_the_gate_is_actually_wired_into_the_broker():
         for n in ast.walk(tree)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
     }
-    assert "may_own_worker" in called, "for_project never consults the gate"
+    assert "_may_own_worker" in called, "for_project never consults the gate"
 
 
 def test_the_supervisor_tells_the_broker_which_manager_is_asking():
@@ -242,8 +242,8 @@ def test_every_local_class_needs_an_authored_plan(tmp_path, engine):
     """The capability must not be tied to one local CLASS either."""
     root = _project(tmp_path, roles=_AUTHOR_AND_APPROVER, worker_engine=engine)
     # Either Manager may own it now: `planner` holds the duty, `lead` delegates.
-    assert broker.may_own_worker(root, "planner", "gpu1") == ""
-    assert broker.may_own_worker(root, "lead", "gpu1") == ""
+    assert broker._may_own_worker(root, "planner", "gpu1") == ""
+    assert broker._may_own_worker(root, "lead", "gpu1") == ""
     # ...and the capability is what decides, for every local class.
     from rite_ai.sandbox import worker_manifest
 

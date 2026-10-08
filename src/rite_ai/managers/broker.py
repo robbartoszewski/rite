@@ -377,8 +377,15 @@ def project_capacity(root: Path) -> int:
     return int(getattr(parsed.sandbox, "max_concurrent_workers", 0) or 0)
 
 
-def may_own_worker(root: Path, manager: str, worker: str) -> str:
+def _may_own_worker(root: Path, manager: str, worker: str) -> str:
     """Why `manager` may not be given `worker`, or "" when it may.
+
+    ⚠ Private: its only caller is `for_project` in this file, which is
+    deliberate — "composed here rather than in the supervisor, so every input
+    to the decision is assembled in the one file whose job is to be
+    suspicious". `test_no_dead_wiring` flagged the public name as having no
+    caller outside its module, and it was right to: a public name promises a
+    cross-module seam this has no reason to offer.
 
     🔴 **SCRUM-83.** Nothing used to gate WHO may ask for a Worker: `decide`
     checked the request's size, its JSON, that the Worker and ticket exist and
@@ -580,7 +587,7 @@ def for_project(root: Path, board: object = None, capacity: int | None = None):
         # name is a real one) and BEFORE `honour` starts anything. Here rather
         # than inside `decide` so the policy function stays testable without a
         # project on disk, which is what its own docstring asks for.
-        why = may_own_worker(Path(root), manager, decision.request.worker)
+        why = _may_own_worker(Path(root), manager, decision.request.worker)
         if why:
             return False, f"refusing to start a Worker: {why}"
         return honour(Path(root), decision.request)
