@@ -72,8 +72,9 @@ def test_the_approach_is_placed_by_its_own_recorded_time():
 
 
 def test_the_earliest_approach_is_the_one_that_counts():
-    entry = _entry(approaches=[{"subtask": "s2", "at": 45.0},
-                               {"subtask": "s1", "at": 40.0}])
+    entry = _entry(
+        approaches=[{"subtask": "s2", "at": 45.0}, {"subtask": "s1", "at": 40.0}]
+    )
     got = _sequence(entry)
     assert got == list(STAGES)
 
@@ -93,8 +94,17 @@ def test_an_unreadable_record_is_not_an_empty_one():
     """`stage.read` distinguishes absent from unreadable; so must this. An
     unreadable record yields no stages, which fails — it must never come back
     looking like a ticket that simply has not started."""
-    assert _sequence({"log": [], "approaches": [], "accepted": [],
-                      "unreadable": "state.json is not readable"}) == []
+    assert (
+        _sequence(
+            {
+                "log": [],
+                "approaches": [],
+                "accepted": [],
+                "unreadable": "state.json is not readable",
+            }
+        )
+        == []
+    )
 
 
 def test_equal_timestamps_keep_the_order_the_log_was_written_in():
@@ -116,6 +126,10 @@ def test_the_step_review_is_not_placed_when_nothing_was_executed():
 
 
 def test_the_step_review_follows_the_last_execution():
-    assert _place_step_review(
-        ["defined", "executed", "executed", "recomposed"]
-    ) == ["defined", "executed", "executed", "step_reviewed", "recomposed"]
+    assert _place_step_review(["defined", "executed", "executed", "recomposed"]) == [
+        "defined",
+        "executed",
+        "executed",
+        "step_reviewed",
+        "recomposed",
+    ]

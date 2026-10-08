@@ -115,7 +115,9 @@ def test_the_board_here_can_tell_the_two_apart():
     assert [t.id for t in board.list_tickets(TicketFilter(assignee=MANAGER))] == []
     # ...and it says yes to a real assignee, so it is not simply refusing.
     other = _BoardThatAnswersTheFilter([(TICKET, [], MANAGER)])
-    assert [t.id for t in other.list_tickets(TicketFilter(assignee=MANAGER))] == [TICKET]
+    assert [t.id for t in other.list_tickets(TicketFilter(assignee=MANAGER))] == [
+        TICKET
+    ]
 
 
 def test_the_driver_finds_a_ticket_assigned_the_way_rite_assigns_it(tmp_path):

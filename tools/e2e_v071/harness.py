@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
-from tools.e2e_v071 import checks, demo, driver, hooks, preflight
+from tools.e2e_v071 import board_pickup, checks, demo, driver, hooks, preflight
 from tools.e2e_v071.config import HERE, Fleet, load, scenario_names
 from tools.e2e_v071.observe import Observer, delivered_prs, installed_rite_python
 from tools.e2e_v071.runlog import RunDir, sh
@@ -353,6 +353,22 @@ def run_gate(run: RunDir, fleet: Fleet, *, probe_df16: bool) -> int:
 
     tickets = json.loads(run.file("tickets.json").read_text())
     obs = Observer(run.project, env, rpy)
+
+    # 🔴 SCRUM-79, and it is checked HERE because a fake board is what let it
+    # live: the driver asked `assignee=<manager>` while rite assigns by label,
+    # so on a real board the local tier picked up nothing, every cycle,
+    # silently. A fleet started on a board that will not hand over its tickets
+    # produces four hours of healthy-looking idling and a FAIL nobody can
+    # read, so the run is refused before a supervisor starts.
+    pickup = board_pickup.problem(obs, fleet.owner, list(tickets.values()))
+    run.file("board-pickup.txt").write_text(
+        pickup or "the board hands over its tickets\n"
+    )
+    if pickup:
+        print(f"  NOT READY  board pickup: {pickup}")
+        print("run: refused — the board will not hand this Manager its tickets.")
+        return REFUSED
+
     sup = Supervisors(run, env)
     st = driver.DriverState()
     answer = run.file("owner-answer.txt").read_text().strip()

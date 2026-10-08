@@ -213,8 +213,14 @@ def lifecycle_requests(obs: Observer, managers: list[str]) -> list | None:
     out = []
     for row in raw:
         op, worker = _parse_request(str(row.get("raw") or ""))
-        out.append({"op": op, "worker": worker, "at": row.get("at") or 0.0,
-                    "by": row.get("by") or ""})
+        out.append(
+            {
+                "op": op,
+                "worker": worker,
+                "at": row.get("at") or 0.0,
+                "by": row.get("by") or "",
+            }
+        )
     return out
 
 
@@ -267,13 +273,15 @@ def reconcile_reports(obs: Observer, managers: list[str]) -> list | None:
                 kind in text for kind in _ESCALATION_KINDS
             ):
                 continue
-            rows.append({
-                "at": entry.get("mtime") or 0.0,
-                "manager": manager,
-                "released": _RECONCILED in text,
-                "told": True,  # a journal entry IS the Owner being told
-                "escalated": any(kind in text for kind in _ESCALATION_KINDS),
-                "entry": entry.get("name") or "",
-            })
+            rows.append(
+                {
+                    "at": entry.get("mtime") or 0.0,
+                    "manager": manager,
+                    "released": _RECONCILED in text,
+                    "told": True,  # a journal entry IS the Owner being told
+                    "escalated": any(kind in text for kind in _ESCALATION_KINDS),
+                    "entry": entry.get("name") or "",
+                }
+            )
     rows.sort(key=lambda r: r["at"])
     return rows
