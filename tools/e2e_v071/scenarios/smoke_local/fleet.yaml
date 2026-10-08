@@ -34,12 +34,19 @@ github:
 
 managers:
   - name: lead                 # local, and a DIFFERENT model from the planner:
-    preset: lead                #   RL-6 needs the approver to differ from the author
-    engine: "local:large"
-    endpoint: "http://localhost:11434"
-    model: "qwen3:14b"
-    agent: goose
-    context_window: 32768
+    preset: lead                #   RL-6 needs the approver to differ from the author.
+    engine: "local:large"       # 🔴 A qwen3:14b was tried here first, to avoid
+    endpoint: "http://localhost:11434"   # suspending the VM, and it could not drive
+    model: "qwen3-32b-ctx32k:latest"     # step 1: it wrote PLACEHOLDER refinement
+    agent: goose               # questions ("What is the scope of the task to be
+    context_window: 32768      # refined? [ticket: \"...\"]") for a ticket already
+                               # REFINED at setup, emitted a malformed command
+                               # (`ticket-id: No such file or directory`), and its
+                               # session ended with no progress. rite handled that
+                               # correctly — the supervisor declined to spend another
+                               # session that would repeat it — but the loop never
+                               # started. 29 GB resident at 32k, so the machine's
+                               # other VM comes down for this run.
   - name: planner              # writes the GPU Worker's plan (decompose)
     preset: planner
     engine: "local:small"
