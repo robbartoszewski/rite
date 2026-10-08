@@ -120,6 +120,26 @@ def play_owner(
             run.append("owner.jsonl", {"kind": "acknowledged", "qid": qid})
 
 
+def a_plan_awaits_review(obs, fleet, tickets: dict) -> bool:
+    """Is there a plan written and not yet approved?
+
+    Read through the installed rite, so it is the same plan record the reviewer
+    will be asked about. Anything unreadable answers False: starting a Manager
+    early costs a GPU turn and an eviction, and the next poll asks again.
+    """
+    for key in fleet.pipeline_keys:
+        ident = str(tickets.get(key) or "")
+        if not ident:
+            continue
+        try:
+            plan = obs.decomposition(ident)
+        except RuntimeError:
+            continue
+        if isinstance(plan, dict) and plan.get("approval") != "approved":
+            return True
+    return False
+
+
 def maybe_kill(
     run: RunDir, obs: Observer, fleet: Fleet, tickets: dict, st: DriverState, env: dict
 ) -> None:

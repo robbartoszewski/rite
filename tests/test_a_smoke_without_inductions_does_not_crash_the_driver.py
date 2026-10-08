@@ -66,3 +66,51 @@ def test_a_scenario_that_does_induce_one_still_waits_for_it(tmp_path):
         "the restart was marked done with no kill recorded — the full gate's "
         "stale-claim induction would never run"
     )
+
+
+# ---- the approver is not started before it has anything to review ----------
+
+
+class _Plan:
+    """An Observer stand-in: only `decomposition` is consulted."""
+
+    def __init__(self, plan):
+        self.plan = plan
+
+    def decomposition(self, _ticket):
+        if isinstance(self.plan, Exception):
+            raise self.plan
+        return self.plan
+
+
+def test_no_plan_means_the_approver_is_not_started():
+    """🔴 Two decompose turns (30 and 45 minutes) died because the approver was
+    running GPU cycles while there was no plan to approve: its model and the
+    author's do not both fit, so each cycle evicted whichever was mid-generation.
+    """
+    fleet = load("smoke_local")
+    assert not driver.a_plan_awaits_review(_Plan(None), fleet, {"gpu-slug": "1"})
+
+
+def test_a_written_plan_starts_it():
+    """The control: deferring must not become never."""
+    fleet = load("smoke_local")
+    assert driver.a_plan_awaits_review(
+        _Plan({"approval": "pending"}), fleet, {"gpu-slug": "1"}
+    )
+
+
+def test_an_approved_plan_needs_no_further_review():
+    fleet = load("smoke_local")
+    assert not driver.a_plan_awaits_review(
+        _Plan({"approval": "approved"}), fleet, {"gpu-slug": "1"}
+    )
+
+
+def test_an_unreadable_plan_waits_rather_than_spending_a_turn():
+    """Starting early costs a GPU turn and an eviction; the next poll asks
+    again, so "cannot tell" declines."""
+    fleet = load("smoke_local")
+    assert not driver.a_plan_awaits_review(
+        _Plan(RuntimeError("rite read failed")), fleet, {"gpu-slug": "1"}
+    )

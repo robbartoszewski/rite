@@ -430,9 +430,33 @@ def run_gate(run: RunDir, fleet: Fleet, *, probe_df16: bool) -> int:
     answer = run.file("owner-answer.txt").read_text().strip()
     run.append("inductions.jsonl", {"kind": "run-started"})
     sup.start(fleet.owner)
-    for m in fleet.managers:
-        if m["name"] != fleet.owner and fleet.run.get("start_planner_loop", True):
-            sup.start(m["name"])
+    # 🔴 **The second Manager starts only when it has something to do, on a
+    # fleet where the GPU cannot hold both models.** Measured 2026-10-08: the
+    # author predicts 22.4 GiB at a 32k window and the approver 9.4 GiB, against
+    # Ollama's `available="27.8 GiB"`. They do not fit, so every approver cycle
+    # evicted whichever model was mid-generation — and the approver was running
+    # cycles while there was NO PLAN to approve, killing two decompose turns
+    # (30 and 45 minutes) with a bare "network error".
+    #
+    # RL-6 requires the approver to be a different model, so "use one model" is
+    # not available. Shrinking the author's window is worse: a decompose prompt
+    # that no longer fits is SCRUM-84's own signature, a request reaching Ollama
+    # with its user message dropped.
+    #
+    # ⚠ It is NOT a concurrency cap, which rite must not gain. It is the harness
+    # declining to spend a GPU turn on a Manager with nothing to review; the
+    # moment there is a plan, it starts and stays up.
+    deferred = [
+        m["name"]
+        for m in fleet.managers
+        if m["name"] != fleet.owner and fleet.run.get("start_planner_loop", True)
+    ]
+    if not fleet.run.get("defer_idle_managers", False):
+        for name in deferred:
+            sup.start(name)
+        deferred = []
+    elif deferred:
+        print(f"  deferring {', '.join(deferred)} until there is a plan to review")
     sup.watch()
 
     deadline = time.time() + float(fleet.run["deadline_minutes"]) * 60
@@ -440,6 +464,11 @@ def run_gate(run: RunDir, fleet: Fleet, *, probe_df16: bool) -> int:
     try:
         while time.time() < deadline:
             driver.sample(run, obs, fleet, st, tickets)
+            if deferred and driver.a_plan_awaits_review(obs, fleet, tickets):
+                for name in list(deferred):
+                    print(f"  a plan is waiting: starting {name}")
+                    sup.start(name)
+                deferred = []
             driver.play_owner(run, obs, fleet, tickets, st, env, answer)
             driver.maybe_kill(run, obs, fleet, tickets, st, env)
             driver.maybe_restart_with_stale_state(

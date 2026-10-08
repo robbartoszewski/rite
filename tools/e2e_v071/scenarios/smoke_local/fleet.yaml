@@ -106,6 +106,9 @@ run:
   deadline_minutes: 480
   poll_seconds: 20
   start_planner_loop: true
+  # The approver's model and the author's do not both fit on this GPU,
+  # so it is not started until there is a plan for it to review.
+  defer_idle_managers: true
   timezone: Europe/Warsaw
 
 yoloai:
