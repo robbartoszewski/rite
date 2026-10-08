@@ -52,9 +52,9 @@ managers:
   # RL-6/DD-3.5 still hold: the plan's approver is a DIFFERENT Manager, on a
   # different engine. It simply is not the author.
   - name: lead                 # Claude; the Owner and the plan reviewer (RL-6)
-    duties: "decide,board,route,spec,decompose,integrate,execute"
+    duties: "plan-review,integrate"
   - name: planner              # writes the GPU Worker's plan (decompose)
-    duties: "plan-review,step-review"
+    duties: "decide,board,route,spec,decompose,execute"
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"
@@ -75,7 +75,7 @@ workers:
     # the Worker necessarily sits with one of them — and it has to sit with the
     # AUTHOR. `lead` can still start it: `broker.decide`'s `known_worker` asks
     # whether a Worker exists, not whose it is.
-    manager: lead
+    manager: planner
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"

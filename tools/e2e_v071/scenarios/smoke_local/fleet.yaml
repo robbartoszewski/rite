@@ -52,21 +52,20 @@ managers:
   # RL-6/DD-3.5 still hold: the plan's approver is a DIFFERENT Manager, on a
   # different engine. It simply is not the author.
   - name: lead
-    # The Owner: picks the ticket up, asks for the Worker, owns it, and authors
-    # its plan. Robert, 2026-10-08: assess the ~17 GB model in this seat — it
-    # is the step-1 bar a qwen3:14b failed (placeholder refinement questions,
-    # a malformed command, a session that made no progress).
-    duties: "decide,board,route,spec,decompose,integrate,execute"
-    engine: "local:large"
-    endpoint: "http://localhost:11434"
-    model: "qwen3.8:latest"
-    agent: goose
-    context_window: 32768
-  - name: planner              # writes the GPU Worker's plan (decompose)
-    duties: "plan-review,step-review"
+    # The APPROVER only (RL-6: a different model from the author). The small
+    # model is enough to review a plan, and keeping it small is what holds the
+    # pair near ~22 GB resident instead of the 46 GB the 32b split needed.
+    duties: "plan-review,integrate"
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3:8b"
+    agent: goose
+    context_window: 32768
+  - name: planner              # writes the GPU Worker's plan (decompose)
+    duties: "decide,board,route,spec,decompose,execute"
+    engine: "local:large"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
     agent: goose
     context_window: 32768
 
@@ -84,7 +83,7 @@ workers:
     # the Worker necessarily sits with one of them — and it has to sit with the
     # AUTHOR. `lead` can still start it: `broker.decide`'s `known_worker` asks
     # whether a Worker exists, not whose it is.
-    manager: lead
+    manager: planner
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"
