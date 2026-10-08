@@ -300,8 +300,8 @@ def _request_text(root: Path, manager: str, ticket: str, asked: Asked) -> str:
     """What the reviewing Manager is told. The PLAN, and the agreed definition
     of done it is to be judged against — evidence, never instruction (RL-T26):
     nothing the decomposer wrote may tell the reviewer what to check."""
-    from rite_ai.coordination.local_backend import LocalStateLayer
     from rite_ai.local import decomposition as dec
+    from rite_ai.local.plan_state import layer
 
     lines = [
         f"{ticket}: its decomposition is waiting for YOUR review. You hold "
@@ -317,8 +317,7 @@ def _request_text(root: Path, manager: str, ticket: str, asked: Asked) -> str:
         "can move this ticket: the harness does not approve plans.",
         "",
     ]
-    state = LocalStateLayer(Path(root) / ".rite")
-    read = dec.read(state, ticket)
+    read = dec.read(layer(root), ticket)
     if read.plan is None:
         lines.append(
             f"(rite could not read the plan to quote it: "
@@ -480,9 +479,9 @@ def honour_verdicts(
     """
     root = Path(root)
     if state is None:
-        from rite_ai.coordination.local_backend import LocalStateLayer
+        from rite_ai.local.plan_state import layer
 
-        state = LocalStateLayer(root / ".rite")
+        state = layer(root)
     if approve is None:
         from rite_ai.local.approve import approve_plan
 

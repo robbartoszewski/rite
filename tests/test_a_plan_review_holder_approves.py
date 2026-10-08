@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rite_ai.coordination.local_backend import LocalStateLayer
 from rite_ai.local import decomposition as dec
+from rite_ai.local import plan_state
 from rite_ai.local.approve import Approved, Refused, approve_plan
 
 GPU = (
@@ -60,7 +60,7 @@ def _spec_units(root: Path, *ids: str) -> None:
 
 
 def _plan(tmp_path: Path, **kw):
-    state = LocalStateLayer(tmp_path / ".rite")
+    state = plan_state.layer(tmp_path)
     _spec_units(tmp_path, "5.1", "5.2")
     plan = dec.Decomposition(
         ticket="T-1",
@@ -89,7 +89,7 @@ def _plan(tmp_path: Path, **kw):
 
 
 def _stored(tmp_path: Path):
-    return dec.read(LocalStateLayer(tmp_path / ".rite"), "T-1").plan
+    return dec.read(plan_state.layer(tmp_path), "T-1").plan
 
 
 # ── it works ─────────────────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ def test_a_plan_that_no_longer_validates_is_not_approvable(tmp_path):
     # The file may have been edited since it was written, and this is the last
     # point before its subtasks may run.
     root = _project(tmp_path)
-    state = LocalStateLayer(root / ".rite")
+    state = plan_state.layer(root)
     read = dec.read(state, "T-1")
     _plan(root)
     read = dec.read(state, "T-1")

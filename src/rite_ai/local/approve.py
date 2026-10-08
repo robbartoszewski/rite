@@ -185,9 +185,9 @@ def reject_plan(
     """
     root = Path(root)
     if state is None:
-        from rite_ai.coordination.local_backend import LocalStateLayer
+        from rite_ai.local.plan_state import layer
 
-        state = LocalStateLayer(root / ".rite")
+        state = layer(root)
     standing = _may_review(root, ticket, reviewer, state)
     if isinstance(standing, Refused):
         return standing
@@ -230,9 +230,9 @@ def approve_plan(
     why not. The only writer of APPROVED, by design and by test."""
     root = Path(root)
     if state is None:
-        from rite_ai.coordination.local_backend import LocalStateLayer
+        from rite_ai.local.plan_state import layer
 
-        state = LocalStateLayer(root / ".rite")
+        state = layer(root)
     standing = _may_review(root, ticket, reviewer, state)
     if isinstance(standing, Refused):
         return standing

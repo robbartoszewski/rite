@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from rite_ai.local import decomposition as dec
+from rite_ai.local import plan_state
 from rite_ai.local import step as st
 from rite_ai.local.harness import Commit, VerifyResult
 from rite_ai.local.in_sandbox import exec_argv
@@ -604,7 +605,6 @@ class _Claims:
 
 
 def _approved(root: Path):
-    from rite_ai.coordination.local_backend import LocalStateLayer
 
     plan = dec.Decomposition(
         ticket=TICKET,
@@ -621,7 +621,7 @@ def _approved(root: Path):
         approval=dec.APPROVED,
         approved_by="reviewer",
     )
-    state = LocalStateLayer(root / ".rite")
+    state = plan_state.layer(root)
     written = dec.write(state, plan, dec.read(state, TICKET).version)
     assert type(written).__name__ == "Written", written
     return state

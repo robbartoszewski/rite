@@ -159,9 +159,9 @@ def advance_ticket(
     """
     root = Path(root)
     if state is None:
-        from rite_ai.coordination.local_backend import LocalStateLayer
+        from rite_ai.local.plan_state import layer
 
-        state = LocalStateLayer(root / ".rite")
+        state = layer(root)
     if gate is None:
         from rite_ai.local.gates import gate_for
 

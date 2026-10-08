@@ -25,8 +25,8 @@ import itertools
 
 import pytest
 
-from rite_ai.coordination.local_backend import LocalStateLayer
 from rite_ai.local import decomposition as dec
+from rite_ai.local import plan_state
 from rite_ai.local import stage as st
 
 TICKET = "T-1"
@@ -34,12 +34,19 @@ TICKET = "T-1"
 
 def _state(tmp_path):
     (tmp_path / ".rite").mkdir(parents=True, exist_ok=True)
-    return LocalStateLayer(tmp_path / ".rite")
+    return plan_state.layer(tmp_path)
 
 
 def _bytes(tmp_path) -> bytes:
-    """The whole stored state, as bytes. A refusal must not touch any of it."""
-    path = tmp_path / ".rite" / "state.json"
+    """The whole stored state, as bytes. A refusal must not touch any of it.
+
+    ⚠ Read from `plan_state.home`, NOT from `.rite/state.json`. The plan state
+    moved outside the project tree (SCRUM-72 §3.3b), and a helper still
+    pointing at the old path would return `b""` every time — making every
+    byte-unchanged assertion in this file pass while asserting nothing. It is
+    asserted non-empty below for exactly that reason.
+    """
+    path = plan_state.home(tmp_path) / "state.json"
     return path.read_bytes() if path.exists() else b""
 
 
@@ -489,3 +496,22 @@ def test_an_unavailable_write_is_not_reported_as_a_move(tmp_path):
     assert isinstance(got, st.Refused)
     assert "could not be written" in got.why
     assert st.read(state, TICKET).stage == st.DEFINED
+
+
+def test_the_byte_unchanged_helper_is_not_vacuous(tmp_path):
+    """🔴 The control for every `_bytes(...) == before` assertion above. The
+    plan state moved out of the project tree, and this helper read
+    `.rite/state.json` for one commit — where it returns `b""` every time, so
+    each of those assertions compared nothing with nothing and passed."""
+    state = _state(tmp_path)
+    assert _bytes(tmp_path) == b"", "nothing is stored yet"
+    _put(state, TICKET, st.DEFINED)
+    stored = _bytes(tmp_path)
+    assert stored, "the helper must see what `_put` wrote"
+    # The snapshot base64s its values, so the KEY is what reads literally.
+    assert st.key_for(TICKET).encode() in stored
+    # And it changes when the stage does, or it could not detect a rewrite.
+    assert isinstance(
+        st.advance(state, TICKET, st.DECOMPOSED, gate=_open_gate), st.Advanced
+    )
+    assert _bytes(tmp_path) != stored

@@ -1542,6 +1542,15 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
             for w in (getattr(project, "workers", []) or [])
             if is_local_engine(getattr(w, "engine", ""))
         )
+        # SCRUM-72 §3.3b: plan state written before the move is left where it
+        # is and NOT read, because adopting it would import the forgery the
+        # move prevents. Said once rather than losing a plan silently.
+        from rite_ai.local.plan_state import stranded
+
+        left_behind = stranded(root)
+        if left_behind:
+            click.echo(f"plan state: {left_behind}")
+            problems.append(left_behind)
         for problem in coordination_problems(coordination, local_workers=local_workers):
             click.echo(problem)
             problems.append(problem)

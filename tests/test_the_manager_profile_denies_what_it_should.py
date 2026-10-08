@@ -1028,3 +1028,76 @@ class TestNoManagerCanRewriteItsOwnAllowlist:
         write_settings(project, "lead")
 
         assert not legacy.exists()
+
+
+@on_macos
+class TestThePlanStateIsOutsideEveryManagersReach:
+    """SCRUM-72 §3.3b — the hole the plan-state move closes.
+
+    🔴 `LocalStateLayer` kept every decomposition in `.rite/state.json`,
+    inside the project tree, which the profile grants WRITABLE (the test
+    above asserts exactly that). So any Manager could open that file and set
+    a plan's `approval` to APPROVED, without holding plan-review, without
+    being independent of the author, and without `approve_plan` running at
+    all — every rule RL-6, DD-3.5 and RL-67 are made of enforced on one door
+    while a second stood open.
+
+    ⚠ **The fix is a MOVE and the kernel is what enforces it.** A check
+    inside rite would be a check inside a process a Manager can reach, and
+    Landlock has no deny at all — a path inside a granted one cannot be
+    taken back. So the state went outside every grant, and these tests run
+    `sandbox-exec` because a path that looks unreachable is not one.
+    """
+
+    def test_the_plan_state_is_neither_readable_nor_writable(self, project):
+        from rite_ai.local import plan_state
+
+        where = plan_state.home(project)
+        where.mkdir(parents=True, exist_ok=True)
+        snapshot = where / "state.json"
+        snapshot.write_text('{"keys": {}, "version": "1"}\n')
+
+        profile = write_profile(project, "lead")
+        assert _under(profile, f"cat {shlex.quote(str(snapshot))}") != 0
+        assert _under(profile, f"touch {shlex.quote(str(snapshot))}") != 0
+        # Not even the directory, so a Manager cannot write a plan for a
+        # ticket that has none either.
+        assert _under(profile, f"ls {shlex.quote(str(where))}") != 0
+        assert _under(profile, f"touch {shlex.quote(str(where / 'planted.json'))}") != 0
+
+    def test_the_old_location_IS_writable_which_is_why_it_moved(self, project):
+        """The control, and the whole reason for the move: the path the plan
+        state used to live at is still writable, because the project tree is.
+        If this ever fails, the move was not needed — and if the test above
+        ever fails, the move was undone."""
+        from rite_ai.local import plan_state
+
+        old = plan_state.legacy_path(project)
+        profile = write_profile(project, "lead")
+        assert _under(profile, f"touch {shlex.quote(str(old))}") == 0
+
+    def test_rite_local_approve_cannot_reach_the_state_from_inside(self, project):
+        """§3.3b: `rite local approve` is fenced "by file permissions rather
+        than by an environment variable". There is no env check — the command
+        simply cannot open the state, and an env var would be the one thing a
+        compromised session could set."""
+        import ast
+
+        from rite_ai.local import plan_state
+
+        src = ast.parse(Path("src/rite_ai/local/plan_state.py").read_text())
+        names = {node.id for node in ast.walk(src) if isinstance(node, ast.Name)} | {
+            node.attr for node in ast.walk(src) if isinstance(node, ast.Attribute)
+        }
+        assert "environ" not in names and "getenv" not in names, (
+            "the fence must be the path, not an environment variable"
+        )
+        # And the path really is outside the project, which is what makes the
+        # kernel the one enforcing it.
+        assert plan_state.home(project).resolve() not in (
+            project.resolve(),
+            *project.resolve().parents,
+        )
+        assert not str(plan_state.home(project).resolve()).startswith(
+            str(project.resolve()) + os.sep
+        )

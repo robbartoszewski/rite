@@ -16,8 +16,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from rite_ai.coordination.local_backend import LocalStateLayer
 from rite_ai.local import decomposition as dec
+from rite_ai.local import plan_state
 from rite_ai.local import stage as st
 from rite_ai.local.loop import (
     APPROVED,
@@ -146,7 +146,7 @@ def _subtasks(status=dec.PLANNED):
 
 
 def _state(root: Path):
-    return LocalStateLayer(root / ".rite")
+    return plan_state.layer(root)
 
 
 def _write_plan(root: Path, manager="planner", **kw):

@@ -127,9 +127,9 @@ def decompose_ticket(
         return result
 
     if state is None:
-        from rite_ai.coordination.local_backend import LocalStateLayer
+        from rite_ai.local.plan_state import layer
 
-        state = LocalStateLayer(root / ".rite")
+        state = layer(root)
 
     read = dec.read(state, ticket)
     if read.unavailable:

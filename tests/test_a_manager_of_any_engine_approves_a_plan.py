@@ -24,9 +24,8 @@ from __future__ import annotations
 
 import pytest
 
-from rite_ai.coordination.local_backend import LocalStateLayer
 from rite_ai.local import decomposition as dec
-from rite_ai.local import plan_review
+from rite_ai.local import plan_review, plan_state
 from rite_ai.local import stage as st
 from rite_ai.local.loop import advance_ticket
 
@@ -118,7 +117,7 @@ def _started_worker(root, worker="alpha", manager="planner"):
 
 
 def _state(root):
-    return LocalStateLayer(root / ".rite")
+    return plan_state.layer(root)
 
 
 def _plan(root, **kw):
@@ -164,9 +163,24 @@ def _stored(root):
     return dec.read(_state(root), TICKET).plan
 
 
+def _never(*_a, **_kw):
+    """🔴 **A guard, not convenience.** `advance_ticket`'s production
+    `author_plan` runs a REAL decomposition against a REAL endpoint — measured
+    once at four and a half minutes. Every `_ask` below is made at
+    `decomposed`, where the decomposer is not reached; so if a change ever
+    puts the ticket back at `defined` (a state layer read from the wrong
+    place does exactly that), this fails in a millisecond instead of dialling
+    Ollama until somebody notices."""
+    raise AssertionError(
+        "this test must never reach the decomposer: the ticket was not at "
+        "`decomposed` when the pass ran, which usually means the plan was "
+        "written somewhere the driver does not read"
+    )
+
+
 def _ask(root, now=1000.0):
     """One driver pass at `decomposed`: it ASKS and does not approve."""
-    return advance_ticket(root, "planner", TICKET, now=now)
+    return advance_ticket(root, "planner", TICKET, now=now, author_plan=_never)
 
 
 def _answer(root, reviewer="lead", op=None, reason=""):
@@ -328,13 +342,15 @@ def test_a_pending_plan_with_no_verdict_is_left_byte_unchanged(tmp_path):
     root = _project(tmp_path)
     _plan(root)
     _ask(root)
-    before = (root / ".rite" / "state.json").read_bytes()
+    stored = plan_state.home(root) / "state.json"
+    before = stored.read_bytes()
+    assert before, "the plan state must be where this reads it"
 
     for n in range(5):
         got = _ask(root, now=1000.0 + n)
         assert not got.moved, got
         assert "waiting for lead's verdict" in got.blocked
-    assert (root / ".rite" / "state.json").read_bytes() == before
+    assert stored.read_bytes() == before
 
 
 def test_exactly_one_request_is_sent_then_it_is_re_asked_then_escalated(tmp_path):
@@ -897,3 +913,147 @@ def test_a_rejection_of_a_plan_that_is_not_there_is_refused(tmp_path):
     got = reject_plan(root, TICKET, "lead", "wrong slicing", state=_state(root))
     assert isinstance(got, Refused)
     assert "no decomposition" in got.why
+
+
+# --- 8. the plan state is not in the project any more ---------------------------
+
+
+def test_the_plan_state_is_outside_the_project_tree(tmp_path):
+    """🔴 SCRUM-72 §3.3b. `LocalStateLayer` kept every decomposition in
+    `.rite/state.json`, inside the tree every Manager's profile grants
+    writable — so any Manager could set a plan's own `approval` to APPROVED
+    with no duty, no independence and no `approve_plan`. The kernel tests
+    (seatbelt and Landlock) assert the denial; this asserts the move."""
+    from rite_ai.local import plan_state
+
+    root = _project(tmp_path)
+    _plan(root)
+
+    where = plan_state.home(root)
+    assert (where / "state.json").is_file(), "the plan is stored outside"
+    assert not plan_state.legacy_path(root).exists(), (
+        "nothing writes the old in-project location any more"
+    )
+    assert not str(where.resolve()).startswith(str(root.resolve()) + "/")
+    # Two checkouts do not share a plan: rite itself has ~19 worktrees on one
+    # committed namespace, and `T-1` in each is a different ticket's plan.
+    other = _project(tmp_path / "second")
+    assert plan_state.home(other) != where
+
+
+def test_plan_state_left_in_the_project_is_reported_not_adopted(tmp_path):
+    """Said once, never migrated: a `.rite/state.json` from before the move is
+    content a Manager could have written, so reading it would import on day
+    one exactly the forgery the move exists to prevent. A plan silently lost
+    is worse than one reported stranded."""
+    from rite_ai.local import plan_state
+
+    root = _project(tmp_path)
+    plan_state.legacy_path(root).write_text('{"keys": {}, "version": "1"}\n')
+
+    notice = plan_state.stranded(root)
+    assert "does not read it any more" in notice
+    assert "NOT migrated" in notice
+    assert str(plan_state.legacy_path(root)) in notice
+
+    # 🔴 **And it is not adopted.** A legacy file holding an APPROVED plan is
+    # the case that matters: migrating it would import on day one exactly the
+    # forgery the move prevents, since any Manager could have written it.
+    import base64
+    import json as _json
+
+    forged = dec.render(
+        dec.Decomposition(
+            ticket=TICKET,
+            subtasks=(
+                dec.Subtask(id="x", intent="forged", scope=("a.txt",), verify="true"),
+            ),
+            decomposed_by="planner",
+            approval=dec.APPROVED,
+            approved_by="planner",
+        )
+    )
+    plan_state.legacy_path(root).write_text(
+        _json.dumps(
+            {
+                "keys": {
+                    dec.key_for(TICKET): base64.b64encode(forged).decode(),
+                },
+                "version": "1",
+            }
+        )
+        + "\n"
+    )
+    assert dec.read(plan_state.layer(root), TICKET).plan is None, (
+        "the old in-project state must not be adopted: a Manager could have written it"
+    )
+
+    # Once this checkout has written a plan outside the project, the old file
+    # is history and is not mentioned again.
+    _plan(root)
+    assert plan_state.stranded(root) == ""
+
+
+def test_no_plan_state_in_the_project_says_nothing(tmp_path):
+    from rite_ai.local import plan_state
+
+    assert plan_state.stranded(_project(tmp_path)) == ""
+
+
+def test_doctor_reports_stranded_plan_state(tmp_path):
+    """Wired, not only written: `test_no_dead_wiring`'s lesson is that a rule
+    reporting to nobody is the defect shape, not the rule."""
+    import inspect
+
+    from rite_ai.cli import main
+
+    src = inspect.getsource(main)
+    assert (
+        "        left_behind = stranded(root)\n"
+        "        if left_behind:\n"
+        '            click.echo(f"plan state: {left_behind}")\n'
+        "            problems.append(left_behind)\n" in src
+    ), "the notice must be read, said AND counted as a problem"
+
+
+def test_the_state_layer_is_constructed_in_exactly_one_place():
+    """🔴 Measured the hard way during this very commit: a mutation run was
+    interrupted and left ONE of the seven call sites reading the old
+    in-project path, and because that is the path it used to read, nothing
+    looked wrong — the tests that would have caught it instead spent four
+    minutes in a live decomposition. Seven spellings is how six get moved and
+    one does not; one spelling is why `plan_state.layer` exists."""
+    import ast
+    import pathlib
+
+    sites = []
+    for path in sorted(pathlib.Path("src/rite_ai").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "LocalStateLayer"
+            ):
+                sites.append(f"{path}:{node.lineno}")
+    assert len(sites) == 1, f"LocalStateLayer is constructed more than once: {sites}"
+    assert sites[0].startswith("src/rite_ai/local/plan_state.py:"), sites
+
+
+def test_the_fence_is_the_path_and_never_an_environment_variable():
+    """§3.3b: `rite local approve` is fenced "by file permissions rather than
+    by an environment variable". There is no env check anywhere in
+    `plan_state` — the command simply cannot open the state from inside a
+    boundary, and an env var is inherited by anything a session starts and is
+    the one thing a compromised session would set."""
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path("src/rite_ai/local/plan_state.py").read_text())
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
+        n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)
+    }
+    for forbidden in ("environ", "getenv", "environb", "RITE_MANAGER"):
+        assert forbidden not in names, (
+            f"plan_state reads {forbidden!r}: the fence must be the path the "
+            "kernel denies, not a value a session can set"
+        )

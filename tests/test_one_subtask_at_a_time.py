@@ -26,8 +26,8 @@ from pathlib import Path
 
 import pytest
 
-from rite_ai.coordination.local_backend import LocalStateLayer
 from rite_ai.local import decomposition as dec
+from rite_ai.local import plan_state
 from rite_ai.local import step as st
 from rite_ai.local.harness import AgentReport, Commit, VerifyResult
 
@@ -107,7 +107,7 @@ def project(tmp_path):
 
 
 def _seed(root: Path, plan: dec.Decomposition):
-    state = LocalStateLayer(root / ".rite")
+    state = plan_state.layer(root)
     read = dec.read(state, plan.ticket)
     written = dec.write(state, plan, read.version)
     assert type(written).__name__ == "Written", written
@@ -283,7 +283,7 @@ class TestNothingRunsFromAnUnapprovedPlan:
     def test_no_decomposition_says_the_decomposer_does_not_exist(self, project):
         """Honest about the hole rather than silent: rite cannot produce a
         plan yet, so a project with none is told that."""
-        state = LocalStateLayer(project / ".rite")
+        state = plan_state.layer(project)
 
         step = st.take_one_step(
             project,
