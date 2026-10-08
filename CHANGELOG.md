@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0a10 (2026-10-08) — alpha: a GPU Worker is driven, and every stage is enforced
 
 ### A GPU Worker is driven under any Manager, through enforced stages (SCRUM-72)
 

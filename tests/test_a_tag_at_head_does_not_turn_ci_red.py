@@ -306,3 +306,82 @@ def test_every_test_passes_somewhere_refuses_an_empty_report(tmp_path):
     with pytest.raises(tool.CannotTell) as raised:
         tool.read_report(empty)
     assert "holds no test cases" in str(raised.value)
+
+
+# --- 5. the sibling guard SCRUM-68 did not reach -----------------------------
+
+
+def test_the_release_checksum_guards_stand_down_as_a_PASS_not_a_skip():
+    """🔴 **Measured on the 0.7.0a10 bump, after SCRUM-68 landed.** Two tests
+    in `test_release_checksums` need `VERSION`'s tag to exist, and it cannot
+    during the bump-then-tag window — the tag goes on the commit that carries
+    the bumped VERSION, so between "bump merged" and "tag pushed" there is no
+    tag, and that window is a CI run.
+
+    They were `pytest.mark.skipif`, so they skipped in EVERY job of the matrix,
+    passed NOWHERE, and `every-test-passes-somewhere` turned the whole run red
+    with all four suites at 0 failed. The same failure SCRUM-68 fixed for the
+    history guards, on a guard it did not reach.
+
+    So: a stand-down that PASSES, having said what it did not check.
+    """
+    import ast
+    import pathlib as _pathlib
+
+    import test_release_checksums as module
+
+    # ⚠ By AST. The comment in that file RECORDS that it used to be a
+    # `pytest.mark.skipif`, so a source-text check trips on its own prose —
+    # which is the mistake two of this batch's earlier guards made.
+    tree = ast.parse(_pathlib.Path(module.__file__).read_text())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute) or node.attr != "skipif":
+            continue
+        raise AssertionError(
+            f"{module.__file__}:{node.lineno} uses skipif: it skips in every "
+            "job, so the test passes nowhere and every-test-passes-somewhere "
+            "turns the run red"
+        )
+    assert hasattr(module, "NOTHING_TO_CHECK_YET")
+    # The stand-down says what it did not check, and why it will run later.
+    assert "NOTHING for this to check" in module.NOTHING_TO_CHECK_YET
+    assert "runs for real the moment the tag is created" in module.NOTHING_TO_CHECK_YET
+
+
+def test_the_stand_down_still_RUNS_the_body_once_the_tag_exists(monkeypatch):
+    """The control, and the one that matters: this must not become a test that
+    never runs. With the tag present the body executes; without it, it does
+    not — and either way the test passes."""
+    import test_release_checksums as module
+
+    ran: list[str] = []
+
+    @module.needs_release_tag
+    def guarded(tmp_path=None):
+        ran.append("body")
+
+    monkeypatch.setattr(module, "_RELEASE_TAG_EXISTS", False)
+    guarded()
+    assert ran == [], "the body must not run without the tag"
+
+    monkeypatch.setattr(module, "_RELEASE_TAG_EXISTS", True)
+    guarded()
+    assert ran == ["body"], "the body MUST run once the tag exists"
+
+
+def test_the_stand_down_keeps_the_fixtures_the_test_asked_for():
+    """⚠ `functools.wraps` keeps `__wrapped__`, which is how pytest still sees
+    a wrapped test's fixtures. Without it `tmp_path` would not be supplied and
+    the test would fail for an unrelated reason — passing a guard while
+    breaking the thing it guards."""
+    import inspect
+
+    import test_release_checksums as module
+
+    for name in (
+        "test_it_hashes_the_tag_not_head_once_the_tag_exists",
+        "test_it_refuses_to_publish_a_digest_of_an_uncommitted_working_copy",
+    ):
+        fn = getattr(module, name)
+        assert hasattr(fn, "__wrapped__"), name
+        assert "tmp_path" in inspect.signature(fn).parameters, name
