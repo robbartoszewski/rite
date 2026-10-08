@@ -16,6 +16,7 @@ secrets reaching a remote. It is the claim the audience will test first.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import subprocess
 import sys
@@ -43,10 +44,26 @@ TOOL = REPO_ROOT / "tools" / "release_checksums.py"
 # release" (see `_this_release_tag`). Deriving the tag from VERSION fixed
 # being wrong after a bump and introduced being red before a tag.
 #
-# Skipped rather than xfailed, and CONDITIONALLY so: once the tag exists the
-# tests run and must pass, so this cannot decay into a test nobody runs. The
-# reason string names the window, because a skip whose cause is not on screen
-# is indistinguishable from one nobody remembers the point of.
+# Conditional, so once the tag exists the tests run and must pass and this
+# cannot decay into a test nobody runs. The reason names the window, because a
+# stand-down whose cause is not on screen is indistinguishable from one nobody
+# remembers the point of.
+#
+# 🔴 **A DECLARED PASS, not a `skipif` — measured on the 0.7.0a10 bump.** It
+# was `pytest.mark.skipif`, and these two then skipped in EVERY job of the
+# matrix, so they passed NOWHERE and
+# `tools/every_test_passes_somewhere.py` turned the whole run red with all
+# four suites at 0 failed. That is the exact failure SCRUM-68 fixed for the
+# tag-relative history guards, on a sibling guard it did not reach: a check
+# that skips everywhere reports the same green as one that passed, so the
+# tool refuses it — and the fix is a stand-down that PASSES, having said what
+# it did not check.
+#
+# ⚠ **It is also unavoidable without this.** The tag goes on the commit that
+# carries the bumped VERSION, so between "bump merged" and "tag pushed" there
+# is no tag for these to use, and that window is a CI run.
+#
+# `tests/released_tags.py` carries the same reasoning for the history guards.
 _RELEASE_TAG = "v" + (REPO_ROOT / "VERSION").read_text().strip()
 _RELEASE_TAG_EXISTS = (
     subprocess.run(
@@ -56,14 +73,30 @@ _RELEASE_TAG_EXISTS = (
     ).returncode
     == 0
 )
-needs_release_tag = pytest.mark.skipif(
-    not _RELEASE_TAG_EXISTS,
-    reason=(
-        f"VERSION says {_RELEASE_TAG[1:]} and no {_RELEASE_TAG} tag exists yet "
-        "— the bump-then-tag window. This runs again the moment the tag is "
-        "created, and must pass before the release is published."
-    ),
+NOTHING_TO_CHECK_YET = (
+    f"VERSION says {_RELEASE_TAG[1:]} and no {_RELEASE_TAG} tag exists yet — "
+    "the bump-then-tag window, so there is NOTHING for this to check. It runs "
+    "for real the moment the tag is created, and must pass before the release "
+    "is published."
 )
+
+
+def needs_release_tag(fn):
+    """Run `fn` only once `VERSION`'s tag exists; otherwise report and pass.
+
+    ⚠ `functools.wraps` keeps `__wrapped__`, which is how pytest still sees
+    the fixtures the wrapped test asks for (`tmp_path`). Without it the test
+    would be handed nothing and fail for an unrelated reason.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _RELEASE_TAG_EXISTS:
+            print(NOTHING_TO_CHECK_YET)
+            return None
+        return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _run(*args: str, repo: Path | None = None) -> subprocess.CompletedProcess[str]:
