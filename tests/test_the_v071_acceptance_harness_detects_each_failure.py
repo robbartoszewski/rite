@@ -512,10 +512,9 @@ def test_each_smoke_can_actually_pass_its_plan_review():
     FAIL that looks like the model's fault.
     """
     from rite_ai.config.managers import model_identity
-    from tools.e2e_v071.config import load as load_fleet
 
     for name in SMOKES:
-        fleet = load_fleet(name)
+        fleet = load(name)
         roles = {m["name"]: m for m in fleet.managers}
         author, approver = roles[fleet.planner], roles[fleet.owner]
         assert fleet.planner != fleet.owner, name

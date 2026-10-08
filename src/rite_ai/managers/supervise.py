@@ -3142,7 +3142,24 @@ def _board_brief(answer) -> str:
         "",
         f"rite read the board outside your sandbox as of "
         f"{as_of(getattr(answer, 'read_at', None))}: verdict `{verdict}`.",
-        "Ready to start: " + (", ".join(ready) if ready else "none") + ".",
+        # 🔴 **Each id in backticks, with the count said separately.** These
+        # are ticket IDS, and on a GitHub board every id is a bare integer — so
+        # a one-ticket cycle rendered as "Ready to start: 1." and read as "one
+        # ticket is ready and I was not told which".
+        #
+        # Measured 2026-10-08, a Claude Owner on a one-ticket board: it took
+        # the line as a count, found that nothing inside its sandbox could
+        # resolve an id (no board credentials there, by design), asked the User
+        # a blocking question, journalled the gap and parked — on a cycle that
+        # had in fact named exactly what to work. The count was never the
+        # problem; "1" meaning ticket 1 was.
+        "Ready to start: "
+        + (
+            f"{len(ready)} ticket(s) — " + ", ".join(f"`{i}`" for i in ready)
+            if ready
+            else "none"
+        )
+        + ".",
     ]
     for ticket, why in blocked:
         lines.append(f"Blocked: {ticket} — {why}")

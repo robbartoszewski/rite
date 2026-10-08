@@ -3535,11 +3535,42 @@ def credential_check(name: str) -> None:
     Examples:
       rite credential check jira_token
     """
+    from rite_ai.credentials.services import (
+        SERVICES,
+        canonical_service,
+        service_key,
+    )
     from rite_ai.credentials.store import resolve
 
-    r = resolve(name, _project_credentials())
-    click.echo(f"{name}: {r.describe()}")
-    if not r.found:
+    # 🔴 **SCRUM-82: a SERVICE name is accepted here too, because `set` takes
+    # one.** `rite credential set claude` stores the key `claude_token`, and
+    # this command resolved whatever it was handed as a KEY — so `rite
+    # credential check claude` reported "claude: not set" and advised running
+    # `rite credential set claude`, which the operator had just run. Measured
+    # 2026-10-08, with `list` and `check claude_token` both correctly saying
+    # set: three commands, two vocabularies, and the one that answers
+    # yes-or-no spoke the wrong one.
+    # ⚠ `service_key` and not `f.name`: a Field's `name` is the SUFFIX of the
+    # stored key (its own docstring says `<service>_<name>`), so claude's field
+    # is `token` and the key is `claude_token`. Spelling that join here instead
+    # would be a second definition of where a credential lives — and the first
+    # attempt at this fix did exactly that and reported "token: not set".
+    service = canonical_service(name)
+    keys = (
+        [service_key(service, f.name) for f in SERVICES[service].secrets]
+        if service
+        else [name]
+    )
+    missing = []
+    for key in keys:
+        found = resolve(key, _project_credentials())
+        click.echo(f"{key if key == name else f'{name} -> {key}'}: {found.describe()}")
+        if not found.found:
+            missing.append(key)
+    if missing:
+        # Advise against the FIRST missing key, and report under its name
+        # rather than the service's, so the remedy names something real.
+        name = missing[0]
         # A check that reports failure through exit code 0 is not a check —
         # every script guarding on it proceeds straight into the failure it
         # was written to prevent.
@@ -10690,7 +10721,37 @@ def _start_a_manager(
     # Manager must not clear or remove the credentials that Manager is using.
     from rite_ai.managers.github_access import hold_run
 
-    run_lock = hold_run(root, role.name)
+    try:
+        run_lock = hold_run(root, role.name)
+    except OSError as e:
+        # 🔴 **A sandbox cannot reach the run lock, and that is deliberate** —
+        # it lives "under no path any profile grants" (`hold_run`'s own
+        # docstring). A Manager that runs `rite start` from inside its own
+        # session therefore got a bare PermissionError traceback out of
+        # `os.chmod`. `hold_run` handles `BlockingIOError` (the lock is held)
+        # and could not handle this (the lock cannot be looked at), though both
+        # mean "not yours to take".
+        #
+        # ⚠ It is NOT reported as `None`, which is what a held lock returns:
+        # that path says "another `rite start` holds its run lock", and here
+        # nothing does. Telling a Manager its own role is already running, when
+        # the truth is that it asked from the wrong side of a boundary, sends
+        # it looking for a process that does not exist.
+        #
+        # Measured 2026-10-08: Manager 'lead' inside its seatbelt sandbox,
+        # PermissionError chmod '~/Library/Application Support/rite/managers/
+        # rite-mgr-…-lead'. It journalled the crash itself.
+        click.echo(
+            f"refusing to start Manager {role.name!r}: its run lock could not "
+            f"be reached ({type(e).__name__}). That directory sits outside "
+            "every sandbox grant on purpose, so this is what `rite start` "
+            "looks like from INSIDE a Manager's or Worker's sandbox — a "
+            "sandbox cannot start a Manager, and nothing was changed. If you "
+            "are a Manager orienting yourself, use `rite status`, `rite board "
+            "list` or `rite handover show` instead.",
+            err=True,
+        )
+        raise SystemExit(1) from e
     if run_lock is None:
         click.echo(
             f"refusing to start Manager {role.name!r}: another `rite start` "
