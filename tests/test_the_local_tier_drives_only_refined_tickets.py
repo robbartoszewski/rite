@@ -115,10 +115,15 @@ def test_every_assigned_ticket_is_asked_about(tmp_path):
 
 
 def test_it_asks_the_board_for_this_managers_tickets(tmp_path):
+    """By LABEL, which is what rite writes when it assigns a ticket to a
+    Manager. This test asserted `assignee` — the backend's own field, which
+    rite never sets to a Manager's name — and so pinned the defect in place
+    rather than catching it."""
     board = _Board({"KAN-1": REFINED})
     with _answer(board), _held():
         _local_tier_tickets(tmp_path, board, "lead")
-    assert getattr(board.listed[0], "assignee", None) == "lead"
+    assert getattr(board.listed[0], "label", None) == "lead"
+    assert getattr(board.listed[0], "assignee", None) is None
 
 
 # ── a board that cannot answer ───────────────────────────────────────────────

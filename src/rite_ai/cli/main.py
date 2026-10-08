@@ -10254,9 +10254,24 @@ def _local_worker_holds(root, manager: str, ticket: str) -> bool:
 def _local_tier_tickets(root, board, manager: str) -> tuple[list[str], str]:
     """(the REFINED tickets assigned to `manager`, or why they could not be read).
 
-    `TicketFilter(assignee=...)` is the board's own question, asked of the board
-    assignment already labels, so a ticket's owner lives in one place rather than
-    two. A `BackendError` is returned rather than raised: a board that cannot be
+    🔴 **`TicketFilter(assignee=...)` WAS HERE, and on a real board it matched
+    nothing.** A backend's `assignee` is the backend's OWN assignee field — a
+    GitHub login, a JIRA account — and nothing in rite's automated flow ever
+    puts a Manager's name there: `backend.assign` has one caller, the
+    operator-run `rite board assign`. What rite writes when it assigns a ticket
+    to a Manager is the LABEL (`rite board label`, "the assignment mechanism"),
+    and `coordination.distribution` reads it back the same way. Measured
+    2026-10-08 against a private GitHub board, one refined ticket labelled
+    `lead`: no filter -> ['1'], `label='lead'` -> ['1'], `assignee='lead'` ->
+    []. So the staged pipeline's driver found nothing every cycle and SCRUM-72's
+    headline mixed fleet was wired correctly and never ran.
+
+    ⚠ The suite could not see it: every test here used a board whose
+    `list_tickets` ignored `filters`, so `assignee=` and `label=` were
+    indistinguishable. `tests/test_the_local_tier_finds_the_tickets_rite_assigned.py`
+    answers the filter, and carries the control that keeps it honest.
+
+    A `BackendError` is returned rather than raised: a board that cannot be
     read is a cycle that advanced nothing, not a run that ends.
 
     ⚠ **GATED on REFINED (TR5), and this gate was missing when L-6 was first
@@ -10273,7 +10288,7 @@ def _local_tier_tickets(root, board, manager: str) -> tuple[list[str], str]:
     from rite_ai.refinement import status as refinement_status
     from rite_ai.tickets.interface import BackendError, TicketFilter
 
-    page = board.list_tickets(TicketFilter(assignee=manager))
+    page = board.list_tickets(TicketFilter(label=manager))
     if isinstance(page, BackendError):
         return [], page.message
     found = getattr(page, "tickets", page) or []
