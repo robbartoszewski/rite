@@ -130,7 +130,7 @@ def advance_ticket(
     *,
     state=None,
     author_plan=None,
-    approve=None,
+    ask_review=None,
     step=None,
     ask_delivery=None,
     gate=None,
@@ -292,8 +292,26 @@ def advance_ticket(
             "says what that stage was reached with",
         )
 
-    # 3. DECOMPOSED — have an INDEPENDENT plan-review holder approve it.
+    # 3. DECOMPOSED — ASK an independent plan-review holder to review it.
+    #
+    # 🔴 **The harness never approves (SCRUM-72 §3.3b).** This branch used to
+    # pick a reviewer and immediately call `approve_plan` in its name: no
+    # Manager was ever asked, nothing could ever write REJECTED, and RL-6's
+    # gate checked the rules about who COULD have reviewed against a review
+    # that did not happen. Now the reviewer is asked through its inbox — the
+    # channel every Manager reads whatever its engine — and the ticket waits
+    # here until a verdict is honoured (`plan_review.honour_verdicts`, at the cycle
+    # boundary). Approval is not something a pass can produce.
     if stage == st.DECOMPOSED:
+        # A verdict honoured since the last pass has already written the
+        # artifact (`plan_review.honour_verdicts` -> `approve_plan`). The stage follows
+        # it, as everywhere else: the artifact leads.
+        if plan.approval == dec.APPROVED:
+            return moved_to(
+                st.APPROVED,
+                why=f"approved by {plan.approved_by}",
+                note=f"by {plan.approved_by}",
+            )
         if plan.approval == dec.REJECTED:
             return moved_to(
                 st.REJECTED,
@@ -304,16 +322,23 @@ def advance_ticket(
         reviewer, why = independent_reviewer(root, plan)
         if not reviewer:
             return Advance(ticket, blocked=f"its plan cannot be approved: {why}")
-        if approve is None:
-            from rite_ai.local.approve import approve_plan
-
-            approve = approve_plan
-        result = approve(root, ticket, reviewer)
-        if getattr(result, "why", ""):
-            return Advance(ticket, blocked=f"not approved: {result.why}")
-        return moved_to(
-            st.APPROVED, why=f"approved by {reviewer}", note=f"by {reviewer}"
+        if ask_review is None:
+            from rite_ai.local.plan_review import ask as ask_review
+        outcome = ask_review(
+            root,
+            manager,
+            ticket,
+            reviewer,
+            plan.decomposed_by,
+            read.version,
+            now=now,
         )
+        if getattr(outcome, "sent", False):
+            # A request going out IS this pass's work: it is what the cycle
+            # engine reads as progress, the same way the free deterministic
+            # stages each take a pass.
+            return Advance(ticket, stage=st.DECOMPOSED, note=outcome.note)
+        return Advance(ticket, blocked=outcome.note)
 
     # 4. APPROVED or STEPPING with work left — run the next subtask.
     from rite_ai.local.step import next_subtask

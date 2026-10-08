@@ -25,7 +25,9 @@ from __future__ import annotations
 from rite_ai.config.models import CoordinationConfig
 
 
-def coordination_problems(config: CoordinationConfig) -> list[str]:
+def coordination_problems(
+    config: CoordinationConfig, *, local_workers: tuple[str, ...] = ()
+) -> list[str]:
     """Every reason this block cannot work, in the order a reader fixes them."""
     if not config.managers and not config.remote and not config.manager_roles:
         # Not configured at all, which is Phase 1 and entirely normal.
@@ -51,6 +53,7 @@ def coordination_problems(config: CoordinationConfig) -> list[str]:
             config.manager_roles,
             names=config.managers,
             one_root=shares_one_root(config.remote),
+            local_workers=local_workers,
         )
     )
 

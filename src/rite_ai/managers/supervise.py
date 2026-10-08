@@ -2607,6 +2607,16 @@ def _supervise(
             from rite_ai.managers import lifecycle, reconcile
 
             lifecycle.honour_requests(root, manager, say)
+            # SCRUM-72 §3.3b: this Manager's own plan-review verdicts, at the
+            # same boundary and for the same reason — the identity is the
+            # directory they were found in, which is this Manager's.
+            #
+            # ⚠ **Before the local tier below**, which is what ASKS: a verdict
+            # answered since the last cycle must be honoured before the pass
+            # that would otherwise re-ask for it.
+            from rite_ai.local.plan_review import honour_verdicts
+
+            honour_verdicts(root, manager, say)
             # SCRUM-64: throttled per cycle (`reconcile` enforces the
             # interval), after deliveries so a just-delivered sandbox reads
             # as gone, before Worker starts so a freed claim can be retaken.

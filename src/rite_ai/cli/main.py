@@ -1532,7 +1532,17 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
         # remote is set: half a `coordination:` block does not fail, it
         # silently never elects anybody.
         coordination = project.config.coordination
-        for problem in coordination_problems(coordination):
+        # SCRUM-72 §3.3b: a local Worker needs a Manager that can author its
+        # plan and one that can independently approve it, or it never gets a
+        # subtask. Doctor is where that is said, because it parses fine.
+        from rite_ai.config.managers import is_local_engine
+
+        local_workers = tuple(
+            w.name
+            for w in (getattr(project, "workers", []) or [])
+            if is_local_engine(getattr(w, "engine", ""))
+        )
+        for problem in coordination_problems(coordination, local_workers=local_workers):
             click.echo(problem)
             problems.append(problem)
         # Needs the machine, not just the config: the same committed
@@ -2310,6 +2320,115 @@ def local_approve(reviewer: str, ticket: str) -> None:
         click.echo(f"not approved: {result.why}", err=True)
         raise SystemExit(1)
     click.echo(result.note())
+
+
+@cli.group()
+def plan() -> None:
+    """Answer a plan review asked of you (SCRUM-72 §3.3b)."""
+
+
+def _reviewing_manager() -> str:
+    """The Manager running this command, or exit saying who may.
+
+    ⚠ **Never an argument.** Who is answering a plan review is the directory
+    the verdict lands in — this Manager's own — so taking a name here would be
+    taking a name anyone inside any boundary could type. The Owner's door is
+    `rite local approve <reviewer> <ticket>`, outside every boundary.
+    """
+    from rite_ai.managers import current_manager
+
+    manager = current_manager()
+    if not manager:
+        click.echo(
+            "this is not a Manager's session, so there is no Manager whose "
+            "verdict this would be. A plan review is answered by the Manager "
+            "it was asked of, from inside its own boundary; as the Owner, use "
+            "`rite local approve <reviewer> <ticket>`",
+            err=True,
+        )
+        raise SystemExit(1)
+    return manager
+
+
+@plan.command("approve")
+@click.argument("ticket")
+def plan_approve(ticket: str) -> None:
+    """Approve TICKET's decomposition, as the Manager running this.
+
+    \b
+    rite asked you because you hold plan-review, you did not author the plan,
+    and you run a different model from its author — so RL-6, DD-3.5 and RL-67
+    are satisfied by you. Your answer is written into your own directory and
+    honoured at rite's next cycle boundary; the harness does not approve plans
+    itself.
+
+    \b
+    Examples:
+      rite plan approve KAN-7
+    """
+    from rite_ai.local.plan_review import APPROVE, write_verdict
+
+    root = _require_project_root()
+    manager = _reviewing_manager()
+    write_verdict(root, manager, APPROVE, ticket)
+    click.echo(
+        f"{ticket}: your approval is recorded and rite will honour it at its "
+        "next cycle boundary. It is refused if the plan has changed since you "
+        "were asked about it, and then you are asked again"
+    )
+
+
+@plan.command("reject")
+@click.argument("ticket")
+@click.option(
+    "--reason-file",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="A file you wrote holding why the plan is wrong. REQUIRED: the plan "
+    "goes back to its author with these, and RL-10 counts a return nobody "
+    "can act on as a return all the same.",
+)
+def plan_reject(ticket: str, reason_file: str) -> None:
+    """Reject TICKET's decomposition, with reasons, as the Manager running this.
+
+    \b
+    ⚠ **From a FILE, never a shell argument** (SCRUM-69's rule): you write the
+    reasons with your own file-writing tool, so no heredoc, no `$()` and no
+    `>` ever reaches the engine, and nothing in the text has to survive a
+    shell.
+
+    \b
+    Examples:
+      rite plan reject KAN-7 --reason-file /tmp/why.md
+    """
+    from rite_ai.local.plan_review import MAX_REASON_CHARS, REJECT, write_verdict
+
+    root = _require_project_root()
+    manager = _reviewing_manager()
+    try:
+        reason = Path(reason_file).read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        click.echo(f"its reasons could not be read: {e}", err=True)
+        raise SystemExit(1) from None
+    if not reason.strip():
+        click.echo(
+            f"{reason_file} is empty, and a rejection carries its reasons: the "
+            "plan goes back to its author with them",
+            err=True,
+        )
+        raise SystemExit(1)
+    if len(reason) > MAX_REASON_CHARS:
+        click.echo(
+            f"its reasons are {len(reason)} characters and the limit is "
+            f"{MAX_REASON_CHARS}; say the decisive ones",
+            err=True,
+        )
+        raise SystemExit(1)
+    write_verdict(root, manager, REJECT, ticket, reason)
+    click.echo(
+        f"{ticket}: your rejection is recorded and rite will honour it at its "
+        "next cycle boundary. The plan goes back to its author with your reasons"
+    )
 
 
 @local.command("decompose")

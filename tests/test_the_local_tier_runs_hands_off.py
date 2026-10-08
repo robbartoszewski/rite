@@ -175,6 +175,22 @@ def _write_plan(root: Path, manager="planner", **kw):
     return plan
 
 
+def _review(root: Path, reviewer="lead", op=None, reason="") -> list[str]:
+    """The reviewing Manager answers, through the real path (SCRUM-72 §3.3b).
+
+    ⚠ **Nothing here stubs the approval.** The verdict is written into the
+    reviewer's OWN directory, exactly as `rite plan approve` writes it, and
+    honoured by the same function the supervisor calls. The reviewer's
+    identity is that directory — no name is passed in a payload anywhere.
+    """
+    from rite_ai.local import plan_review
+
+    plan_review.write_verdict(root, reviewer, op or plan_review.APPROVE, TICKET, reason)
+    said: list[str] = []
+    plan_review.honour_verdicts(root, reviewer, said.append)
+    return said
+
+
 def _define(root: Path, manager="planner") -> None:
     """One pass: the spec/definition stage. The first stage of every ticket,
     and it runs no model — it pins the record the Worker was started on."""
@@ -263,11 +279,25 @@ def test_it_drives_decompose_then_approve_then_step_with_no_commands(tmp_path):
     assert first.stage == DECOMPOSED, first
     assert _stored(root).approval == dec.PENDING, "a decomposer may not approve"
 
-    second = _advance(root, d)
-    assert second.stage == APPROVED, second
-    # Approved by the OTHER Manager, through the real approve_plan.
+    # 🔴 **The harness does not approve (§3.3b).** This pass ASKS the
+    # independent reviewer and the ticket waits; before SCRUM-72 it stamped
+    # APPROVED in that reviewer's name without ever asking it.
+    asked = _advance(root, d)
+    assert asked.stage == DECOMPOSED, asked
+    assert "asked of lead" in asked.note
+    assert _stored(root).approval == dec.PENDING
+    waiting = _advance(root, d)
+    assert not waiting.moved, "nothing moves until the reviewer answers"
+    assert "waiting for lead's verdict" in waiting.blocked
+
+    # lead answers, in its own directory, and rite honours it.
+    said = _review(root)
+    assert any("is approved by lead" in line for line in said), said
     assert _stored(root).approved_by == "lead"
     assert _stored(root).released
+
+    second = _advance(root, d)
+    assert second.stage == APPROVED, second
 
     third = _advance(root, d)
     assert third.stage == STEPPED, third
@@ -476,9 +506,13 @@ def test_an_unresolvable_cite_stops_approval(tmp_path):
             ),
         ),
     )
-    blocked = advance_ticket(root, "planner", TICKET)
-    assert not blocked.moved
-    assert "9.9" in blocked.blocked or "validation" in blocked.blocked
+    # The ask goes out; the refusal comes from `approve_plan` when the
+    # reviewer's verdict is honoured, which is where the plan is re-checked.
+    asked = advance_ticket(root, "planner", TICKET)
+    assert asked.stage == DECOMPOSED, asked
+    said = _review(root)
+    assert any("was NOT approved" in line for line in said), said
+    assert any("9.9" in line or "validation" in line for line in said), said
     assert _stored(root).approval == dec.PENDING
 
 
@@ -593,12 +627,17 @@ def test_the_run_leaves_a_log_naming_every_stage_once_in_order(tmp_path):
     """
     root = _project(tmp_path)
     d = _Driver(root)
-    seen = []
-    for _ in range(10):
+    answered = False
+    for _ in range(12):
         got = _advance(root, d)
         if not got.moved:
-            break
-        seen.append(got.stage)
+            if answered:
+                break
+            # The one point a Manager is involved, and it is a real answer
+            # from a real directory rather than a stamp.
+            _review(root)
+            answered = True
+            continue
 
     record = st.read(_state(root), TICKET).record
     assert [t.to for t in record.log] == [
@@ -679,6 +718,8 @@ def test_a_plan_returned_to_review_takes_the_stage_back_with_it(tmp_path):
     d = _Driver(root)
     _define(root)
     _advance(root, d)  # decomposed
+    _advance(root, d)  # the review is asked for
+    _review(root)  # lead answers
     _advance(root, d)  # approved
     _advance(root, d)  # stepping
     assert st.read(_state(root), TICKET).stage == STEPPED
