@@ -1,8 +1,35 @@
 # v0.7.1 — the dogfood fixes: scope, design, order
 
-**Status: PLAN, 2026-10-05, for Robert's review.** No code fix is on this
-branch; it carries this plan and the spec amendments that go with it. Base:
+**Status: IN BUILD, updated 2026-10-08.** Written as a plan on 2026-10-05
+("No code fix is on this branch"); the branch now carries the batch. Base:
 `main` at `0118273` (v0.7.0a9 at `29d02d4`).
+
+⚠ **Release-facing artifacts read 0.7.0, not 0.7.1.** Nothing is tagged: the
+RC re-cut and the merge come after a green PR, and the release itself waits on
+Robert seeing the end-to-end run (§4.2).
+
+**What is on the branch (2026-10-08), checked against the code rather than
+against this list:**
+
+| Ticket | On the branch | Checked by |
+|---|---|---|
+| SCRUM-59 lifecycle requests | ✅ | `rite request {start,deliver,stop,destroy,restart,status,gate}` exists; `supervise` honours them |
+| SCRUM-64 reconciliation | ✅ | `managers/reconcile.py`, plus its follow-up review's findings in two further commits |
+| SCRUM-69 relay transport | ✅ | `rite reply --from-file` |
+| SCRUM-72 local Workers, staged pipeline | ✅ **seven commits** | §3.3/§3.3a/§3.3b, and the table at the end of §3.3a |
+| SCRUM-73 readiness reads STATUS | ✅ | `tickets/statuses.py` |
+| SCRUM-21 threaded replies | ✅ | `rite reply --message` |
+| SCRUM-39 CI gate scans the PR's range | ✅ | `gate/ci_range.py` |
+| SCRUM-62 Worker cannot edit its own gate | ✅ | `publishing/gate_suppression.py` |
+| SCRUM-71 the journal records what matters | ✅ | `managers/recording.py` |
+| SCRUM-75 / SCRUM-76 | ✅ | host-git hardening; the gate's trusted rules |
+| SCRUM-70 held slot | ✅ | `reporting/held_slots.py` — was the one gap `recording.NOT_YET` named |
+| SCRUM-68 a tag at HEAD | ✅ | the tag-relative guards' declared "nothing to check" state |
+
+⚠ **An earlier revision of this line claimed SCRUM-69 and SCRUM-59 were NOT
+on the branch.** They are, and they arrived with SCRUM-64's own base. The
+claim was made from this document rather than from the code, which is the
+mistake this table exists to stop repeating.
 
 **Goal.** A dogfood where *every known issue is fixed* and a **real end-to-end
 run on a throwaway app** passes: a Claude Manager plus one Claude Worker and one
@@ -15,7 +42,7 @@ human running host commands.
 |---|---|---|
 | SCRUM-59 | Manager can't run Worker lifecycle or gate diagnosis from its sandbox | M |
 | SCRUM-64 | A restarted Manager doesn't reconcile with ground truth | M–L |
-| SCRUM-72 | A local/GPU Worker is never driven under a Claude Manager; deterministic staged pipeline (§3.3a) | XL |
+| SCRUM-72 | A local/GPU Worker is never driven under a Claude Manager; deterministic staged pipeline (§3.3a) | XL — **DONE 2026-10-08** |
 | SCRUM-69 (+45, 22) | Relay text depends on a shell heredoc (temp-file EPERM, doubled end line) | S–M |
 | SCRUM-21 | `rite reply`/`ask` can't thread under the Owner's message | S |
 | SCRUM-39 | CI publish-gate scans every fetched branch, not the PR's range | S |
@@ -268,50 +295,100 @@ scope/verify/cites, a delivery before recomposition verify, each refused
 without advancing the state). The end-to-end run's record must show every stage
 in order.
 
-**Mapped against the code (2026-10-05).**
+**Mapped against the code (2026-10-05), and what it is now (2026-10-08).**
 
 The Claude path enforces less than "the same rigor" assumes. Code enforces only
 refinement (`_deliver_ticket` refuses anything not REFINED) and the delivery
 gates. The spec session and the review rounds are CLAUDE.md instructions, and
 there is no Level 2. The local tier will enforce more than the Claude path does.
 
+⚠ **That asymmetry is now REAL and is a deliberate state, not an oversight.**
+The local tier enforces its stages in code; the Claude path still enforces
+refinement and the delivery gates and takes the rest on instruction. Nothing
+in v0.7.1 closes that, and closing it is not in scope — it is noted so the
+next reader does not infer from "the staged pipeline" that a Claude Worker is
+driven through one. It is not.
+
 | Stage | Local tier today |
 |---|---|
-| decompose → approve → step ordering | **Enforced.** Persisted plan state; APPROVED is written only by `approve_plan`; a step is refused without it in three places. |
-| RL-6 plan review | **Hollow.** It checks the different-model rule and stamps a reviewer, but no reviewer reads the plan and nothing writes REJECTED. v0.7.1 makes it a real review by a Manager of any engine (§3.3b). |
+| decompose → approve → step ordering | **Enforced, and now by a TABLE (72a).** One persisted `stage` per ticket, a transition table, one guard, an append-only log. 42 of the 56 ordered pairs are skips and every one is refused. Was: the stage was DERIVED from the plan's shape each pass, so anything producing a later stage's shape entered it. |
+| RL-6 plan review | **DONE (72b).** A real review: the harness asks the independent reviewer through its inbox and waits; the Manager answers `rite plan approve`/`reject` in its own boundary; `reject_plan` is new, and the reviewer's identity is the directory the verdict was found in. Was: a stamp — no reviewer ever read the plan and nothing could write REJECTED. |
 | RL-7 mechanical verify | **Enforced.** rite runs the verify; an empty commit is not acceptance. |
-| Spec/definition session | **Missing.** `advance_ticket` calls `author_plan` without `ticket_text`, so the decomposer sees "(no ticket text was supplied)". The refinement record (definition of done, verify, scope) gates the start but is never an input to the work. |
-| Level 2 approach | **Optional.** Fail-open by DD-2.4 and never persisted. The §2.4 boundary check compares the plan with itself, so it cannot catch drift. |
-| Step review | **Missing.** `STEP_REVIEW` has no executor; a FAILED subtask dead-ends the ticket. |
-| RL-8 recomposition verify | **Missing.** Delivery is requested once every subtask is accepted. |
-| RL-70 `cannot_fail` | **Open.** A bare `true`, `:` or `exit 0` passes. |
+| Spec/definition session | **DONE (72a + 72d).** `defined` is a persisted, un-skippable stage, and the record's own `render_for_worker` text is fed to the decomposer AND to each subtask's slice. The `record_id` is pinned once and the pipeline HALTS if the Worker is restarted on a different record. |
+| Level 2 approach | **DONE (72e; §5.5 decided yes).** Required and persisted in its own state key, and the boundary is checked against a digest `approve_plan` records AT APPROVAL TIME rather than against the plan just read. A missing approach refuses the step without failing the subtask (RL-47). |
+| Step review | **STILL MISSING, deliberately (§5.4 decided no).** `STEP_REVIEW` has no executor and a FAILED subtask still dead-ends its ticket. Its own ticket. |
+| RL-8 recomposition verify | **DONE (72f).** The ticket's own agreed verify (the refinement record's, never the plan's) runs on the composed work in the sandbox copy before a delivery is requested; a failure returns the plan to review. The guard is on the loop AND on a hand-written request file. "Nothing was agreed" is a declared state, not a pass. |
+| RL-70 `cannot_fail` | **DONE (72f).** A bare `true`, `:`, `exit 0` or `/bin/true` is refused; `pytest -k true` and `truecolor-check` are not. What static analysis still cannot catch (`bash -c true`) is now stated in that module rather than implied. |
 
-**To build:**
-- one persisted `stage` key with a transition table, a single guard and an
-  append-only transition log; `advance_ticket` dispatches from it (M);
-- DEFINED: a snapshot of the refinement record, fed to the decomposer and the
-  slice; halt if it goes STALE (M);
-- Level 2 mandatory and persisted, with the boundary check against an
-  approval-time hash (M; overrides DD-2.4, §5);
-- RL-8: the record's `verify` on the ticket branch before delivery is requested,
-  and a failure returns the plan to review (M);
-- a delivery guard on honouring the request file as well (S);
-- the RL-70 fix (S);
-- RL-6 as a real review by a Manager of any engine (§3.3b; M, reusing
-  SCRUM-59's request path and the inbox);
-- an executor for step review (M–L, only if §5.4 asks for it).
+**The seven commits (2026-10-08), for anyone reading the branch:**
+
+| | |
+|---|---|
+| 72a `7eb0112` | `local/stage.py` + `local/gates.py`: the stage machine |
+| 72b `cc5b789` | `local/plan_review.py` + `approve.reject_plan`: RL-6 as a real, engine-agnostic review |
+| 72c `7d90337` | `local/plan_state.py`: the plan state out of every Manager's grant |
+| 72d `d1af505` | the definition pinned, fed to the decomposer and the slice, STALE halts |
+| 72e `708c8cc` | `local/level2.py`: the approach required, persisted, approval-time boundary |
+| 72f `3f744ab` | `local/recompose.py`: RL-8, the delivery guards, RL-70, one bounded return budget |
+| 72g `a78d7c3` | the driver keys off local **Workers**, not `role.is_local` — the root cause |
+
+**To build — all done except the last, which §5.4 decided out:**
+- ✅ one persisted `stage` key with a transition table, a single guard and an
+  append-only transition log; `advance_ticket` dispatches from it (72a);
+- ✅ DEFINED: a snapshot of the refinement record, fed to the decomposer and
+  the slice; halt if it goes STALE (72d);
+- ✅ Level 2 mandatory and persisted, with the boundary check against an
+  approval-time hash (72e; overrides DD-2.4, §5.5 decided yes);
+- ✅ RL-8: the record's `verify` on the ticket branch before delivery is
+  requested, and a failure returns the plan to review (72f);
+- ✅ a delivery guard on honouring the request file as well (72f);
+- ✅ the RL-70 fix (72f);
+- ✅ RL-6 as a real review by a Manager of any engine (72b). ⚠ It reuses
+  SCRUM-59's request SHAPE but not its code: the verdict path is built on
+  `own_dir` directly, so it did not wait on 59;
+- ❌ an executor for step review — **§5.4 decided NO for v0.7.1.** Its own
+  ticket.
+
+**Also built, which this list did not name:**
+- the plan state moved out of every Manager's grant (72c). §3.3b asks for it
+  in prose; it is a piece of work, and it is the one that makes the rest of
+  the approval path mean anything — until it landed, a Manager could write
+  `"approval": "approved"` into `.rite/state.json` directly;
+- one bounded return budget shared by a rejection and a failed RL-8 (72f),
+  which is what made §3.3b's `REJECTED -> DECOMPOSED` safe to drive at all;
+- the watchdog's liveness rule for an idle local sandbox (72g), which §3.3
+  names and §4.1 had filed under SCRUM-64.
 
 **Guard tests, each asserting the stage did not advance and the persisted state
-is byte-unchanged:**
-1. a step before approval;
-2. a decompose with no DEFINED snapshot, or after the record went STALE;
-3. a subtask edited after approval;
-4. a step with no persisted approach;
-5. a delivery before RECOMPOSED, through both the loop and a hand-written
-   request file;
-6. a failed RL-8 verify returns the plan to PENDING, with no delivery request;
-7. an illegal stage write;
-8. end to end with stub agents: the log lists every stage once, in order.
+is byte-unchanged — all eight written, and where:**
+1. ✅ a step before approval — `test_a_stage_cannot_be_skipped`;
+2. ✅ a decompose with no DEFINED snapshot, or after the record went STALE —
+   the same file plus `test_the_local_tier_runs_hands_off`;
+3. ✅ a subtask edited after approval —
+   `test_level_2_is_a_required_persisted_stage`, parametrized over scope,
+   verify, cites and intent, with the harness's own bookkeeping fields as the
+   control;
+4. ✅ a step with no persisted approach — the same file;
+5. ✅ a delivery before RECOMPOSED, through both the loop and a hand-written
+   request file — `test_nothing_is_delivered_unverified`;
+6. ✅ a failed RL-8 verify returns the plan to PENDING, with no delivery
+   request — the same file, with "could not RUN is not a failure" beside it;
+7. ✅ an illegal stage write — `test_a_stage_cannot_be_skipped`, parametrized
+   over five shapes of edited record;
+8. ✅ end to end with stub agents: the log lists every stage once, in order —
+   `test_the_local_tier_runs_hands_off`.
+
+⚠ **And the byte-unchanged assertions have their own control.** The helper
+that reads the stored bytes pointed at `.rite/state.json` for one commit —
+after the plan state had moved — where it returns `b""` every time, so every
+one of those assertions compared nothing with nothing and passed. There is a
+test that the helper is not vacuous.
+
+**Mutation control, per commit, because a guard with no test is not a
+guard:** 115 mutations across the eight commits of 72 and the SCRUM-64
+follow-up, all dying. 23 survived a first run and each got the test it was
+missing; three of those survivors turned out to be bad MUTATIONS (no-ops),
+and one of those exposed a test asserting a property nothing could fail.
 
 ### 3.4 Relay transport (SCRUM-69, absorbing 45 and 22)
 The Manager writes its text to a file with its own file-writing tool (not the
@@ -359,8 +436,12 @@ limited to the Manager's own scratch directory.
    anything it is asked to do can.
 2. **SCRUM-59** (lifecycle requests). The executor everything below relies on.
 3. **SCRUM-64** (reconciliation). Builds on 59.
-4. **SCRUM-72** (local Workers). §5.1 is decided; needs §5.4 and §5.5. It also uses 59's
-   start/stop path, and 64's liveness rule for idle local sandboxes.
+4. **SCRUM-72** (local Workers). **DONE 2026-10-08**; §5.1, §5.4 and §5.5 are
+   all decided (see §5). ⚠ It did NOT wait on 59: 59's request path is what
+   §3.3b *reuses* for the verdict mechanism, and the verdict path was built on
+   `own_dir` directly (which SCRUM-75 had already landed), so 72 does not
+   depend on 59 being in. 64's liveness rule for idle local sandboxes landed
+   with 72g rather than with 64.
 5. **SCRUM-70, 71, 73.** These touch the same supervisor seams, so they land
    right after 64.
 6. **SCRUM-21, 39, 62.** Independent; can land at any point, in parallel
@@ -403,11 +484,31 @@ This gate is the last step before the RC is re-cut. It is not a test in CI.
 3. **Is SCRUM-22 closed** once SCRUM-69 lands? #179 and #189 fixed its
    reporting, and its transport residual is §3.4.
 4. **Must step review be a real reviewer turn** (§3.3a)? RL-6 is now a real
-   review by decision 1 (§3.3b). **Recommended: not in v0.7.1.** Step review
-   stays RL-7's mechanical verify, RL-8 is built, and a real step reviewer gets
-   its own ticket. Saying yes adds about 1–1.5 days to SCRUM-72.
+   review by decision 1 (§3.3b). **DECIDED 2026-10-08: NO, not in v0.7.1** —
+   the recommendation, taken. Step review stays RL-7's mechanical verify, RL-8
+   is built (SCRUM-72f), and a real step reviewer gets its own ticket. The
+   reasoning: "RL review" in SCRUM-72's definition of done is RL-6 (now a real
+   Manager review), RL-7 and RL-8; a third reviewer turn adds about 1–1.5 days
+   to the serial path for a gate nothing has yet shown is the weak one.
+   **`STEP_REVIEW` therefore still has no executor, and a FAILED subtask still
+   dead-ends its ticket** — stated here rather than left to be discovered,
+   because it is the one row of §3.3a's table that is still "Missing".
 5. **Override DD-2.4**, so Level 2 is a required, persisted stage rather than
-   fail-open? Recommended yes. "Cannot skip a stage" requires it.
+   fail-open? **DECIDED 2026-10-08: YES** — the recommendation, taken, and
+   built in SCRUM-72e. "Cannot skip a stage" is unachievable while the
+   approach is fail-open and never persisted, and the §2.4 boundary check
+   compared the plan with itself so it could not catch drift either.
+
+   ⚠ **Persisted in its OWN state key, NOT in the `Decomposition`.** §3.3a
+   says "persisted" and does not say where; `local/approach.py` says why the
+   plan is the wrong place — *"If it is written into `Decomposition`, the gates
+   start reading the executor's own words"* (RL-T26; the earlier prototype
+   measurably lost review depth that way). So both properties hold rather than
+   one being traded for the other.
+
+   ⚠ **A missing approach is still not a FAILED subtask** (RL-47): the step is
+   refused and reported, the subtask keeps its status, and no attempt is
+   burned. An endpoint that was down produced no approach, not a bad one.
 
 ## 6. Estimate (revised 2026-10-05)
 **The compressed 2–3 days (one PR) does not hold.** That figure assumed SCRUM-72
