@@ -50,15 +50,49 @@ class Fleet:
     def title(self) -> str:
         return self.scenario["title"]
 
+    def _holder(self, duty: str, preset: str) -> str:
+        """The Manager holding `duty`, by its explicit duties or by its preset.
+
+        ⚠ **By DUTY, not by preset name.** A fleet may give duties directly —
+        the smokes must, because the Worker's starter, owner and plan author
+        have to be one Manager and the shipped presets split `decompose` from
+        `board`/`route`. Resolving a role by the string "lead" stopped working
+        the moment a fleet said what it meant instead.
+        """
+        from rite_ai.config.managers import PRESETS, effective_duties
+
+        del effective_duties  # imported to assert it exists; duties are read raw
+        for m in self.managers:
+            declared = m.get("duties")
+            if declared:
+                if duty in [d.strip() for d in str(declared).split(",")]:
+                    return m["name"]
+            elif m.get("preset") and duty in PRESETS.get(m["preset"], ()):
+                return m["name"]
+        # Named rather than silent: a fleet with nobody holding a duty the
+        # checks read is a fleet that cannot pass, and the error should say so.
+        raise KeyError(f"no Manager in this fleet holds the {duty!r} duty")
+
     @property
     def owner(self) -> str:
-        """The Manager that holds `route` (the `lead` preset's), which is also the
-        plan reviewer in both scenarios."""
-        return next(m["name"] for m in self.managers if m.get("preset") == "lead")
+        """The Manager that holds `route`: it picks tickets up and asks for
+        Workers, so it is also the Worker's owner."""
+        return self._holder("route", "lead")
 
     @property
     def planner(self) -> str:
-        return next(m["name"] for m in self.managers if m.get("preset") == "planner")
+        """The Manager that AUTHORS plans — the `decompose` holder. Under the
+        shipped presets that is a separate `planner`; the smokes give it to the
+        Worker's owner, because only its own Manager's cycle drives its
+        ticket."""
+        return self._holder("decompose", "planner")
+
+    @property
+    def approver(self) -> str:
+        """The Manager that APPROVES a plan (`plan-review`). RL-6/DD-3.5 make
+        this the one that must differ from the author, which is why the author
+        being the Owner is not a problem."""
+        return self._holder("plan-review", "lead")
 
     @property
     def gpu_workers(self) -> tuple[str, ...]:

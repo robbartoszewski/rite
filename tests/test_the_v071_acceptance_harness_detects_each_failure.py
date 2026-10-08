@@ -516,8 +516,13 @@ def test_each_smoke_can_actually_pass_its_plan_review():
     for name in SMOKES:
         fleet = load(name)
         roles = {m["name"]: m for m in fleet.managers}
-        author, approver = roles[fleet.planner], roles[fleet.owner]
-        assert fleet.planner != fleet.owner, name
+        # ⚠ author vs APPROVER, not author vs owner. RL-6/DD-3.5 require the
+        # plan's approver to differ from its author; they say nothing about who
+        # owns the Worker. This compared the author with the OWNER, which only
+        # looked right while the shipped presets happened to put those two
+        # apart — and it is the assumption that cost three stalled runs.
+        author, approver = roles[fleet.planner], roles[fleet.approver]
+        assert fleet.planner != fleet.approver, name
         author_engine = str(author.get("engine") or "claude")
         approver_engine = str(approver.get("engine") or "claude")
         if author_engine.startswith("local:") and approver_engine.startswith("local:"):

@@ -97,7 +97,15 @@ def _patch_config(project: Path, fleet: Fleet, repo: str) -> None:
     path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
 
-ROLE_KEYS = ("preset", "engine", "endpoint", "model", "agent", "context_window")
+ROLE_KEYS = (
+    "preset",
+    "duties",
+    "engine",
+    "endpoint",
+    "model",
+    "agent",
+    "context_window",
+)
 
 
 def _align_roles(project: Path, fleet: Fleet, made_by_init: list[str]) -> None:
@@ -118,7 +126,14 @@ def _align_roles(project: Path, fleet: Fleet, made_by_init: list[str]) -> None:
 
 
 def _manager_args(m: dict) -> list[str]:
-    args = ["rite", "add", "manager", m["name"], "--preset", m["preset"]]
+    # ⚠ `duties` instead of `preset` when a fleet gives it. The shipped presets
+    # split `decompose` (planner) from `plan_review` (lead), and the smoke
+    # needs the DECOMPOSE holder to be the same Manager that starts and owns
+    # the Worker — see the fleet files for why. A preset cannot express that.
+    if m.get("duties"):
+        args = ["rite", "add", "manager", m["name"], "--duties", str(m["duties"])]
+    else:
+        args = ["rite", "add", "manager", m["name"], "--preset", m["preset"]]
     for key in ("engine", "endpoint", "model", "agent"):
         if m.get(key):
             args += [f"--{key}", str(m[key])]

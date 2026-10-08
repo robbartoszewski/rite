@@ -33,10 +33,28 @@ github:
   # No GitHub App: see the full scenarios. Delivery here does not open a PR.
 
 managers:
+  # 🔴 **Duties, not presets, and the split is load-bearing.** rite decides
+  # three things independently, and a smoke needs them to line up:
+  #   - the Manager that STARTS a Worker owns it ("'gpu1' was started for
+  #     Manager 'lead', not you; only the Manager that asked for a Worker may
+  #     stop, restart, destroy, inspect or gate it");
+  #   - only the DECOMPOSE duty holder can author a plan;
+  #   - the local tier only drives a ticket held by a local Worker OF THE
+  #     MANAGER whose cycle is running.
+  # So the Worker's starter, its owner and its plan author must be ONE Manager.
+  # The shipped presets put `decompose` on `planner` and `plan_review` on
+  # `lead`, and `lead` is the one with `board`/`route` that picks the ticket up
+  # and asks for the Worker — so out of the box no Manager could advance the
+  # ticket past `defined`. Measured twice: once with the Worker under `lead`
+  # ("'lead' does not hold the decompose duty"), once with it moved to
+  # `planner` (the ownership refusal above).
+  #
+  # RL-6/DD-3.5 still hold: the plan's approver is a DIFFERENT Manager, on a
+  # different engine. It simply is not the author.
   - name: lead                 # Claude; the Owner and the plan reviewer (RL-6)
-    preset: lead
+    duties: "decide,board,route,spec,decompose,integrate,execute"
   - name: planner              # writes the GPU Worker's plan (decompose)
-    preset: planner
+    duties: "plan-review,step-review"
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"
@@ -57,7 +75,7 @@ workers:
     # the Worker necessarily sits with one of them — and it has to sit with the
     # AUTHOR. `lead` can still start it: `broker.decide`'s `known_worker` asks
     # whether a Worker exists, not whose it is.
-    manager: planner
+    manager: lead
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"

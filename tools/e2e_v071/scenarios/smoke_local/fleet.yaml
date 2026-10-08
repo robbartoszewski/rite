@@ -33,25 +33,40 @@ github:
   # No GitHub App: see the full scenarios. Delivery here does not open a PR.
 
 managers:
-  - name: lead                 # local, and a DIFFERENT model from the planner:
-    preset: lead                #   RL-6 needs the approver to differ from the author.
-    engine: "local:large"       # 🔴 A qwen3:14b was tried here first, to avoid
-    endpoint: "http://localhost:11434"   # suspending the VM, and it could not drive
-    model: "qwen3-32b-ctx32k:latest"     # step 1: it wrote PLACEHOLDER refinement
-    agent: goose               # questions ("What is the scope of the task to be
-    context_window: 32768      # refined? [ticket: \"...\"]") for a ticket already
-                               # REFINED at setup, emitted a malformed command
-                               # (`ticket-id: No such file or directory`), and its
-                               # session ended with no progress. rite handled that
-                               # correctly — the supervisor declined to spend another
-                               # session that would repeat it — but the loop never
-                               # started. 29 GB resident at 32k, so the machine's
-                               # other VM comes down for this run.
-  - name: planner              # writes the GPU Worker's plan (decompose)
-    preset: planner
-    engine: "local:small"
+  # 🔴 **Duties, not presets, and the split is load-bearing.** rite decides
+  # three things independently, and a smoke needs them to line up:
+  #   - the Manager that STARTS a Worker owns it ("'gpu1' was started for
+  #     Manager 'lead', not you; only the Manager that asked for a Worker may
+  #     stop, restart, destroy, inspect or gate it");
+  #   - only the DECOMPOSE duty holder can author a plan;
+  #   - the local tier only drives a ticket held by a local Worker OF THE
+  #     MANAGER whose cycle is running.
+  # So the Worker's starter, its owner and its plan author must be ONE Manager.
+  # The shipped presets put `decompose` on `planner` and `plan_review` on
+  # `lead`, and `lead` is the one with `board`/`route` that picks the ticket up
+  # and asks for the Worker — so out of the box no Manager could advance the
+  # ticket past `defined`. Measured twice: once with the Worker under `lead`
+  # ("'lead' does not hold the decompose duty"), once with it moved to
+  # `planner` (the ownership refusal above).
+  #
+  # RL-6/DD-3.5 still hold: the plan's approver is a DIFFERENT Manager, on a
+  # different engine. It simply is not the author.
+  - name: lead
+    # The Owner: picks the ticket up, asks for the Worker, owns it, and authors
+    # its plan. Robert, 2026-10-08: assess the ~17 GB model in this seat — it
+    # is the step-1 bar a qwen3:14b failed (placeholder refinement questions,
+    # a malformed command, a session that made no progress).
+    duties: "decide,board,route,spec,decompose,integrate,execute"
+    engine: "local:large"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+  - name: planner              # writes the GPU Worker's plan (decompose)
+    duties: "plan-review,step-review"
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3:8b"
     agent: goose
     context_window: 32768
 
@@ -69,7 +84,7 @@ workers:
     # the Worker necessarily sits with one of them — and it has to sit with the
     # AUTHOR. `lead` can still start it: `broker.decide`'s `known_worker` asks
     # whether a Worker exists, not whose it is.
-    manager: planner
+    manager: lead
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"
