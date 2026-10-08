@@ -103,6 +103,15 @@ class VerifyResult:
 class Commit:
     sha: str = ""
     error: str = ""
+    note: str = ""
+    """Something a reader must know about HOW this commit was made, when the
+    commit itself succeeded. Carried onto the outcome's notes.
+
+    It exists for one thing (SCRUM-64 follow-up review): a local-tier commit
+    runs with the project's hooks DISABLED, so a `pre-commit` the project
+    relies on did not run — and that was silent. A difference between how
+    rite commits and how a person commits is a difference a reader has to be
+    told about, whether or not rite thinks it is the right difference."""
 
 
 class Agent(Protocol):
@@ -284,6 +293,8 @@ def run_subtask(
             return outcome
 
         outcome.commit = commit.sha
+        if commit.note:
+            outcome.notes.append(commit.note)
         outcome.status = ACCEPTED
         return outcome
     finally:

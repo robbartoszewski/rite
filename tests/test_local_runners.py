@@ -322,3 +322,93 @@ def test_the_runners_never_name_a_push_or_the_claude_cli(forbidden):
         if in_docstring:
             continue
         assert forbidden not in line, f"{forbidden!r} in an executable line: {line}"
+
+
+# ── the project's hooks do not run, and that is SAID (SCRUM-64 follow-up) ────
+
+
+def test_a_local_tier_commit_says_the_projects_hooks_did_not_run(tmp_path):
+    """🔴 The review's finding was the SILENCE, not the setting. A local-tier
+    commit runs with `core.hooksPath` at /dev/null, so a `pre-commit` the
+    project relies on does not run — and nothing said so, which makes a
+    local-tier commit quietly different from a person's.
+
+    ⚠ **The hooks stay off, deliberately.** A hook is code execution and
+    `core.hooksPath` is read from the repository the agent has just been
+    editing — for a Manager-tier placement that repository is the operator's
+    own project root. There is no safe copy of the project's hook to run, so
+    the answer is to say it rather than to run it.
+    """
+    import subprocess
+
+    from rite_ai.local.runners import HOOKS_DID_NOT_RUN, GitCommitter
+
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    for argv in (
+        ["init", "-q"],
+        ["config", "user.email", "t@example.com"],
+        ["config", "user.name", "T"],
+    ):
+        subprocess.run(["git", *argv], cwd=ws, check=True, capture_output=True)
+    (ws / "a.txt").write_text("one\n")
+
+    got = GitCommitter(scope=("a.txt",)).commit_to_branch(str(ws), "T-1", "msg")
+    assert got.error == "", got.error
+    assert got.sha
+    assert got.note == HOOKS_DID_NOT_RUN
+    # The sentence has to carry all three: what did not run, why rite will not
+    # run it, and what checks the work instead.
+    assert "pre-commit" in got.note
+    assert "will not execute a hook from this tree" in got.note
+    assert "RL-7" in got.note and "RL-8" in got.note
+
+
+def test_the_note_reaches_the_outcomes_notes(tmp_path):
+    """Wired, not only written — `test_no_dead_wiring`'s lesson. A note on a
+    `Commit` that nothing reads is the same silence in a different place."""
+    import inspect
+
+    from rite_ai.local import harness
+
+    src = inspect.getsource(harness.run_subtask)
+    assert "if commit.note:\n            outcome.notes.append(commit.note)" in src
+    # And AFTER the sha is taken, so a commit that failed reports its error
+    # rather than a note about how it was made.
+    assert src.index("outcome.commit = commit.sha") < src.index("if commit.note:")
+
+
+def test_a_planted_hook_in_the_workspace_is_not_run(tmp_path):
+    """The property the setting buys, measured rather than asserted. A hook in
+    the tree the agent edits must not execute — on the host, as the operator."""
+    import subprocess
+
+    from rite_ai.local.runners import GitCommitter
+
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    for argv in (
+        ["init", "-q"],
+        ["config", "user.email", "t@example.com"],
+        ["config", "user.name", "T"],
+    ):
+        subprocess.run(["git", *argv], cwd=ws, check=True, capture_output=True)
+    hooks = ws / ".githooks"
+    hooks.mkdir()
+    planted = tmp_path / "the-hook-ran"
+    (hooks / "pre-commit").write_text(f"#!/bin/sh\ntouch {planted}\nexit 0\n")
+    (hooks / "pre-commit").chmod(0o755)
+    # Named in the REPOSITORY's own config, which is what a Worker can write.
+    subprocess.run(
+        ["git", "config", "core.hooksPath", str(hooks)],
+        cwd=ws,
+        check=True,
+        capture_output=True,
+    )
+    (ws / "a.txt").write_text("one\n")
+
+    got = GitCommitter(scope=("a.txt",)).commit_to_branch(str(ws), "T-1", "msg")
+    assert got.sha, got.error
+    assert not planted.exists(), (
+        "a hook named by the repository the agent edits was EXECUTED on the host"
+    )

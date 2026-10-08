@@ -166,13 +166,30 @@ def _claims_of(root: Path, worker: str) -> list | None:
         return None
 
 
-def _sandbox_gone(root: Path, worker: str) -> bool | None:
+def _sandbox_gone(root: Path, worker: str, listing_of=None) -> bool | None:
     """True only when yoloAI says the sandbox is not there; None when it
     could not be asked; False for any live state, `stopped` included (a
-    stopped sandbox still holds its copy — it is not gone)."""
-    from rite_ai.sandbox import worker_sandbox_status
+    stopped sandbox still holds its copy — it is not gone).
 
-    status = worker_sandbox_status(worker, root)
+    ⚠ **`listing_of` is a CALLABLE returning ONE `yoloai ls --json` for the
+    whole pass** (the SCRUM-64 follow-up review). Without it this is one
+    subprocess with a 30-second timeout PER WORKER on the `rite start` path —
+    the very per-start cost the SCRUM-64 commit cites for keeping the
+    self-test reap off that path, added back by the thing that replaced it.
+
+    A callable and not a listing, so the call happens where the DECISION to
+    make it is: `facts_for` reaches here only for a Worker that holds a
+    claim, so a project whose Workers hold none — the common case — pays
+    nothing. Passing the listing itself would have made the caller fetch it
+    before knowing whether anyone needed it, which is what the first cut of
+    this did and what its test caught.
+    """
+    from rite_ai.sandbox import legacy_sandbox_name, list_sandboxes, sandbox_name
+
+    listing = (listing_of or list_sandboxes)()
+    status = listing.status_of(
+        {sandbox_name(worker, root), legacy_sandbox_name(worker)}
+    )
     if not status.known:
         return None
     return status.value == "not found"
@@ -239,7 +256,7 @@ def _landed(root: Path, worker: str, ticket: str) -> tuple[bool | None, str]:
     return False, ""
 
 
-def facts_for(root: Path, worker: str) -> Facts:
+def facts_for(root: Path, worker: str, listing_of=None) -> Facts:
     claims = _claims_of(root, worker)
     if claims is None:
         # No point asking yoloAI: `plan` cannot act without knowing the claim.
@@ -266,7 +283,7 @@ def facts_for(root: Path, worker: str) -> Facts:
         landed = False
     return Facts(
         has_claim=True,
-        sandbox_gone=_sandbox_gone(root, worker),
+        sandbox_gone=_sandbox_gone(root, worker, listing_of),
         work_landed=landed,
         detail="; ".join(d for _, d in verdicts if d),
     )
@@ -378,7 +395,24 @@ def reconcile(
     _LAST_AT[key] = now
 
     workers_of = workers_of or (lambda: _mine(root, manager, say))
-    facts_of = facts_of or (lambda worker: facts_for(root, worker))
+    if facts_of is None:
+        # ⚠ **ONE `yoloai ls --json` for the whole pass**, and taken only if
+        # some Worker turns out to hold a claim. Without this it was one
+        # subprocess with a 30-second timeout per Worker on the `rite start`
+        # path — the cost SCRUM-64's own commit message gives as its reason
+        # for keeping the self-test reap off that path.
+        listed: list = []
+
+        def listing_of():
+            if not listed:
+                from rite_ai.sandbox import list_sandboxes
+
+                listed.append(list_sandboxes())
+            return listed[0]
+
+        def facts_of(worker: str) -> Facts:
+            return facts_for(root, worker, listing_of)
+
     release = release or (lambda worker: _release(root, worker))
 
     from rite_ai.managers.telling import tell_manager

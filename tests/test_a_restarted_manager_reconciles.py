@@ -166,7 +166,6 @@ def test_the_named_scenario_with_real_claims_and_handback(tmp_path, monkeypatch)
     from rite_ai import handback
     from rite_ai.claims.ledger import ClaimsLedger
     from rite_ai.managers import lifecycle
-    from rite_ai.sandbox import SandboxStatus
 
     (tmp_path / ".rite").mkdir()
     ledger = ClaimsLedger(tmp_path / ".rite" / "claims.json")
@@ -180,10 +179,7 @@ def test_the_named_scenario_with_real_claims_and_handback(tmp_path, monkeypatch)
         tmp_path, "alpha", ticket="RT-1", branch="RT-1", summary="done", now=1.0
     )
     lifecycle.record_owner(tmp_path, "alpha", "lead")
-    monkeypatch.setattr(
-        "rite_ai.sandbox.worker_sandbox_status",
-        lambda w, r: SandboxStatus("not found"),
-    )
+    _listing(monkeypatch, {})
     said = []
     actions = reconcile.reconcile(
         tmp_path,
@@ -200,15 +196,11 @@ def test_the_named_scenario_with_real_claims_and_handback(tmp_path, monkeypatch)
 
 def test_a_live_sandbox_keeps_the_real_claim(tmp_path, monkeypatch):
     from rite_ai.claims.ledger import ClaimsLedger
-    from rite_ai.sandbox import SandboxStatus
 
     (tmp_path / ".rite").mkdir()
     ledger = ClaimsLedger(tmp_path / ".rite" / "claims.json")
     ledger.claim(["src/a.py"], "alpha", "RT-1")
-    monkeypatch.setattr(
-        "rite_ai.sandbox.worker_sandbox_status",
-        lambda w, r: SandboxStatus("active"),
-    )
+    _sandbox_named(monkeypatch, "alpha", "active", tmp_path)
     actions = reconcile.reconcile(
         tmp_path,
         "lead",
@@ -237,13 +229,16 @@ def test_a_live_sandbox_keeps_the_real_claim(tmp_path, monkeypatch):
 def test_sandbox_gone_is_only_not_found(
     tmp_path, monkeypatch, status_value, known, expected
 ):
-    from rite_ai.sandbox import SandboxStatus
 
-    monkeypatch.setattr(
-        "rite_ai.sandbox.worker_sandbox_status",
-        lambda w, r: SandboxStatus(status_value, known=known),
-    )
-    assert reconcile._sandbox_gone(tmp_path, "alpha") is expected
+    if known:
+        listing = (
+            _listing(monkeypatch, {})
+            if status_value == "not found"
+            else _sandbox_named(monkeypatch, "alpha", status_value, tmp_path)
+        )
+    else:
+        listing = _listing(monkeypatch, {}, known=False, unknown=status_value)
+    assert reconcile._sandbox_gone(tmp_path, "alpha", lambda: listing) is expected
 
 
 # --- a REPORT reaches the Manager's inbox, not only the terminal -------------------
@@ -340,13 +335,31 @@ def _claimed(tmp_path, worker="alpha", ticket="RT-1", paths=("src/a.py",)):
     return ledger
 
 
-def _sandbox_is_gone(monkeypatch):
-    from rite_ai.sandbox import SandboxStatus
+def _listing(monkeypatch, by_name=None, *, known=True, unknown=""):
+    """Patch the ONE `yoloai ls --json` a reconcile pass makes.
 
-    monkeypatch.setattr(
-        "rite_ai.sandbox.worker_sandbox_status",
-        lambda w, r: SandboxStatus("not found"),
-    )
+    ⚠ Patched here and not `worker_sandbox_status`: that is no longer on the
+    path (SCRUM-64 follow-up — it was one subprocess PER WORKER), and a test
+    patching it would silently let the real `yoloai ls` run. Measured when
+    this changed: the file went from under a second to 17.
+    """
+    from rite_ai.sandbox import SandboxListing
+
+    listing = SandboxListing(dict(by_name or {}), known=known, unknown=unknown)
+    monkeypatch.setattr("rite_ai.sandbox.list_sandboxes", lambda *a, **kw: listing)
+    return listing
+
+
+def _sandbox_is_gone(monkeypatch):
+    """No sandbox is listed at all, so every Worker's is `not found`."""
+    return _listing(monkeypatch, {})
+
+
+def _sandbox_named(monkeypatch, worker, status, root):
+    """`worker`'s sandbox listed with `status`."""
+    from rite_ai.sandbox import sandbox_name
+
+    return _listing(monkeypatch, {sandbox_name(worker, root): status})
 
 
 def _watch_a_pr(root, worker="alpha", ticket="RT-1", number=7):
@@ -658,14 +671,10 @@ def test_a_stopped_sandbox_still_holds_a_landed_ticket(tmp_path, monkeypatch):
     """Belt and braces with the exact match: landed work plus a sandbox that
     is merely stopped is still not a release."""
     from rite_ai.reporting import events
-    from rite_ai.sandbox import SandboxStatus
 
     ledger = _claimed(tmp_path, ticket="RT-1")
     events.record(tmp_path, "merged", worker="alpha", ticket="RT-1")
-    monkeypatch.setattr(
-        "rite_ai.sandbox.worker_sandbox_status",
-        lambda w, r: SandboxStatus("stopped"),
-    )
+    _sandbox_named(monkeypatch, "alpha", "stopped", tmp_path)
     assert _run_real(tmp_path)[0] == []
     assert ledger.claims_for("alpha") != []
 
@@ -676,8 +685,8 @@ def test_no_claim_asks_yoloai_nothing(tmp_path, monkeypatch):
     _project(tmp_path)
     asked = []
     monkeypatch.setattr(
-        "rite_ai.sandbox.worker_sandbox_status",
-        lambda w, r: asked.append(w) or None,
+        "rite_ai.sandbox.list_sandboxes",
+        lambda *a, **kw: asked.append(a) or None,
     )
     facts = reconcile.facts_for(tmp_path, "alpha")
     assert facts.has_claim is False and asked == []
@@ -1016,3 +1025,62 @@ def test_the_local_tier_passes_its_ticket_to_the_ledger(tmp_path):
 
     src = inspect.getsource(step._LedgerClaims.take)
     assert "self.ticket" in src, "the local tier's claims must name their ticket"
+
+
+def test_a_pass_makes_ONE_yoloai_call_however_many_workers_it_has(
+    tmp_path, monkeypatch
+):
+    """🔴 The SCRUM-64 follow-up review's cost finding. `_sandbox_gone` was
+    one `yoloai ls --json` — a subprocess with a 30-second timeout — PER
+    WORKER on the `rite start` path, which is the very per-start cost the
+    SCRUM-64 commit message gives as its reason for keeping the self-test
+    reap off that path. One listing answers for every Worker."""
+    from rite_ai.claims.ledger import ClaimsLedger
+    from rite_ai.sandbox import SandboxListing
+
+    (tmp_path / ".rite").mkdir(parents=True, exist_ok=True)
+    ledger = ClaimsLedger(tmp_path / ".rite" / "claims.json")
+    for n in range(6):
+        ledger.claim([f"src/{n}.py"], f"w{n}", f"RT-{n}")
+
+    calls = []
+
+    def listed(*a, **kw):
+        calls.append(a)
+        return SandboxListing({})  # nothing listed: every sandbox is gone
+
+    monkeypatch.setattr("rite_ai.sandbox.list_sandboxes", listed)
+    said = []
+    reconcile._LAST_AT.clear()
+    reconcile._SAID.clear()
+    actions = reconcile.reconcile(
+        tmp_path,
+        "lead",
+        said.append,
+        at_start=True,
+        now=1.0,
+        workers_of=lambda: [f"w{n}" for n in range(6)],
+    )
+    assert len(actions) == 6, actions  # all six reported, none released
+    assert len(calls) == 1, f"six Workers cost {len(calls)} yoloai calls"
+
+
+def test_a_pass_with_nothing_to_reconcile_makes_NO_yoloai_call(tmp_path, monkeypatch):
+    """Taken lazily: a project whose Workers hold no claims — the common case
+    — pays nothing at all."""
+    calls = []
+    monkeypatch.setattr(
+        "rite_ai.sandbox.list_sandboxes", lambda *a, **kw: calls.append(a) or None
+    )
+    (tmp_path / ".rite").mkdir(parents=True, exist_ok=True)
+    reconcile._LAST_AT.clear()
+    reconcile._SAID.clear()
+    reconcile.reconcile(
+        tmp_path,
+        "lead",
+        lambda s: None,
+        at_start=True,
+        now=1.0,
+        workers_of=lambda: ["w0", "w1"],
+    )
+    assert calls == []
