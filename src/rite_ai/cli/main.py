@@ -2454,7 +2454,13 @@ def local_approve(reviewer: str, ticket: str) -> None:
 
 @cli.group()
 def plan() -> None:
-    """Answer a plan review asked of you (SCRUM-72 §3.3b)."""
+    """Answer a plan review rite has asked you for.
+
+    \b
+    rite asks the Manager that can independently review a plan, and waits.
+    Nothing moves the ticket until you answer: the harness does not approve
+    plans itself.
+    """
 
 
 def _reviewing_manager() -> str:

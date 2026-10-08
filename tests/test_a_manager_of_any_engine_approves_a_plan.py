@@ -754,8 +754,9 @@ def test_doctor_refuses_a_local_worker_no_manager_can_plan_for(
 
 
 def test_a_fleet_that_can_plan_and_review_is_not_reported(tmp_path):
-    """The control: the §4.2 fleet shape — a local `planner` that authors and
-    a Claude `lead` that approves — is reported about nothing."""
+    """The control: the acceptance fleet's shape (V071_DOGFOOD_FIXES.md) — a
+    local `planner` that authors and a Claude `lead` that approves — is
+    reported about nothing."""
     from rite_ai.config.managers import configuration_problems
     from rite_ai.config.parse import parse_config
 

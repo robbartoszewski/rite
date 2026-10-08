@@ -186,7 +186,13 @@ def test_rite_status_says_the_slots_it_holds(tmp_path, monkeypatch):
     text = format_status(collect_status(root, board=False))
     assert "no active claims" in text, "the claims line is unchanged"
     assert "slots held (2):" in text
-    assert "alpha: its sandbox is idle and it holds NO claims" in text
+    assert "held by alpha: its sandbox is idle and it holds NO claims" in text
+    # ⚠ **Not the bare `  alpha:` the workers section uses.** Two lines about
+    # one Worker in the same shape is ambiguous output, and the full suite
+    # caught it: nine cases in
+    # `test_every_view_says_what_the_sandbox_said` select the workers line by
+    # `startswith("  alpha:")` and got two.
+    assert "\n  alpha: its sandbox" not in text
     assert "counts against sandbox.max_concurrent_workers" in text
 
 

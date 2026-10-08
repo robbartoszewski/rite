@@ -704,7 +704,16 @@ def format_status(status: ProjectStatus) -> str:
     if status.held_slots:
         lines.append(f"\nslots held ({len(status.held_slots)}):")
         for slot in status.held_slots:
-            lines.append(f"  {slot.line()}")
+            # ⚠ **`held by `, not the bare `  <worker>:` the workers section
+            # above uses.** The first version printed `  alpha: …` here, which
+            # is byte-for-byte the shape that section prints — so one `rite
+            # status` had two lines about alpha in the same form, and
+            # `test_every_view_says_what_the_sandbox_said` (nine cases) broke
+            # on `[line] = [x for x in out if x.startswith("  alpha:")]`.
+            # That selector was not too loose; the output was ambiguous, which
+            # is exactly what a file named "every view says what the sandbox
+            # said" exists to catch.
+            lines.append(f"  held by {slot.line()}")
     elif status.held_slots_unknown:
         # Not silence: a capacity question rite could not answer is not the
         # same as capacity being free.

@@ -7,9 +7,9 @@ the local-tier driver as:
 
 so the staged pipeline ran only under a LOCAL Manager. In the headline mixed
 fleet — a Claude `lead` with one Claude Worker and one GPU Worker, which is
-§4.2's acceptance fleet — no Manager drove the GPU Worker. It was started, it
-claimed its paths, and it sat there: "A local/GPU Worker is never driven under
-a Claude Manager."
+the acceptance fleet in V071_DOGFOOD_FIXES.md — no Manager drove the GPU
+Worker. It was started, it claimed its paths, and it sat there: "A local/GPU
+Worker is never driven under a Claude Manager."
 
 **The filter moves to the Worker.** The driver is always wired, and
 `_local_tier_tickets` keeps only the tickets a LOCAL Worker of this Manager is

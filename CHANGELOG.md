@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### A GPU Worker is driven under any Manager, through enforced stages (SCRUM-72)
+
+A Worker running a local model was never given any work when its Manager ran
+Claude: it started, took its paths and sat there. It is driven now, whatever
+its Manager runs — and driven through stages rite itself enforces rather than
+asks for. A ticket goes spec session, plan, review, approach, work,
+recomposition check, delivery; each one is recorded, none can be skipped or
+reordered, and the definition of done you agreed is what the plan is written
+against and what the finished work is checked against.
+
+Plan review is a real review now. rite asks the Manager that can judge the
+plan independently and waits for it: **`rite plan approve <ticket>`** and
+**`rite plan reject <ticket> --reason-file <path>`** are how that Manager
+answers, and a rejection sends the plan back to be written again with your
+reasons. Before this, rite stamped its own approval and no one ever read the
+plan. Nothing is delivered until the composed work passes the ticket's own
+agreed check — each piece passing its own check is not the ticket working.
+
+A Worker running a local model no longer shows as stalled while it waits: it
+does not send heartbeats by design, and `rite status` says so instead of
+reporting it stuck.
+
+### `rite release` says when the slot is still taken (SCRUM-70)
+
+Releasing a Worker's claims freed its paths and left its slot occupied, so the
+next Worker still could not start — and `rite status` said "no active claims"
+the whole time, which is the most reassuring thing it can say about the state
+that stops all work. Both now say which Workers are still holding a slot, and
+what frees one.
+
 ### A restarted Manager recovers by itself (SCRUM-64)
 
 When a Manager was stopped and restarted it used to resume whatever it last
