@@ -33,41 +33,28 @@ github:
   # No GitHub App: see the full scenarios. Delivery here does not open a PR.
 
 managers:
-  # 🔴 **The author is the 17 GB model because the smaller ones cannot drive
-  # step 1.** Measured 2026-10-08, one session each and consistent:
-  #   qwen3.8 (17 GB)  claimed the ticket, requested the Worker, owned it, and
-  #                    (once SCRUM-88 stopped discarding it) emitted a VALID
-  #                    two-subtask plan.
-  #   qwen3:14b        wrote placeholder refinement questions for an already
-  #                    refined ticket, then a malformed command; no progress.
-  #   qwen3:8b         "session 1 made no progress (no claim, route, Worker
-  #                    request or delivery)"; rite parked it.
-  # So a faster author is not available, and a full delivery is a multi-hour
-  # run. The approver is the SMALLEST different model (RL-6), to make each
-  # author/approver hand-off reload as little as possible.
-  # 🔴 **Duties, not presets, and the split is load-bearing.** rite decides
-  # three things independently, and a smoke needs them to line up:
-  #   - the Manager that STARTS a Worker owns it ("'gpu1' was started for
-  #     Manager 'lead', not you; only the Manager that asked for a Worker may
-  #     stop, restart, destroy, inspect or gate it");
-  #   - only the DECOMPOSE duty holder can author a plan;
-  #   - the local tier only drives a ticket held by a local Worker OF THE
-  #     MANAGER whose cycle is running.
-  # So the Worker's starter, its owner and its plan author must be ONE Manager.
-  # The shipped presets put `decompose` on `planner` and `plan_review` on
-  # `lead`, and `lead` is the one with `board`/`route` that picks the ticket up
-  # and asks for the Worker — so out of the box no Manager could advance the
-  # ticket past `defined`. Measured twice: once with the Worker under `lead`
-  # ("'lead' does not hold the decompose duty"), once with it moved to
-  # `planner` (the ownership refusal above).
+  # 🔴 **The reliable split, measured (SCRUM-83 refined + SCRUM-91).**
+  # `lead` (Claude) is the Owner: it claims the ticket, asks for the GPU
+  # Worker, OWNS it and drives its ticket through the staged pipeline — and it
+  # approves the plan. Step 1 is a reasoning bar that a Claude Manager clears
+  # in minutes and a local one clears only sometimes (17 min once, still
+  # wandering at 43 another time; 14b and 8b not at all), so it belongs here.
+  # `planner` (local 17 GB) holds `decompose` ONLY: it authors the plan, which
+  # is the job the local tier exists for and the one a local model did well —
+  # it produced a valid two-subtask plan with verifies it had checked fail.
+  # The Worker implements.
   #
-  # RL-6/DD-3.5 still hold: the plan's approver is a DIFFERENT Manager, on a
-  # different engine. It simply is not the author.
-  - name: lead                 # Claude; the Owner and the plan reviewer (RL-6)
-    duties: "plan-review,integrate"
-  - name: planner              # writes the GPU Worker's plan (decompose)
-    duties: "decide,board,route,spec,decompose,execute"
-    engine: "local:small"
+  # RL-6/DD-3.5 hold: the author (planner, local) and the approver (lead,
+  # Claude) are different Managers on different engines. The approval is
+  # engine-agnostic, which is what SCRUM-72 exists to prove.
+  #
+  # ⚠ `lead` holds no `decompose`, so it DELEGATES authoring to `planner` —
+  # which is exactly the rule SCRUM-83 was refined to allow.
+  - name: lead
+    duties: "decide,board,route,spec,integrate,plan-review"
+  - name: planner
+    duties: "decompose"
+    engine: "local:large"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"
     agent: goose
@@ -87,7 +74,7 @@ workers:
     # the Worker necessarily sits with one of them — and it has to sit with the
     # AUTHOR. `lead` can still start it: `broker.decide`'s `known_worker` asks
     # whether a Worker exists, not whose it is.
-    manager: planner
+    manager: lead
     engine: "local:small"
     endpoint: "http://localhost:11434"
     model: "qwen3.8:latest"
