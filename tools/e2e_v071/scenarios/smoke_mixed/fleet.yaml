@@ -61,19 +61,17 @@ managers:
     context_window: 32768
 
 workers:
+  # 🔴 **The release-gate composition (Robert, 2026-10-09): a Claude Manager,
+  # a Claude Worker and a GPU Worker.** Both Workers report to `lead`, which
+  # owns and drives them; `planner` only authors the GPU ticket's plan.
+  #
+  # This also exercises SCRUM-72 in BOTH directions, which is what it was for:
+  # the local tier drives `gpu1`'s ticket and never touches `alpha`'s, because
+  # `_local_tier_tickets` filters on the Worker's `needs_authored_plan`
+  # capability rather than on the Manager's engine.
+  - name: alpha
+    manager: lead
   - name: gpu1
-    # 🔴 **Reports to `planner`, not `lead`, and that is load-bearing.** The
-    # local tier's driver only sees a ticket held by a local Worker of the
-    # Manager whose cycle is running (`_local_worker_holds`), and only the
-    # DECOMPOSE duty holder can author a plan. With the Worker under `lead`:
-    # lead saw the ticket and could not decompose it ("'lead' does not hold
-    # the decompose duty — holders: planner"), planner held the duty and never
-    # saw the ticket. No Manager could advance it past `defined`.
-    #
-    # RL-6 forces two Managers (author != approver, on different models), so
-    # the Worker necessarily sits with one of them — and it has to sit with the
-    # AUTHOR. `lead` can still start it: `broker.decide`'s `known_worker` asks
-    # whether a Worker exists, not whose it is.
     manager: lead
     engine: "local:small"
     endpoint: "http://localhost:11434"

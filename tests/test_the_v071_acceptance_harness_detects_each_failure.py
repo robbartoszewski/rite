@@ -487,8 +487,17 @@ def test_the_smoke_scenarios_are_one_gpu_ticket_and_no_inductions():
         fleet = load(name)
         assert fleet.smoke, name
         assert set(fleet.check_names) == set(smoke.CHECK_NAMES), name
+        # EXACTLY ONE staged-pipeline ticket — that is the "minimal" that must
+        # not drift. The ticket COUNT is not the invariant: the release-gate
+        # composition has a second ticket for the Claude Worker, which is the
+        # point of it (SCRUM-72 in both directions), and asserting 1 here made
+        # adding that Worker look like a regression.
         assert len(fleet.pipeline_keys) == 1, name
-        assert len(fleet.tickets) == 1, name
+        assert fleet.tickets, name
+        # every ticket names a Worker this fleet actually declares
+        declared = {w["name"] for w in fleet.workers}
+        for ticket in fleet.tickets:
+            assert ticket.for_worker in declared, f"{name}: {ticket.key}"
         # No induced failure, so no kill and no stale-claim restart.
         assert fleet.kill_worker == "", name
         assert fleet.decoy_key is None, name
