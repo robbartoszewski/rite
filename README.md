@@ -1,21 +1,42 @@
 # rite
 
-> **Set it running in the evening, review it in the morning — the rite way.**
+> **Tickets in. Draft pull requests out.**
 
-`rite` runs many Claude Code sessions against one codebase without them
-colliding: each works as a named *worker* and claims the files it is about to
-touch, and the second worker to claim the same ones is refused.
+`rite` takes a ticket off your board, plans it, has a **different model than
+wrote the plan** approve it before a line is written, builds it, checks the
+finished work against the ticket's own definition of done, and opens the pull
+request. You start a run and it works the board for the budget you gave it,
+asking you questions in Slack rather than in a terminal you have to sit and
+watch.
 
-The point is where your hours go. Once you have it set up, the work that
-needs you concentrates into a couple of hours — settling requirements, making
-the calls, reviewing what came back — while the sessions keep going in
-between. rite is both halves of that: the CLI that hands out the claims, and
-the `CLAUDE.md`, agents and commands it installs, which are what tell your
-sessions to claim and who to ask.
+It runs on your hardware, on your engine: Claude for the judgement, a GPU
+Worker on your own box for the implementation, or both in one fleet.
 
+**The point is where your hours go.** The work that needs you concentrates
+into settling requirements, making the calls and reading what came back, while
+the fleet keeps moving in between.
+
+## What it does that a prompt cannot
+
+- **A staged pipeline rite's own code drives.** Definition, plan, plan review,
+  approach, work, recomposition verify, delivery. Each move goes through one
+  guard, and a stage cannot be entered until the artifact it claims already
+  exists — so a model cannot skip a stage or reorder two. A `CLAUDE.md` that
+  says "review before you open a PR" is a request; this is not.
+- **Plan review by an independent model.** `rite plan approve <ticket>` is
+  honoured only from a Manager that holds the plan-review duty, is **not** the
+  plan's author, and runs a **different model** from the author — and it fails
+  closed when rite cannot place the author. A rejection goes back to the
+  planner with your reasons, and that loop is bounded.
+- **Nothing is delivered on a piece-by-piece pass.** The composed work has to
+  pass the ticket's own agreed check; each subtask passing its own is not the
+  ticket working.
 - **Claim exclusion is measured, not asserted.** A four-minute soak of six
-  concurrent workers: 132,321 grants, zero lost and zero held twice. The same
+  concurrent Workers: 132,321 grants, zero lost and zero held twice. The same
   harness against the previous lock produced 309 lost updates in 10 seconds.
+- **Your board and Slack are the interface.** JIRA or GitHub Issues for the
+  queue; a Manager's questions and your replies go through Slack if you wire
+  it up.
 - **A secret scan runs on pre-push and in CI**, over full history. Suppressing
   a finding takes a written reason — there is no global off switch.
 - **Workers can run sandboxed, and on macOS `rite init` turns the setting on
@@ -27,11 +48,36 @@ sessions to claim and who to ask.
   its engine's own login, and nothing else; `rite add worker --scoped-token`
   gives one its own GitHub token in place of the shared one. How well one
   sandbox's process environment is kept from other processes running as you
-  depends on the sandbox provider, and is being addressed upstream. On other platforms `rite init` leaves sandboxing off. On
-  Docker, a dogfood run found file locking does not lock, so two workers can
-  be granted the same path: run one worker there.
+  depends on the sandbox provider, and is being addressed upstream. On other
+  platforms `rite init` leaves sandboxing off. On Docker, a dogfood run found
+  file locking does not lock, so two workers can be granted the same path: run
+  one worker there.
 - **101 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
   answers and the reasoning.
+
+## The fleet this release is built for
+
+**A Claude Manager, a Claude Worker, and a GPU Worker.** Claude does the
+orchestration and the reviewing; the Workers implement, with the token-heavy
+work pushed onto hardware you already own. That is the shape that is supported
+and the one to start from.
+
+```bash
+rite add worker alpha                        # a Claude Worker
+rite add worker gpu1 --engine local:small --agent goose \
+  --endpoint http://localhost:11434 --model qwen3:8b \
+  --context-window 32768                     # a GPU Worker on your own box
+```
+
+A local Worker must declare its `--context-window` (at least 32,768). Ollama
+serves every model at 4,096 tokens by default, which is smaller than the
+agent's own system prompt, so rite refuses a local Worker that does not say,
+and pins the window it was given into the model on the server.
+
+⚠ **An all-local fleet runs, but it is slow** — hours per ticket on a single
+32 GB GPU, including the first claim and kickoff. It is a documented
+limitation, not the recommended setup, and a local loop that closes on its own
+is the direction rather than something this release ships.
 
 **If you run one session at a time you do not need this.** Several machines
 can share one project's claims (since 0.4.0) — they elect an Owner and the
@@ -43,10 +89,9 @@ machine, one project root, in this release; across machines is planned for
 
 ## How work moves through rite
 
-Spec, plan, tickets, implementation. The last step — a worker taking a ticket
-to a merged PR — is built. In a sandbox, its parts have each been run, but not
-yet one worker taking a ticket all the way through. The first three are wholly or partly
-yours; each step's heading line says which.
+Spec, plan, tickets, implementation. The first two are wholly or partly yours;
+from the ticket onward rite drives it through stages it will not let a model
+skip. Each step's heading line says which is which.
 
 Commands starting with `/` are typed into a Claude Code session; `rite …`
 commands run in a terminal at your project root. Two kinds of session appear
@@ -88,11 +133,18 @@ whether the spec still describes what you built. A sandboxed worker cannot read
 files at the project root, so it sees a spec only when the spec lives inside a
 module; keep one it should read in a module's repository.
 
-**2. Plan** — yours; rite has no planning step
+**2. Plan** — the order is yours; the per-ticket plan is rite's
 
 You decide what gets built first and what can run side by side, usually by
 talking it through in your Dispatch session. The tickets you write next, and
-what blocks what between them, are the plan as rite sees it.
+what blocks what between them, are the release plan as rite sees it.
+
+Once a ticket starts, the plan for *that ticket* is rite's own stage, not
+yours: a Manager holding `decompose` authors it, and it has to be approved by
+a Manager that did not write it and runs a different model before any work
+begins. You can drive those by hand — `rite local decompose`, `rite plan
+approve <ticket>`, `rite plan reject <ticket> --reason-file <path>` — and a
+run drives them for you, one stage per cycle.
 
 **3. Tickets** — rite helps write one at a time; putting a whole plan on the
 board is yours
@@ -110,13 +162,21 @@ rite board create "Export invoices as CSV" --description "<what /refine drafted>
 rite board link ABC-19 ABC-12      # JIRA: ABC-19 is blocked by ABC-12
 ```
 
-**4. Implementation** — built
+**4. Implementation** — built, and driven through stages
 
-Give each worker its own clones:
+Give each worker its own clones. A Claude Worker needs no flags; a GPU Worker
+declares its engine:
 
 ```bash
 rite add worker alpha            # creates workers/alpha/
+rite add worker gpu1 --engine local:small --agent goose \
+  --endpoint http://localhost:11434 --model qwen3:8b --context-window 32768
 ```
+
+Whatever a Worker runs, the ticket moves through the same recorded stages —
+definition, plan, plan review, approach, work, recomposition verify,
+delivery — and rite's own code refuses to let one be skipped or reordered.
+`rite status` shows where each ticket is.
 
 Open a worker session in `workers/alpha/` and tell it which ticket to work —
 "work ABC-12". Its `CLAUDE.md` walks it through the rest: `rite prepare` to
@@ -221,17 +281,35 @@ claim failed: path contention
 
 ```bash
 cd your-project
-rite init
-rite add worker alpha        # a checkout of its own, under workers/alpha/
+rite init                    # questionnaire; writes .rite/, CLAUDE.md, .claude/
+rite doctor                  # tools and credentials — non-zero on problems
 
-# What a worker session runs, in order, over ticket ABC-12 (step 4 above)
-rite prepare --worker alpha                            # sync that checkout
+# The fleet this release is built for
+rite add worker alpha        # a Claude Worker, its own checkout under workers/
+rite add worker gpu1 --engine local:small --agent goose \
+  --endpoint http://localhost:11434 --model qwen3:8b --context-window 32768
+
+# Give a Manager a budget and let it work the board
+rite start lead --sessions 3 --minutes 90
+
+rite status                  # where every ticket and claim is
+```
+
+Plan review is the one stage that waits for a person or another Manager:
+
+```bash
+rite plan approve ABC-12
+rite plan reject  ABC-12 --reason-file reasons.md
+```
+
+What a Worker session runs itself, over ticket ABC-12 — useful to know when
+you are driving one by hand:
+
+```bash
+rite prepare --worker alpha                             # sync that checkout
 rite claim backend/src --worker alpha --ticket ABC-12   # before touching anything
 rite heartbeat --worker alpha --ticket ABC-12           # "still alive"
-rite release --worker alpha                            # after the PR merges
-
-rite status                  # what is happening now
-rite doctor                  # tools and credentials — non-zero on problems
+rite release --worker alpha                             # after the PR merges
 ```
 
 `rite status` and `rite doctor` change nothing you would notice, with three
@@ -270,8 +348,13 @@ sign commits, rite turns signing off for the Manager's commits and says so.
 A global `core.hooksPath` is not bypassed: the Manager's commits and pushes
 fail on its hooks until you opt in, and `rite doctor` gives the one-line fix and what it costs.
 
-A Claude Owner with a local secondary, the setup this release is for (one
-machine, one project root):
+**The supported shape for this release is a Claude Manager with a Claude
+Worker and a GPU Worker** — the local model does the implementing, not the
+orchestrating. See [the fleet this release is built for](#the-fleet-this-release-is-built-for).
+
+A Claude Owner with a *local secondary Manager* is a different arrangement,
+also one machine and one project root. It works, and it is the right place to
+look if you want a local model carrying routed work rather than tickets:
 
 ```yaml
 coordination:
@@ -312,13 +395,27 @@ installed anywhere else in your home directory, such as a project virtualenv,
 cannot run inside a sandbox.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh \
+  | RITE_VERSION=v0.7.0 sh
 ```
+
+⚠ **Give `RITE_VERSION` explicitly.** `install.sh` still defaults its
+`VERSION` to `v0.6.0` (SCRUM-89), so a bare `| sh` installs 0.6.0 whichever
+tag you fetched the script from — and 0.6.0 has none of the staged pipeline or
+the independent plan review above. Until that default is fixed, the variable
+is what decides which version you get.
 
 *That is a `curl | sh` for a tool that scans your repo for secrets, so two
 slower paths — verify the checksum first, or clone and read it — are in
 [`docs/install-notes.md`](docs/install-notes.md), with the reasoning. Nothing
 phones home.*
+
+Check what landed:
+
+```bash
+rite --version        # expect 0.7.0
+rite doctor           # tools and credentials — non-zero on problems
+```
 
 **Upgrading rite does not update a project's generated files.** `CLAUDE.md`,
 the slash commands, the agents, the review checklist and the CI workflow are
@@ -346,23 +443,14 @@ credentials in a 0600 file and no longer reads the keychain. The
 
 What follows is what is genuinely not built, checked against the code.
 
-- **The loop works the queue.** `rite loop` watches it and says why it is
-  stopped — it prints the Worker it would start and does not start one.
-  Two ways to close that. Dispatching mechanical subtasks to local models is
-  still unwired — but only the half that would run one: nothing outside
-  `rite_ai/local/` calls the runner or the harness, and there is no command
-  that executes a subtask on a local model. The rest is wired and reachable:
-  assignment routes duties through the local duty router, and `rite doctor`
-  probes a configured `local:<class>` endpoint rather than assuming it.
-  Dispatching Claude sessions
-  **unattended** remains forbidden by SPEC §9.12, on purpose, because it
-  spends your quota while nobody is watching. *Attended* dispatch arrived in
-  0.5.1 as `rite start <manager>`, which keeps a Manager session going in
-  your own foreground terminal under two ceilings you typed — so the gap is
-  now narrower than this section used to claim, and it is the loop that
-  still starts nothing. So the loop closes
-  *"nobody noticed the queue had stalled"* and not *"nobody is doing the
-  work"*.
+- **A run that starts itself.** Nothing scheduled ever opens a Claude
+  session — SPEC §9.12 refuses it on purpose, because it would spend your
+  quota with nobody reachable. You start a run with `rite start <manager>
+  --sessions N --minutes M` and it works the board inside that budget; the run
+  is your own process, so Ctrl-C ends it and so does closing the terminal.
+  `rite loop` reports a stalled queue rather than starting the Worker it names.
+  *(Driving subtasks on a local model is no longer in this list: `rite local
+  step` runs one, and a run drives the local tier a stage per cycle.)*
 - **Questions routed to whoever owns the area.** What is built: you list
   people and their areas in the project config, and that table is printed
   into the Owner's instructions — a heading and a list of names against
@@ -382,7 +470,9 @@ What follows is what is genuinely not built, checked against the code.
 
 **Built since this list last claimed otherwise:** several machines on one
 project, with Owner election and failover (0.4.0 — see [the
-guide](docs/guide.md)); watching the queue (0.5.0, above).
+guide](docs/guide.md)); watching the queue (0.5.0); and, in 0.7.0, the staged
+pipeline, the independent-model plan review, and a GPU Worker driven under any
+Manager (SCRUM-72).
 
 ## Why you might not want it
 
