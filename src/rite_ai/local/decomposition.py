@@ -79,6 +79,14 @@ class Subtask:
     verdict on the work: it is the turn being cut off. Bounded by
     `step.MAX_STOPS` so a subtask that hangs every time still stops the
     ticket, which is what `goose_agent` rightly worried about."""
+    skips: int = 0
+    """How many times this subtask could not START, so nothing ran at all.
+
+    A neighbour holding part of its scope is the measured case: claims are
+    released when the MANAGER delivers, so a subtask whose scope overlaps a
+    Worker that has handed back but not yet been delivered cannot begin for
+    as long as that gap lasts. Bounded by `step.MAX_SKIPS`, so a scope that
+    is permanently held still stops the ticket rather than spinning."""
 
 
 @dataclass(frozen=True)
@@ -180,6 +188,7 @@ def render(plan: Decomposition) -> bytes:
                 "branch": s.branch,
                 "last_failure": s.last_failure,
                 "stops": s.stops,
+                "skips": s.skips,
             }
             for s in plan.subtasks
         ],
@@ -225,6 +234,9 @@ def parse(raw: bytes) -> Decomposition | str:
         stops = item.get("stops", 0)
         if type(stops) is not int or stops < 0:
             return f"{item['id']}: stops must be a whole number"
+        skips = item.get("skips", 0)
+        if type(skips) is not int or skips < 0:
+            return f"{item['id']}: skips must be a whole number"
         subtasks.append(
             Subtask(
                 id=str(item["id"]),
@@ -237,6 +249,7 @@ def parse(raw: bytes) -> Decomposition | str:
                 branch=str(item.get("branch", "")),
                 last_failure=str(item.get("last_failure", "")),
                 stops=stops,
+                skips=skips,
             )
         )
     return Decomposition(
