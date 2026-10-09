@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0a11 (2026-10-09) — alpha: the gate harness, and the fourteen defects it found
+## 0.7.0a11 (2026-10-09) — alpha: the gate harness, and the defects it found
 
 Robert's release gate for 0.7.0 is one real run: a Claude Manager
 orchestrating, a local planner authoring the plan, a Claude Worker and a GPU
@@ -40,6 +40,20 @@ each ready ticket's title and the opening of its body — from the board read
 that already happened, not a second call. It does not carry a definition of
 done, and says so: that is pinned when a Worker starts, so for a ready and
 unstarted ticket there is none to give.
+
+**A subtask that never started was recorded as a failed one.** The twin the
+SCRUM-103 fix above missed, found by the gate run that fix made possible.
+Claims are released when the **Manager delivers**, not when a Worker hands
+back, so a subtask whose scope overlaps a Worker in that gap cannot begin —
+and `run_subtask` recorded it FAILED, which `next_subtask` treats as
+terminal. On gate run `smoke_mixed-20261009T113241Z` the implementing
+subtask held `attempts=0` and `status=failed` in the same record: rite knew
+nothing had run and retired it anyway, the feature was never written, and
+three of the gate's four checks failed on it. The claim it waited for was
+released three minutes later, by the delivery of the very Worker holding it.
+A skip is now its own category, like a stop: the subtask stays `planned` to
+a bound of three, and fails at the bound so a scope held for good still
+stops the ticket.
 
 **RL-10's bound never bound** (SCRUM-101). A re-authored plan dropped the
 rejection history the bound is counted from, so the reject/re-author cycle was
