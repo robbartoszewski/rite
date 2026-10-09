@@ -1,5 +1,107 @@
 # Changelog
 
+## 0.7.0a11 (2026-10-09) — alpha: the gate harness, and the fourteen defects it found
+
+Robert's release gate for 0.7.0 is one real run: a Claude Manager
+orchestrating, a local planner authoring the plan, a Claude Worker and a GPU
+Worker implementing it, driving a ticket from board to delivery. This release
+is the harness that runs it and the defects running it exposed. Every one was
+found by a real run on real infrastructure — a real board, a real model on
+Ollama, real sandboxes, real commits — and not by reading the code.
+
+### Deadlocks: a fleet that read as healthy and advanced nothing
+
+**A supervisor parked itself while the staged pipeline was advancing**
+(SCRUM-93). `COORDINATION` did not include the pipeline, so the cycle that
+accepted a subtask counted as no progress, the no-progress guard held the
+Manager, and because the local tier only runs at a cycle boundary nothing
+ever opened the cycle the pipeline needed. A ticket stopped at `stepping`
+for over an hour with every component healthy and no error anywhere.
+
+**A subtask whose outcome already held wedged its ticket** (SCRUM-96).
+`verified` had no successor: not `accepted`, so the ticket could not finish;
+not `planned`, so it could not re-run. A subtask that asked for a test which
+an earlier subtask had already made pass hit this every time.
+
+**A turn stopped by the clock became a verdict on the work** (SCRUM-103). A
+timeout was recorded as the subtask having FAILED, and a failed subtask is
+terminal by design — so an infrastructure condition killed the subtask
+permanently. The 20-minute limit was also inside the spread of a normal turn
+rather than above it: measured on one machine and one model, the same leg took
+9 minutes in one run and exceeded 20 in the next. A stop is now its own
+category, retried to a bound of two, and the limit is 45 minutes and
+configurable per agent.
+
+**A Manager was handed work it could not read** (SCRUM-102). The board brief
+named ready tickets by id, and a Manager's sandbox has no board credential by
+design. Two runs stalled for two hours each; one of them claimed both tickets
+three minutes after being told their titles by hand. The brief now carries
+each ready ticket's title and the opening of its body — from the board read
+that already happened, not a second call. It does not carry a definition of
+done, and says so: that is pinned when a Worker starts, so for a ready and
+unstarted ticket there is none to give.
+
+**RL-10's bound never bound** (SCRUM-101). A re-authored plan dropped the
+rejection history the bound is counted from, so the reject/re-author cycle was
+unbounded — held back only by RL-69's convergence on *identical* reasons,
+which a reviewer raising a new objection each round does not trigger.
+
+### Checks that reported the wrong thing
+
+**A verify that never RAN was reported as the work failing** (SCRUM-95), in
+both RL-7 and RL-8. `SubprocessVerifier` drew that distinction correctly — "the
+tool is not installed on this machine… saying the verify failed would spend an
+attempt proving a machine was set up wrong" — and had nowhere to put it.
+`VerifyResult.ran` carries it now. The case that found it: an agreed
+definition of done of `python -m pytest …`, which cannot run on a uv-managed
+host at all.
+
+**The local tier's log hid three things** (SCRUM-98): a decomposer's stated
+refusal, reported as a JSON parse error about the offset where an ASCII banner
+stops being JSON; the decomposer's own lines, including the path its refused
+bytes were saved to; and who authored a plan — it printed "decomposed by lead"
+directly above "plan review asked of lead" while the record said `planner`, so
+a reader auditing RL-6 from the log would have seen a Manager reviewing its
+own plan.
+
+**A pipeline-delivered ticket handed back no account of itself**
+(SCRUM-100). A handback is a record a Worker writes when it finishes, and the
+staged pipeline has no Worker session that finishes — so a Claude Worker's
+ticket produced 11 KB of account and the pipeline's produced a branch and
+silence. `rite` now composes one from the pipeline's own records: the plan and
+who authored and approved it, each subtask and what decided it, RL-8's command
+and result with the plan fingerprint it is tied to, the stage timeline, and
+the commits. It says in its first lines that it is composed from records and
+not a Worker's testimony, and it never overwrites a Worker's own.
+
+### Also in this release
+
+**The bump-then-tag window stands down as a PASS, not a skip** (SCRUM-68's
+sibling). This shipped in 0.7.0a10 and was not announced — found by diffing
+against the last changelog commit rather than the last tag, which is the step
+`docs/releasing.md` exists to force.
+
+Earlier in the same batch: the local tier's board filter asked the wrong
+question twice before the right one (SCRUM-79); the board brief's one-ticket
+line read as a count (SCRUM-80); `rite start` from inside a sandbox raised a
+traceback (SCRUM-81); `rite credential check` spoke a different name from
+`rite credential set` (SCRUM-82); a Worker is owned by a Manager that can
+actually drive it, which may hold or delegate the authoring duty (SCRUM-83); a
+refused plan leaves its own bytes behind (SCRUM-87); the plan is found inside
+the agent's transcript rather than assumed to be the whole of it (SCRUM-88); a
+cite resolves by derived text or a slice, and the valid ids are offered
+(SCRUM-92); and `rite doctor` reports a Worker whose plan is nobody's to
+author.
+
+### Three regressions this batch introduced, and fixed
+
+Said out loud because a full-suite run caught them and nothing else would
+have. SCRUM-93's fix made *reading* the plan state look like *advancing* it,
+so an idle session looked productive once; SCRUM-83's ownership gate asked
+whether `''` may own a Worker, turning a capacity question into a refusal
+about authorship; and SCRUM-83 changed the broker seam's shape and left eight
+test stubs behind.
+
 ## 0.7.0a10 (2026-10-08) — alpha: a GPU Worker is driven, and every stage is enforced
 
 ### A GPU Worker is driven under any Manager, through enforced stages (SCRUM-72)
