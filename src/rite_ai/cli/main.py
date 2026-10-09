@@ -699,6 +699,69 @@ def _workers_without_github_token(
     return on_github, lacking
 
 
+def _doctor_authored_plan_holder(root: Path, problems: list) -> None:
+    """A Worker whose plan rite must author, and no Manager able to author it.
+
+    🔴 **The failure this catches is a Worker that starts, claims its paths and
+    never gets a subtask.** `rite sandbox start` succeeds, the Worker sits at
+    its prompt, and the staged pipeline never reaches it because no Manager
+    holds `decompose` — so nothing is wrong anywhere a person looks. Measured
+    over an evening of real runs: the fleet reads as healthy and advances
+    nothing, which is exactly the shape the spin guard cannot see.
+
+    ⚠ **Duty and CAPABILITY, never an engine** (SCRUM-83's line). The question
+    asked of each Worker is `needs_authored_plan`; the question asked of the
+    Managers is whether any holds `decompose`. A new provider declares the
+    capability and this check keeps working.
+
+    ⚠ It says the whole remedy, as one command. A check that reports a missing
+    role without the line that creates it is a check that sends a non-power
+    user into `.rite/config.yaml`, which is the UX defect this is part of
+    fixing.
+    """
+    from rite_ai.config.managers import DECOMPOSE, effective_duties
+    from rite_ai.config.parse import parse_config
+    from rite_ai.sandbox import worker_manifest
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    roles = config.coordination.manager_roles
+    declared = len(roles)
+    holders = sorted(
+        r.name for r in roles if DECOMPOSE in effective_duties(r, declared)
+    )
+
+    need = []
+    for path in sorted((root / "workers").glob("*/worker.yml")):
+        name = path.parent.name
+        manifest = worker_manifest(root, name)
+        if manifest is not None and manifest.needs_authored_plan:
+            need.append(name)
+    if not need:
+        return
+
+    if holders:
+        click.echo(
+            f"workers: {_first_few(need)} need rite to author their plans, and "
+            f"{', '.join(holders)} can — the staged pipeline can run"
+        )
+        return
+
+    click.echo(
+        f"workers: {_first_few(need)} need rite to author their plans and NO "
+        "Manager holds the `decompose` duty, so each would start, claim its "
+        "paths and never be given a subtask. Declare a planner — any local "
+        "model will do:\n"
+        "  rite add manager planner --duties decompose --engine local:large \\\n"
+        "    --endpoint http://localhost:11434 --model <your-model> \\\n"
+        "    --agent goose --context-window 32768\n"
+        "  (its model must differ from the approving Manager's, so the plan is "
+        "reviewed by something that does not share its blind spots — RL-6.)"
+    )
+    problems.append(
+        f"no Manager can author plans for {_first_few(need)}, which need one"
+    )
+
+
 def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> None:
     from rite_ai.credentials.store import store_is_readable
 
@@ -1163,6 +1226,10 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
     # `could not read Username`. `rite sandbox start` refuses the same state.
     if module_sandbox.enabled:
         _doctor_worker_github_token(root, modules, problems)
+        # 🔴 Its own guard, so a Worker that can never be given a subtask is
+        # reported even when the token checks below cannot run.
+        with _doctor_check("a Manager that can author their plans", problems):
+            _doctor_authored_plan_holder(root, problems)
         # And whether the token that IS there can write, which is the half
         # that let a read-only PAT reach `rite sandbox start` (S28).
         with _doctor_check("worker push access", problems):
