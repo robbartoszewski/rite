@@ -264,24 +264,41 @@ def test_an_infrastructure_fault_is_not_an_attempt():
     assert dec.read(state, "KAN-3").plan is None
 
 
-def test_only_a_decompose_holder_may_author_a_plan():
+def test_a_plan_nobody_may_author_is_refused_by_the_real_caller():
+    """SCRUM-83 refined: a driver that holds no authoring duty DELEGATES to the
+    one Manager that does (`decompose.author_for`, and
+    `test_a_worker_is_owned_by_a_manager_that_can_drive_it` covers the
+    delegation and its attribution). What is left to refuse is a project where
+    nobody holds the duty at all — asserted here, through the real caller,
+    because a refusal that only `author_for` makes is a refusal the caller may
+    not be asking for.
+
+    ⚠ This test asserted the FIRST shape of SCRUM-83 — "the driver must hold
+    `decompose` itself" — and kept asserting it after `author_for` was
+    refined, which left it red rather than wrong-and-green. It is corrected to
+    the rule that shipped, not relaxed: a plan is still never authored by a
+    project with no holder."""
     root, state = _project()
+    nobody_authors = [r for r in ROLES if r.name == "lead"]
     result = dcmp.decompose_ticket(
         root,
         "lead",  # holds plan-review/execute, not decompose
         "KAN-9",
         proposer=_Proposer(dcmp.Proposal(bytes=_candidate())),
         state=state,
-        roles=ROLES,
+        roles=nobody_authors,
     )
     assert not result.wrote
-    assert "does not hold the decompose duty" in result.problem
+    assert "no Manager in this project does" in result.problem
     assert dec.read(state, "KAN-9").plan is None
 
 
 def test_the_cli_command_is_wired_and_reports_a_refusal(monkeypatch):
-    # `rite local decompose` reaches the caller: a Manager without the duty is
-    # refused with exit 1, no model consulted.
+    # `rite local decompose` reaches the caller: a project where NOBODY holds
+    # the duty is refused with exit 1, no model consulted. ⚠ The fleet it used
+    # to declare — a `planner` holding `decompose` beside `lead` — is now the
+    # DELEGATING fleet and reaches the model, which is the gate scenario's own
+    # composition, so it cannot also stand for a refusal here.
     from click.testing import CliRunner
 
     from rite_ai.cli.main import cli
@@ -292,16 +309,17 @@ def test_the_cli_command_is_wired_and_reports_a_refusal(monkeypatch):
         "project:\n  name: demo\n  role: owner\n"
     )
     (root / ".rite" / "config.yaml").write_text(
-        "coordination:\n  managers: [planner, lead]\n  manager_roles:\n"
-        "  - {name: planner, engine: 'local:small', endpoint: 'http://x/v1', "
-        "model: 'qwen3.8:latest', agent: goose, context_window: 32768, "
-        "duties: [decompose]}\n"
+        "coordination:\n  managers: [lead, second]\n  manager_roles:\n"
         "  - {name: lead, engine: claude, preset: lead}\n"
+        "  - {name: second, engine: claude, preset: lead}\n"
     )
     monkeypatch.chdir(root)
     result = CliRunner().invoke(cli, ["local", "decompose", "lead", "KAN-1"])
     assert result.exit_code == 1
-    assert "does not hold the decompose duty" in result.output
+    assert "no Manager in this project does" in result.output
+    # 🔴 No model was consulted: an infrastructure fault would say so, and a
+    # refusal that reached the engine is not a refusal.
+    assert "infrastructure fault" not in result.output
 
 
 def test_an_approved_plan_is_not_overwritten():
