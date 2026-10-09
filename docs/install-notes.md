@@ -32,7 +32,7 @@ much you verify first:
   still pulls an unverified payload.
 - **Option 3** is the only one where you read the whole thing first. It is
   169 lines of `sh` and it is the honest answer if you would flag
-  `curl | sh` in someone else's project. Its `git checkout v0.6.0` is the
+  `curl | sh` in someone else's project. Its `git checkout v0.7.0` is the
   same movable pointer as option 1, so if the distinction matters to you,
   check out the **commit SHA** published in the release notes instead — that
   cannot be repointed.
@@ -71,25 +71,35 @@ the two projects share a command *and* an import name, and merge on disk.)
 **Not on PyPI yet** — that comes once there's been some feedback. Install from
 the tagged source. Needs `uv` or `pipx`, `git`, and Python 3.11+.
 
-Three ways, same result. Pick by how much you want to read first:
+Three ways, same result. Pick by how much you want to read first.
+
+⚠ **Give `RITE_VERSION` on every path that runs `install.sh`.** The script
+still defaults its own `VERSION` to `v0.6.0` (SCRUM-89) whichever tag you
+fetched it from, so a bare `sh install.sh` installs 0.6.0 — which has none of
+the staged pipeline or the independent plan review. Path 3 sidesteps it by
+installing the checkout directly, so there the `git checkout` tag is what
+decides.
 
 ```bash
 # 1. one-liner
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh \
+  | RITE_VERSION=v0.7.0 sh
 
 # 2. download, check, then run (in a scratch directory, not your project:
 #    `rite init` ignores rite's own installer, but it is not your project's)
 cd "$(mktemp -d)"
-curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh
-shasum -a 256 install.sh          # compare against the v0.6.0 release notes
-sh install.sh
+curl -fsSLO https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh
+shasum -a 256 install.sh          # compare against the v0.7.0 release notes
+RITE_VERSION=v0.7.0 sh install.sh
 
 # 3. clone and read everything
 git clone https://github.com/robbartoszewski/rite.git
-cd rite && git checkout v0.6.0
+cd rite && git checkout v0.7.0
 less install.sh                   # 169 lines of sh
 uv tool install .                 # or: pipx install .
 ```
+
+Whichever you pick, `rite --version` should print `0.7.0`.
 
 *Option 1 is the fast path. If you would rather read a `curl | sh` before
 running it — fair, for a tool that scans your repo for secrets — that is what

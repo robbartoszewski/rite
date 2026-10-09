@@ -6,15 +6,15 @@
 wrote the plan** approve it before a line is written, builds it, checks the
 finished work against the ticket's own definition of done, and opens the pull
 request. You start a run and it works the board for the budget you gave it,
-asking you questions in Slack rather than in a terminal you have to sit and
-watch.
+asking its questions in Slack rather than in the terminal — so you need not
+watch it, though the run is your own process and ends when you close it.
 
-It runs on your hardware, on your engine: Claude for the judgement, a GPU
-Worker on your own box for the implementation, or both in one fleet.
+The judgement runs on Claude; the implementation runs on a GPU in your own box.
+That split is the supported shape, and it is what the rest of this page sets
+up.
 
-**The point is where your hours go.** The work that needs you concentrates
-into settling requirements, making the calls and reading what came back, while
-the fleet keeps moving in between.
+You spend your time on requirements, decisions and reviewing diffs. The fleet
+does the typing in between.
 
 ## What it does that a prompt cannot
 
@@ -52,27 +52,51 @@ the fleet keeps moving in between.
   platforms `rite init` leaves sandboxing off. On Docker, a dogfood run found
   file locking does not lock, so two workers can be granted the same path: run
   one worker there.
-- **101 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
+- **115 numbered decisions** in [`SPEC.md`](SPEC.md), each with the question it
   answers and the reasoning.
 
 ## The fleet this release is built for
 
-**A Claude Manager, a Claude Worker, and a GPU Worker.** Claude does the
-orchestration and the reviewing; the Workers implement, with the token-heavy
-work pushed onto hardware you already own. That is the shape that is supported
-and the one to start from.
+**A Claude Manager that orchestrates and reviews, a second Manager that writes
+the plans, a Claude Worker, and a GPU Worker.** The token-heavy implementation
+runs on hardware you already own.
+
+**The second Manager is not optional.** A Worker's ticket moves only through
+the staged pipeline, and that pipeline starts from a plan somebody has to
+author — the `lead` preset does not hold `decompose`. rite also refuses a plan
+approved by the model that wrote it, and two Claude Managers count as one
+model, so the plan's author runs locally and `lead` reviews it.
 
 ```bash
+rite add manager lead --preset lead          # Claude: board, routing, plan review
+rite add manager planner --preset planner \
+  --engine local:small --endpoint http://localhost:11434 \
+  --model qwen3:8b --agent goose --context-window 32768   # authors the plans
+
 rite add worker alpha                        # a Claude Worker
 rite add worker gpu1 --engine local:small --agent goose \
   --endpoint http://localhost:11434 --model qwen3:8b \
   --context-window 32768                     # a GPU Worker on your own box
 ```
 
-A local Worker must declare its `--context-window` (at least 32,768). Ollama
+Declare the Managers **before** the Workers: a Worker is linked to the Manager
+declared when it was created, and one added first reports to none.
+
+`planner` and `gpu1` need Goose on your `PATH` and Ollama serving the model at
+that endpoint, already pulled (`ollama pull qwen3:8b`). `rite add worker`
+records the engine without probing it — `rite doctor` is what checks the
+endpoint answers, and it is also the check that catches a fleet that would
+start a GPU Worker and never give it a subtask. Run it once the fleet exists,
+not before.
+
+Both local roles must declare a `--context-window` of at least 32,768. Ollama
 serves every model at 4,096 tokens by default, which is smaller than the
-agent's own system prompt, so rite refuses a local Worker that does not say,
-and pins the window it was given into the model on the server.
+agent's own system prompt, so rite refuses one that does not say, and pins the
+window it was given into the model on the server.
+
+Two Managers in one root also need somewhere to coordinate through: set
+`coordination.remote` to a repository both can push, or `rite doctor` reports
+that no election can happen.
 
 ⚠ **An all-local fleet runs, but it is slow** — hours per ticket on a single
 32 GB GPU, including the first claim and kickoff. It is a documented
@@ -119,7 +143,7 @@ You write the design, or you already have one. `rite init` looks for
 
 On a spec too large to read whole, `rite spec index` turns it into addressable
 units and `rite spec slice 5.3` prints just that section, what it cites and the
-sections everything depends on — about 3% of rite's own 7,100-line spec. It
+sections everything depends on — a few percent of rite's own 9,000-line spec. It
 refuses specs a slice cannot help: a short or densely interlinked document is
 cheaper read whole. When a slice was not enough, `rite handover write
 --spec-fallback 5.3` records it, and `rite spec status` reports how often that
@@ -190,7 +214,6 @@ another worker holds.
 If sandboxing is on (the default on macOS), start the worker from the project
 root instead of opening it yourself — a session you open yourself is not
 sandboxed, whatever the setting says. Before the first one, once per project
-(these need rite v0.2.0 or later):
 
 ```bash
 claude setup-token            # prints a long-lived Claude login token
@@ -441,8 +464,6 @@ credentials in a 0600 file and no longer reads the keychain. The
 
 ## Planned — not built
 
-What follows is what is genuinely not built, checked against the code.
-
 - **A run that starts itself.** Nothing scheduled ever opens a Claude
   session — SPEC §9.12 refuses it on purpose, because it would spend your
   quota with nobody reachable. You start a run with `rite start <manager>
@@ -581,11 +602,12 @@ gets. See the guide.
 
 **A Manager runs on Claude Code, or on Goose for a local model.**
 `CLAUDE.md` and `.claude/agents/` are first-class here rather than behind a
-provider abstraction. A local model tier for Workers (`local:<class>`) is
-designed, parsed by the config and probed by `rite doctor`; what is missing
-is the half that runs a subtask on one. Other tools are added one at a
-time rather than behind a general abstraction: a Cursor adapter is planned
-for 0.7.0.
+provider abstraction. A Worker on a local model tier (`local:<class>`) is
+driven through the same enforced stages as a Claude one (0.7.0, SCRUM-72),
+and `rite doctor` reports the window each one gets. Other tools are added one
+at a time rather than behind a general abstraction: a Cursor adapter is
+measured but not yet reachable from config, and is planned for a later
+release.
 
 **Workers are interchangeable, so there is no capability routing.** Every
 worker holds the same project-scoped credentials, so assignment picks
