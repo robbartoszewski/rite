@@ -25,13 +25,18 @@ LOCAL = (
 )
 
 
-def _project(tmp_path, *, roles: str, worker_engine: str = "local:small"):
+def _project(
+    tmp_path, *, roles: str, worker_engine: str = "local:small", sandbox: bool = True
+):
     rite = tmp_path / ".rite"
     rite.mkdir(parents=True, exist_ok=True)
     (rite / "brief.yaml").write_text("project:\n  name: p\n")
     (rite / "modules.yaml").write_text("modules: {}\n")
     (rite / "config.yaml").write_text(
-        "ticket_backend:\n  type: none\ncoordination:\n  manager_roles:\n" + roles
+        "ticket_backend:\n  type: none\n"
+        + ("" if sandbox else "sandbox:\n  enabled: false\n")
+        + "coordination:\n  manager_roles:\n"
+        + roles
     )
     d = tmp_path / "workers" / "gpu1"
     d.mkdir(parents=True, exist_ok=True)
@@ -114,6 +119,23 @@ def test_a_claude_only_fleet_with_no_local_worker_is_not_nagged(tmp_path, monkey
     out = _doctor(tmp_path, monkeypatch, root).output
     assert "never be given a subtask" not in out
     assert "the staged pipeline can run" not in out
+
+
+def test_it_fires_for_an_UNSANDBOXED_fleet_too(tmp_path, monkeypatch):
+    """🔴 The placement defect, found by reading the call site rather than the
+    test: the check was added INSIDE `if module_sandbox.enabled:`, beside the
+    Worker token checks it was written next to.
+
+    Nothing it asks has anything to do with the sandbox — it asks each Worker
+    `needs_authored_plan` and the Managers who holds `decompose`. A project
+    running its Workers unsandboxed starves identically and heard nothing,
+    which is the quietest possible place for the check against silent
+    starvation to be switched off.
+    """
+    root = _project(tmp_path, roles=CLAUDE_ONLY, sandbox=False)
+    out = _doctor(tmp_path, monkeypatch, root).output
+    assert "never be given a subtask" in out, out
+    assert "NO Manager holds the `decompose` duty" in out
 
 
 def test_the_check_is_wired_into_doctor():

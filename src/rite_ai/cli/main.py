@@ -1224,12 +1224,17 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
     # a Worker that works and cannot deliver. Dogfood #28: doctor printed
     # `github_token: not set` and counted nothing, and KAN-7's Worker hit
     # `could not read Username`. `rite sandbox start` refuses the same state.
+    # 🔴 OUTSIDE the sandbox condition below, and in its own guard. Whether a
+    # Worker's plan is anybody's to author is a question about DUTIES and the
+    # Worker's own capability (`needs_authored_plan`) — the sandbox has nothing
+    # to do with it, and a project that runs its Workers unsandboxed starves
+    # exactly the same way. It sat inside `if module_sandbox.enabled:` when it
+    # was added, which made the one check that catches a silently-starving
+    # fleet unreachable for the fleets least likely to notice.
+    with _doctor_check("a Manager that can author their plans", problems):
+        _doctor_authored_plan_holder(root, problems)
     if module_sandbox.enabled:
         _doctor_worker_github_token(root, modules, problems)
-        # 🔴 Its own guard, so a Worker that can never be given a subtask is
-        # reported even when the token checks below cannot run.
-        with _doctor_check("a Manager that can author their plans", problems):
-            _doctor_authored_plan_holder(root, problems)
         # And whether the token that IS there can write, which is the half
         # that let a read-only PAT reach `rite sandbox start` (S28).
         with _doctor_check("worker push access", problems):
