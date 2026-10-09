@@ -1375,10 +1375,22 @@ def _queued_requests(root: Path, manager: str) -> bool:
     return queued(root, manager)
 
 
-COORDINATION = frozenset({"claims", "routes", "requests", "deliveries", "lifecycle"})
+COORDINATION = frozenset(
+    {"claims", "routes", "requests", "deliveries", "lifecycle", "pipeline"}
+)
 """The footprint parts that are a Manager's own progress: claiming work,
-routing it, asking for a Worker, delivering one's work (D-115), and asking
-rite to stop, restart, destroy, inspect or gate a Worker (SCRUM-59)."""
+routing it, asking for a Worker, delivering one's work (D-115), asking rite to
+stop, restart, destroy, inspect or gate a Worker (SCRUM-59), and advancing the
+staged pipeline (SCRUM-72).
+
+🔴 **`pipeline` is here because without it the pipeline starves itself.** The
+local tier runs once per cycle, so a cycle whose only accomplishment was
+advancing a stage was judged idle, the no-progress guard parked the supervisor,
+and no further cycle ever opened. Measured on the v0.7.0 gate fleet: the cycle
+that accepted subtask s1 counted as no progress, and the ticket stopped at
+`stepping` with a planned subtask and nothing able to move it. Driving a
+Worker's plan through its stages is this Manager's coordination, as much as
+taking a claim is."""
 
 
 def _session_was_idle(changed: list[str]) -> bool:
