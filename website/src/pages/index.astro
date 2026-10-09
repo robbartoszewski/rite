@@ -56,7 +56,7 @@ const FAQ = [
   },
   {
     q: 'Can I run it entirely on my own GPU?',
-    a: 'Yes, and be realistic about the speed: an all-local fleet works, at <b>hours per ticket on a single 32&nbsp;GB GPU</b>. The shape that earns its keep today is mixed — Claude plans and reviews, a local GPU does the implementation. An all-local loop that closes on its own is the direction, not something rite ships.',
+    a: 'Partly, and the honest answer has two halves. A <b>GPU Worker</b> belongs in the fleet today — that is the supported shape: a Claude Manager orchestrating and reviewing, a Claude Worker and a GPU Worker implementing. A fleet with <b>no Claude at all</b>, including the first claim and kickoff, also runs — at <b>hours per ticket on a single 32&nbsp;GB GPU</b>. That is a documented limit rather than the setup to start from, and a local loop that closes on its own is the direction, not something rite ships.',
   },
   { q: 'Do I need this?', a: 'If you run one session at a time, no.' },
   {
@@ -105,7 +105,9 @@ const jsonLd = {
           you questions in Slack rather than in a terminal you have to sit and watch.
         </p>
         <p class="rt-lead">
-          <b>Your hardware, your engine:</b> cloud Claude, a local GPU, or both at once.
+          <b>Your hardware, your engine:</b> a Claude Manager orchestrating and reviewing, a
+          Claude Worker and a GPU Worker on your own box implementing — or any one of them on its
+          own.
         </p>
         <div class="rt-btn-row">
           <Button href={SPEC} variant="primary" external>Read the spec</Button>
@@ -277,9 +279,10 @@ const jsonLd = {
           <article class="rt-card">
             <h3 class="rt-h3">Mix frontier and local in one fleet.</h3>
             <p>
-              The shape that works best today: <b>Claude plans and reviews, a local GPU does the
-              implementation.</b> You keep the judgement on a frontier model and push the token-heavy
-              work onto hardware you already own.
+              The shape this release supports: <b>a Claude Manager, a Claude Worker and a GPU
+              Worker.</b> Claude does the orchestration and the reviewing; the Workers implement,
+              with the token-heavy work pushed onto hardware you already own. You keep the
+              judgement on a frontier model and the volume on your own GPU.
             </p>
             <p>
               Claude Code, local open-weight models through Goose and Ollama, and Cursor as a Manager
@@ -290,9 +293,11 @@ const jsonLd = {
             </p>
             <p class="rt-caveat rt-card-caveat">
               <Icon name="warn" size={16} /><span
-                ><b>Caveat.</b> An all-local fleet runs, but it is slow — hours per ticket on a
-                single 32&nbsp;GB GPU. A mixed fleet is one machine and one project root today;
-                several Managers across machines is planned for 0.8.0.</span
+                ><b>Caveat.</b> An all-local fleet — no Claude anywhere, including the first claim
+                and kickoff — runs, but it is slow: hours per ticket on a single 32&nbsp;GB GPU.
+                That is a documented limit, not the setup to start from. A fleet is one machine and
+                one project root today; several Managers across machines is planned for
+                0.8.0.</span
               >
             </p>
           </article>

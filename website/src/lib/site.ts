@@ -45,12 +45,12 @@ export const NOTIFY_STATUS: string = import.meta.env.PUBLIC_NOTIFY_STATUS ?? '';
 /* ───────────────────────────── version ──────────────────────────────────── */
 
 /** Feeds the nav chip and the FAQ. Bump on release. */
-export const VERSION = 'v0.7.0a10';
+export const VERSION = 'v0.7.0';
 
 /** The /what-works page's eyebrow. Updated BY HAND after re-checking that page
  *  against the release — a version bump must never re-stamp it on its own,
  *  because the date is a claim that someone actually looked. */
-export const STATUS_CHECKED = { version: 'v0.7.0a10', date: '8 Oct 2026' } as const;
+export const STATUS_CHECKED = { version: 'v0.7.0', date: '9 Oct 2026' } as const;
 
 /** Blog author shown on posts. Already public in the repository's LICENSE. */
 export const AUTHOR = 'Rob Bartoszewski';
@@ -65,6 +65,11 @@ const BLOB = `${GH}/blob/main`;
  *  anything is inserted above it — and these anchors are the site's whole
  *  credibility argument. Bump this with VERSION, and re-check the line numbers
  *  in PROOF below against the new tag before you do. */
+/* ⚠ Still the last alpha, on purpose: these line anchors were verified against
+ *  v0.7.0a10 and a tag that does not exist yet cannot be checked. Bump this to
+ *  'v0.7.0' once that tag is cut, and re-read each line in PROOF below before
+ *  you do — a line anchor into the wrong revision is a confident link to the
+ *  wrong code. */
 const PROOF_REF = 'v0.7.0a10';
 const PINNED = `${GH}/blob/${PROOF_REF}`;
 
@@ -107,8 +112,11 @@ export const PROOF = {
 /** The install command, verbatim from the repository's README (line 315).
  *  ⚠ It pins the v0.6.0 tag because that is what the README publishes today.
  *  Bump BOTH when a newer tag ships an install.sh. */
+/** ⚠ `RITE_VERSION` is given explicitly because install.sh still defaults its
+ *  own VERSION to v0.6.0 (SCRUM-89) whichever tag the script came from. Drop
+ *  the variable only once that default is fixed. */
 export const INSTALL_COMMAND =
-  'curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh';
+  'curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh | RITE_VERSION=v0.7.0 sh';
 
 /* ───────────────────────────── link helper ──────────────────────────────── */
 
