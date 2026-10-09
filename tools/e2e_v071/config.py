@@ -137,6 +137,27 @@ class Fleet:
         return str(self.scenario.get("publish_strategy") or "")
 
     @property
+    def spec_paths(self) -> tuple[str, ...]:
+        """The documents this project registers as its SPEC.
+
+        🔴 **Nothing registered one, and that silently made every ticket
+        undecomposable.** RL-63 requires each subtask to cite a resolvable spec
+        unit, so with `spec.paths: []` no acceptable plan exists — and the
+        local planner said exactly that, in a structured refusal, twice:
+        "This project registers no spec units, so no cite can resolve."
+
+        The run that appeared to clear RL-6 only did so because a spec document
+        was written into the run directory BY HAND, mid-run, and `spec.paths`
+        hand-edited to match. A gate whose fixture is assembled by hand is not
+        a gate. The app ships `docs/SPEC.md` now and this registers it, so a
+        clean `setup` produces a decomposable project with no intervention.
+        """
+        declared = self.scenario.get("spec_paths")
+        if declared:
+            return tuple(str(x) for x in declared)
+        return ("docs/SPEC.md",)
+
+    @property
     def check_names(self) -> tuple[str, ...]:
         return tuple(self.scenario["checks"])
 

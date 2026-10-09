@@ -69,6 +69,18 @@ def _patch_config(project: Path, fleet: Fleet, repo: str) -> None:
     path = project / ".rite" / "config.yaml"
     cfg = yaml.safe_load(path.read_text()) or {}
     cfg.setdefault("heartbeat", {}).update(fleet.heartbeat)
+    # ⚠ Registered at SETUP, from the committed fixture — see `Fleet.spec_paths`
+    # for why this exists and what its absence cost.
+    present = [x for x in fleet.spec_paths if (project / x).exists()]
+    missing = [x for x in fleet.spec_paths if not (project / x).exists()]
+    if missing:
+        raise SystemExit(
+            f"setup: the scenario registers spec document(s) the app does not "
+            f"ship: {', '.join(missing)}. Without a resolvable spec unit no "
+            f"subtask can cite one (RL-63) and no plan can be approved, which "
+            f"is a stall three stages later rather than an error here."
+        )
+    cfg.setdefault("spec", {})["paths"] = present
     cfg["publish"] = {
         # The scenario may override: the smoke delivers as a branch into the
         # project's checkout (`commit`) because its app has no remote.
