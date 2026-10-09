@@ -109,3 +109,48 @@ fixed_build:
   probes:
     - {fix: SCRUM-72, argv: [plan, --help], expect: "approve"}
     - {fix: SCRUM-64, python: "import rite_ai.managers.reconcile"}
+    # 🔴 **BEHAVIOUR, NOT A VERSION STRING.** The version above did not change
+    # across any of these fixes, and `uv tool install --force` does not rebuild
+    # when it is unchanged — so a run can report the right version while running
+    # the old code. Each probe below asserts the FIX, and every one of them was
+    # found by the run that these replace.
+    - fix: SCRUM-93
+      python: |
+        from rite_ai.managers.supervise import COORDINATION
+        from rite_ai.managers.progress import Footprint
+        import inspect
+        assert "pipeline" in COORDINATION, "advancing the pipeline is not progress"
+        assert "pipeline" in Footprint.__dataclass_fields__
+        assert "__dataclass_fields__" in inspect.getsource(Footprint.differs_from), \
+            "differs_from still compares a hardcoded field list"
+    - fix: SCRUM-95
+      python: |
+        import tempfile
+        from rite_ai.local.harness import VerifyResult
+        from rite_ai.local.runners import SubprocessVerifier
+        assert "ran" in VerifyResult.__dataclass_fields__
+        r = SubprocessVerifier().run("rite-no-such-program --version", tempfile.mkdtemp())
+        assert r.ran is False and r.passed is False, "a missing program reads as a failure"
+    - fix: SCRUM-96
+      python: |
+        import inspect
+        from rite_ai.local.harness import Commit, run_subtask
+        from rite_ai.local import loop
+        assert "nothing_to_commit" in Commit.__dataclass_fields__
+        assert "accepted with no commit" in inspect.getsource(run_subtask)
+        assert 'getattr(result, "lines", ())' in inspect.getsource(loop.advance_ticket), \
+            "the loop still drops the step's own reason"
+    - fix: SCRUM-92-remedy
+      python: |
+        import inspect
+        from rite_ai.spec.slice import unit_text
+        assert "rite spec index" in inspect.getsource(unit_text)
+    - fix: SCRUM-83
+      python: |
+        from rite_ai.config.managers import ManagerRole
+        from rite_ai.local.decompose import author_for
+        roles = [ManagerRole(name="lead", engine="claude", preset="lead"),
+                 ManagerRole(name="planner", engine="local:large", duties=("decompose",))]
+        assert author_for(roles, "lead") == ("planner", ""), "the owner does not delegate"
+        who, why = author_for([roles[0]], "lead")
+        assert who == "" and "no Manager in this project does" in why
