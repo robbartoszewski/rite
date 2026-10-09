@@ -104,31 +104,82 @@ def _handbacks(obs, workers: list[str]) -> dict:
 def judge(run, fleet: Fleet, obs) -> tuple[list[Result], dict]:
     """The four transitions, each from a record, plus the bundle's facts."""
     tickets = json.loads(run.file("tickets.json").read_text())
-    key = fleet.pipeline_keys[0]
-    board_id = str(tickets[key])
     gpu = set(fleet.gpu_workers)
     events = obs.events()
-    stages = hooks.stage_log(obs, {key: board_id}) or {}
-    sequence = stages.get(key) or []
-    timeline = (hooks.stage_timeline(obs, {key: board_id}) or {}).get(key) or []
+    # 🔴 **THE SUBJECT TICKET IS OBSERVED, NOT DECLARED.** This read
+    # `fleet.pipeline_keys[0]` and judged that ticket, which was wrong in the
+    # way that matters: a scenario's `for_worker` is metadata the harness never
+    # applies, and it cannot apply it — rite routes by duty and capability and
+    # the MANAGER decides which of its Workers gets which ticket (SCRUM-83).
+    # In the gate run `lead` gave the GPU ticket to the Claude Worker and the
+    # Claude ticket to the GPU Worker, so every verdict was computed against a
+    # ticket that never entered the pipeline: three FAILs about a ticket that
+    # was doing nothing wrong, while the pipeline ticket went unjudged.
+    #
+    # So the subject is the ticket with a persisted DECOMPOSITION, and the
+    # check below asks whether a GPU Worker got it — which stays a real
+    # question, because the Claude Worker could have.
+    all_stages = hooks.stage_log(obs, tickets) or {}
+    entered = [k for k, seq in all_stages.items() if "decomposed" in (seq or [])]
+    # ⚠ The FURTHEST-ADVANCED record, and a tie is reported rather than picked.
+    # More than one ticket can carry a pipeline record without anything being
+    # wrong: `_local_worker_holds` gates on the Worker RECORDED AS STARTED on
+    # the ticket, so a ticket a GPU Worker held IS driven, and a later
+    # re-assignment to a Claude Worker leaves that record behind. The gate run
+    # has exactly this history — `start_requests.jsonl` shows ticket 1 on
+    # `gpu1` four times before `lead` moved it to `alpha` — so counting a
+    # second record as a violation was wrong. It is stated as history instead.
+    entered.sort(key=lambda k: len(all_stages.get(k) or []), reverse=True)
+    declared = fleet.pipeline_keys[0]
+    subject_problem = ""
+    if not entered:
+        key = declared
+        subject_problem = "no ticket entered the staged pipeline at all"
+    else:
+        key = entered[0]
+        depths = [len(all_stages.get(k) or []) for k in entered]
+        if len(entered) > 1 and depths[0] == depths[1]:
+            subject_problem = (
+                f"{depths[0]} stages recorded for both {entered[0]} and "
+                f"{entered[1]}, so which ticket the smoke is about cannot be "
+                "read off the records"
+            )
+    board_id = str(tickets[key])
+    sequence = all_stages.get(key) or []
+    timeline = (hooks.stage_timeline(obs, tickets) or {}).get(key) or []
     handbacks = _handbacks(obs, [w["name"] for w in fleet.workers])
+    # The other side of SCRUM-72's claim: a Worker that plans its own work is
+    # not dragged through the staged pipeline. `_local_tier_tickets` filters on
+    # the Worker's `needs_authored_plan`, so this is the observable form of it.
+    also_in_pipeline = [k for k in entered if k != key]
 
     results: list[Result] = []
 
     # 1. dispatched to the GPU Worker -------------------------------------
+    # ⚠ **RITE'S OWN RECORD FIRST, the event log as corroboration.** A
+    # `sandbox-started` event is a sandbox being CREATED, not a ticket being
+    # dispatched: a Manager re-pointing a Worker that already has a live
+    # sandbox writes the publish record and emits nothing, so this said "no
+    # Worker was ever started on 2" about a ticket a GPU Worker had held for
+    # twenty minutes and driven to `step_reviewed`. The record is what rite
+    # itself decides on (`loop._worker_for`), so it is what is asked.
+    holding = [w for w, t in (obs.worker_tickets() or {}).items() if str(t) == board_id]
     started = [
         e
         for e in events
         if e.get("event") == "sandbox-started" and str(e.get("ticket")) == board_id
     ]
-    on_gpu = [e for e in started if e.get("worker") in gpu]
+    on_gpu = [e for e in started if e.get("worker") in gpu] or [
+        {"worker": w, "event": "publish-record"} for w in holding if w in gpu
+    ]
     others = [e for e in started if e.get("worker") not in gpu]
-    if not started:
+    if not started and not holding:
         results.append(
             Result(
                 "dispatched_to_the_gpu_worker",
                 FAIL,
-                f"no Worker was ever started on {board_id}",
+                f"no Worker was ever started on {board_id}, and no publish "
+                f"record names one",
             )
         )
     elif not on_gpu:
@@ -151,6 +202,18 @@ def judge(run, fleet: Fleet, obs) -> tuple[list[Result], dict]:
             detail += (
                 f"; also started on non-GPU "
                 f"{sorted({str(e.get('worker')) for e in others})}"
+            )
+        if key != declared:
+            detail += (
+                f". The subject is {key} rather than the scenario's {declared}: the "
+                "Manager chose which Worker got which ticket, which is rite's call "
+                "and not the harness's"
+            )
+        if also_in_pipeline:
+            # Stated, not counted against it: see the sort above.
+            detail += (
+                f". {', '.join(also_in_pipeline)} also carries a pipeline record, "
+                "from a GPU Worker that held it before it was re-assigned"
             )
         results.append(Result("dispatched_to_the_gpu_worker", PASS, detail))
 
@@ -272,11 +335,18 @@ def judge(run, fleet: Fleet, obs) -> tuple[list[Result], dict]:
             )
         )
 
+    if subject_problem:
+        results.append(
+            Result("the_smokes_subject_is_unambiguous", FAIL, subject_problem)
+        )
+
     facts = {
         "scenario": fleet.name,
         "ticket_key": key,
+        "declared_ticket_key": declared,
         "board_id": board_id,
         "gpu_workers": sorted(gpu),
+        "holding": sorted(holding),
         "stages": sequence,
         "timeline": timeline,
         "handbacks": handbacks,

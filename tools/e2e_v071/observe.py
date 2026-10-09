@@ -81,6 +81,34 @@ class Observer:
             )
         )
 
+    def worker_tickets(self) -> dict:
+        """{worker: ticket} from rite's OWN publish records — the authority.
+
+        🔴 **`sandbox-started` is not the dispatch.** The event log records a
+        sandbox being CREATED. A Manager that re-points a Worker already
+        holding a live sandbox at a different ticket writes the publish record
+        and emits no event, so the gate run shows four `sandbox-started` rows
+        for ticket 1 and none for ticket 2 — while rite's record says `gpu1`
+        has held ticket 2 since 02:21:28Z and the staged pipeline drove it to
+        `step_reviewed`, which it can only do for a ticket a Worker holds
+        (`_local_worker_holds` -> `loop._worker_for` -> `publishing.record`).
+
+        So the judge reads what rite decides on, and keeps the event log as
+        corroboration. Asked through `_ask_rite` because the records live
+        outside the project, under the run's own data home.
+        """
+        return dict(
+            self._ask_rite(
+                "import json; from pathlib import Path; "
+                "from rite_ai.config.parse import load_project; "
+                "from rite_ai.publishing import record; "
+                "r = Path('.').resolve(); p = load_project(r); "
+                "ws = [] if isinstance(p, list) else [w.name for w in p.workers]; "
+                "print(json.dumps({w: getattr(record.read(r, w), 'ticket', '') "
+                "for w in ws}))"
+            )
+        )
+
     def decomposition(self, ticket: str) -> dict | None:
         """The ticket's plan as rite renders it, or None.
 
