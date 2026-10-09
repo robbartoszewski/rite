@@ -367,13 +367,31 @@ def advance_ticket(
         # exist on it, and a getattr default of False would have read every
         # successful decomposition as a failure.
         if getattr(result, "wrote", False):
-            return moved_to(
-                st.DECOMPOSED, why=f"decomposed by {manager}", note=f"by {manager}"
-            )
+            # ⚠ **THE AUTHOR, not the driver — and this said the driver.** Under
+            # SCRUM-83's delegation they differ: `lead` drives and `planner`
+            # authors, which is the whole point of the four-role fleet. The
+            # record is attributed correctly (`decompose._write_pending` takes
+            # the author), and this line said "decomposed by lead" — beside
+            # "plan review asked of lead" on the next line. A person auditing
+            # RL-6 from the log would read that as a Manager reviewing its own
+            # plan, which is the one thing RL-6 forbids. Seen in the v0.7.0
+            # gate run's own log.
+            author = getattr(result, "author", "") or manager
+            by = f"{author} (driven by {manager})" if author != manager else f"{author}"
+            return moved_to(st.DECOMPOSED, why=f"decomposed by {by}", note=f"by {by}")
         why = getattr(result, "problem", "") or "the decomposer produced no plan"
         reasons = getattr(result, "reasons", ()) or ()
         if reasons:
             why = f"{why or 'rejected'}: {reasons[-1]}"
+        # ⚠ **THE DECOMPOSER'S OWN LINES, same defect as the step branch below
+        # and found the same way.** `result.lines` carries "the refused
+        # candidate was kept at <path>" (SCRUM-87) and the RL-69 convergence
+        # note, and this dropped both — so the log said only that the bytes
+        # were not a decomposition, while the author's own explanation sat in a
+        # file nothing named. Measured: it cost 25 minutes of digging on the
+        # gate run to find a refusal the agent had stated plainly.
+        for line in getattr(result, "lines", ()) or ():
+            why += f"; {line}"
         return Advance(ticket, blocked=f"not decomposed: {why}")
 
     if plan is None:

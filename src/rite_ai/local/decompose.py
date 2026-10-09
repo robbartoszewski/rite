@@ -92,6 +92,16 @@ class DecomposeResult:
     problem: str = ""
     """Why nothing was even attempted — a misconfiguration or an unreachable
     agent, not a rejected plan."""
+    author: str = ""
+    """WHO authored the plan, which under SCRUM-83's delegation is not the
+    Manager that drove the call.
+
+    🔴 It was not reported, so `loop` had nothing to say but the driver's name
+    and said "decomposed by lead" on the line above "plan review asked of
+    lead". The plan state is attributed correctly — `_write_pending` takes the
+    author — but a person auditing RL-6 from the LOG would read a Manager
+    reviewing its own plan, which is the one thing RL-6 forbids. Seen in the
+    v0.7.0 gate run's own log, where `planner` authored and `lead` approved."""
     lines: list[str] = field(default_factory=list)
 
 
@@ -160,6 +170,7 @@ def decompose_ticket(
             result.problem = problem
             return result
 
+    result.author = author
     base_prompt = _prompt_for(ticket, ticket_text, available_units(root))
     previous: tuple[str, ...] | None = None
     addendum = ""
@@ -180,7 +191,22 @@ def decompose_ticket(
         bytes_for_parse = plan_document(proposal.bytes)
         parsed = dec.parse(bytes_for_parse)
         if isinstance(parsed, str):
-            reasons: tuple[str, ...] = (f"the bytes are not a decomposition: {parsed}",)
+            # ⚠ A STATED REFUSAL IS NOT A PARSE ERROR. See `stated_refusal`:
+            # the author can report that the task as posed cannot be done, and
+            # that sentence is what a person needs — not a message about where
+            # goose's banner stops being JSON. The parse message is kept after
+            # it, because the bytes are still not a plan and a reader must be
+            # able to tell a refusal from a mangled one.
+            declined = stated_refusal(proposal.bytes)
+            reasons: tuple[str, ...] = (
+                (
+                    f"the decomposer DECLINED rather than failing — it reports: "
+                    f"{declined}",
+                    f"(its output is also not a decomposition: {parsed})",
+                )
+                if declined
+                else (f"the bytes are not a decomposition: {parsed}",)
+            )
         else:
             # The ticket identity AND the author are rite's, never the model's.
             # The author is the Manager rite ASKED, not whoever the model named
@@ -353,6 +379,67 @@ def plan_document(raw: bytes) -> bytes:
         if isinstance(parsed, dict) and "subtasks" in parsed:
             chosen = body
     return chosen.encode("utf-8") if chosen else (raw or b"")
+
+
+def stated_refusal(raw: bytes) -> str:
+    """What the decomposer said when it DECLINED, or "".
+
+    🔴 **The planner told us exactly what was wrong and rite threw it away.**
+    Measured on the v0.7.0 gate run: with `spec.paths: []` no cite can resolve,
+    so no plan can satisfy RL-63 — and the local author said so, in valid JSON,
+    twice:
+
+        {"format_version": 1, "ticket": "2", "decomposed": false,
+         "reason": "This project registers no spec units, so no cite can
+                    resolve: every subtask rule requires citing at least one
+                    existing spec unit, and the ticket explicitly forbids
+                    inventing a cite."}
+
+    `plan_document` filters candidates on `"subtasks"`, which a refusal has
+    none of, so it returned `raw` and `parse` reported
+    `Expecting value: line 2 column 5 (char 5)` — a parse error about goose's
+    banner. The one actionable sentence in 5 KB of transcript was replaced by
+    a message about the wrong thing, the operator spent 25 minutes finding it
+    in the captured bytes, and DD-3.3 fed the parse error back to the retry,
+    so the second attempt was told nothing it could act on.
+
+    ⚠ A refusal is not a failure of the model and not an infrastructure fault.
+    It is the decomposer reporting that the task as posed cannot be done, and
+    it belongs in the problem a person reads.
+
+    ⚠ The LAST one wins, as in `plan_document`, and for the same reason.
+    """
+    import json as _json
+
+    text = (raw or b"").decode("utf-8", "replace")
+    said = ""
+    depth, start = 0, -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                body = text[start : i + 1]
+                start = -1
+                try:
+                    parsed = _json.loads(body)
+                except ValueError:
+                    continue
+                if not isinstance(parsed, dict) or "subtasks" in parsed:
+                    continue
+                # Declined, and said why. `decomposed: false` is the shape the
+                # prompt asks for; a bare `reason` with no plan is accepted too,
+                # because refusing to read a stated reason is the defect here.
+                if parsed.get("decomposed") is False or (
+                    "reason" in parsed and "ticket" in parsed
+                ):
+                    reason = str(parsed.get("reason") or "").strip()
+                    if reason:
+                        said = reason
+    return said
 
 
 def rejected_dir(root: Path, manager: str) -> Path:

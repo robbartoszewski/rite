@@ -208,11 +208,25 @@ def _pipeline_state(root: Path) -> str:
         # decomposition written, an approach recorded and an approval are all
         # this Manager's pipeline progress too, and all live here.
         digest = hashlib.sha256()
+        contributed = False
         for path in sorted(where.iterdir()):
             if not path.is_file() or path.suffix == ".lock":
                 continue
             digest.update(path.name.encode("utf-8"))
             digest.update(path.read_bytes())
-        return digest.hexdigest()
+            contributed = True
+        # 🔴 **AN EMPTY DIRECTORY MUST HASH LIKE NO DIRECTORY, and it did not.**
+        # `plan_state.layer(root)` CREATES this directory the first time
+        # anything READS it, and a supervisor cycle reads it whether or not
+        # there is any pipeline work — so an empty digest (`e3b0c442…`, sha256
+        # of nothing) came back where `""` had come back the cycle before. The
+        # footprint moved on the first cycle of EVERY Manager, which made a
+        # genuinely idle session look productive exactly once and woke the
+        # no-progress guard's hold.
+        #
+        # Measured: `test_no_progress_guard` and seven of its neighbours went
+        # red on this, and they are the tests that own the rule — reading the
+        # plan state is not advancing it.
+        return digest.hexdigest() if contributed else ""
     except OSError:
         return ""

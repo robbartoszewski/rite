@@ -60,7 +60,10 @@ class TestTheWorkerRequestOutcomeReachesTheManager:
         _request(tmp_path)
         said: list[str] = []
         sup._honour_worker_requests(
-            tmp_path, OWNER, lambda raw: (False, "refused: no module"), said.append
+            tmp_path,
+            OWNER,
+            lambda raw, manager="": (False, "refused: no module"),
+            said.append,
         )
         (note,) = mailbox.read(tmp_path, OWNER, mailbox.INBOX)
         assert note.text.startswith(telling.header("a Worker you asked for"))
@@ -75,7 +78,7 @@ class TestTheWorkerRequestOutcomeReachesTheManager:
         sup._honour_worker_requests(
             tmp_path,
             OWNER,
-            lambda raw: (True, "started Worker 'alpha' on ticket KAN-7"),
+            lambda raw, manager="": (True, "started Worker 'alpha' on ticket KAN-7"),
             lambda _m: None,
         )
         (note,) = mailbox.read(tmp_path, OWNER, mailbox.INBOX)
@@ -96,7 +99,7 @@ class TestOneWriterOneSpelling:
         mailbox.send(tmp_path, OWNER, mailbox.INBOX, chores.note("chore KAN-12 filed"))
         _request(tmp_path)
         sup._honour_worker_requests(
-            tmp_path, OWNER, lambda raw: (False, "refused"), lambda _m: None
+            tmp_path, OWNER, lambda raw, manager="": (False, "refused"), lambda _m: None
         )
         routed = routing._note(SECONDARY, "DIED WITH ROUTED WORK OUTSTANDING", "x")
         mailbox.send(tmp_path, OWNER, mailbox.INBOX, routed)

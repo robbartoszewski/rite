@@ -254,7 +254,7 @@ class TestTheSupervisorSaysWhatHappened:
         sup._honour_worker_requests(
             tmp_path,
             "lead",
-            lambda raw: (False, "refusing: no such Worker"),
+            lambda raw, manager="": (False, "refusing: no such Worker"),
             said.append,
         )
         assert said and "refusing" in said[0]
@@ -274,7 +274,7 @@ class TestTheSupervisorSaysWhatHappened:
 
         said: list[str] = []
         sup._honour_worker_requests(
-            tmp_path, "lead", lambda raw: (True, "x"), said.append
+            tmp_path, "lead", lambda raw, manager="": (True, "x"), said.append
         )
         assert said == []
 

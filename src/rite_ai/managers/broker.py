@@ -587,7 +587,17 @@ def for_project(root: Path, board: object = None, capacity: int | None = None):
         # name is a real one) and BEFORE `honour` starts anything. Here rather
         # than inside `decide` so the policy function stays testable without a
         # project on disk, which is what its own docstring asks for.
-        why = _may_own_worker(Path(root), manager, decision.request.worker)
+        # ⚠ **Only when a MANAGER asked.** `manager` is "" for a caller that is
+        # not one — a direct broker call, and the capacity tests' own `handle`.
+        # Gating ownership on an empty name gates on nothing: it asked whether
+        # '' may drive a Worker, failed closed on an unreadable manifest, and
+        # turned "is this project at its Worker limit?" into a refusal about
+        # authorship. There is no ownership question without an owner.
+        why = (
+            _may_own_worker(Path(root), manager, decision.request.worker)
+            if manager
+            else ""
+        )
         if why:
             return False, f"refusing to start a Worker: {why}"
         return honour(Path(root), decision.request)

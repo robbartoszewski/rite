@@ -146,7 +146,10 @@ def test_a_planted_link_in_requests_is_set_aside_and_told(project, victim):
     (where / "1.json").symlink_to(victim)
     told: list[str] = []
     supervise._honour_worker_requests(
-        project, "lead", lambda raw: (False, "the request is not JSON"), told.append
+        project,
+        "lead",
+        lambda raw, manager="": (False, "the request is not JSON"),
+        told.append,
     )
     assert any("not JSON" in line for line in told), told
     assert broker.queued(project, "lead") is False
