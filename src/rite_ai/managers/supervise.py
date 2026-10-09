@@ -2366,7 +2366,7 @@ def _supervise(
                         _stalled_wake(root, manager, verdict, stalled, clock),
                         clock,
                     ),
-                    idle_line=_idle_line(manager, stalled, clock),
+                    idle_line=_idle_line(manager, stalled, clock, root),
                 )
                 if stopped is not None:
                     return stopped
@@ -3175,6 +3175,31 @@ def _board_brief(answer) -> str:
         )
         + ".",
     ]
+    # 🔴 **WHAT each ready ticket is, not only which (SCRUM-102).** The line
+    # above names ids, and a Manager's sandbox has no board credential by
+    # design — so this brief was the only thing it had, and ids alone are not
+    # work anyone can take. Measured on the v0.7.0 gate run: `lead` reported
+    # "no titles, no descriptions, nothing to quote in a refinement round",
+    # asked a question that reached nobody, and parked for two hours with both
+    # tickets open; it claimed them three minutes after being told their titles
+    # by hand. SCRUM-80 removed the id/count ambiguity in this same line and
+    # was not enough, because the Manager still could not read what it named.
+    #
+    # ⚠ Absent for an injected verdict that carries no titles, and the brief
+    # falls back to the id list rather than inventing anything.
+    titles = getattr(answer, "ready_titles", None) or {}
+    said = [(i, titles.get(i, "")) for i in ready if titles.get(i, "").strip()]
+    if said:
+        lines += ["", "What they are, as rite read them outside your sandbox:", ""]
+        lines += [f"- `{i}` — {what}" for i, what in said]
+        lines.append("")
+        lines.append(
+            "⚠ That is the board's own title and body. The agreed DEFINITION OF "
+            "DONE is not here and does not exist yet: it is pinned when a Worker "
+            "starts on the ticket, by the spec/definition session. So refine or "
+            "route from this, and do not quote a definition of done you have not "
+            "been given."
+        )
     for ticket, why in blocked:
         lines.append(f"Blocked: {ticket} — {why}")
     lines.append(
@@ -3407,7 +3432,65 @@ def _quiet_board_line(manager: str, clock):
     return line
 
 
-def _idle_line(manager: str, stalled: _Stalled, clock):
+def _unanswered_question_note(root, manager: str) -> str:
+    """Why this hold may be a BLOCKED Manager rather than an idle one, or "".
+
+    ⚠ Private, like `_board_brief` beside it: its only caller is `_idle_line`
+    in this file, and `test_no_dead_wiring` indexes PUBLIC functions and asks
+    for a caller outside their own file. A public name with no such caller is
+    what that guard exists to catch, and exempting it would be a standing
+    claim that something will call it later. Nothing will.
+
+    🔴 **The two read identically, and one of them is a dead end
+    (SCRUM-102).** "Session N made no progress … another would repeat it" is
+    what an operator sees whether the Manager wandered or is waiting on an
+    answer nobody will give. Measured on the v0.7.0 gate run: `lead` asked for
+    the ticket content it could not read, the question was routed to a Slack DM
+    with no `slack.owner_user` and no bot token — which `rite doctor` reports —
+    and it waited two hours with both tickets open. The hold said nothing about
+    a question, and nothing said the question could not arrive.
+
+    So the hold names an outstanding question, and says plainly when its
+    channel cannot deliver one. Never raises: a hold that cannot read the
+    ledger still has to print its line."""
+    try:
+        from rite_ai.managers import pending
+
+        waiting = [i for i in pending.items(root, manager) if not i.confirmed]
+    except Exception:  # noqa: BLE001 - the line still has to be said
+        return ""
+    if not waiting:
+        return ""
+    first = waiting[0].first.strip()
+    note = (
+        f" ⚠ {manager!r} has {len(waiting)} message(s) waiting on YOU, the "
+        f"oldest being {first[:120]!r}"
+    )
+    try:
+        from rite_ai.config.models import ProjectConfig
+        from rite_ai.config.parse import ParseError, parse_config
+
+        parsed = parse_config(root / ".rite" / "config.yaml")
+        config = parsed if not isinstance(parsed, ParseError) else ProjectConfig()
+        slack = config.slack
+        reachable = bool(getattr(slack, "owner_user", "") or "") or bool(
+            getattr(config.refinement, "channel", "") or ""
+        )
+    except Exception:  # noqa: BLE001
+        reachable = False
+    if reachable:
+        return note + ". Answering it is what moves this on."
+    # 🔴 The dead end, said as one.
+    return (
+        note + ". ⚠ **AND IT CAN REACH NOBODY**: questions go to "
+        f"`refinement.questions_to` and this project names no Slack user or "
+        f"channel, so nothing delivered it and nothing will. THIS IS WHY "
+        f"NOTHING IS MOVING. Read it with `rite replies {manager}` and answer "
+        f'with `rite message {manager} "…"`, or configure Slack.'
+    )
+
+
+def _idle_line(manager: str, stalled: _Stalled, clock, root=None):
     """`idle_line` for the guard's wait: said when it begins, then every
     `STILL_WAITING_EVERY` with a ⚠, as a routed wait is."""
     from rite_ai.managers.routing import STILL_WAITING_EVERY
@@ -3420,6 +3503,7 @@ def _idle_line(manager: str, stalled: _Stalled, clock):
             return ""
         mark = "" if said["at"] is None else "⚠ still: "
         said["at"] = now
+        blocked = _unanswered_question_note(root, manager) if root is not None else ""
         return (
             f"{mark}{manager!r} is waiting, spending nothing: session "
             f"{stalled.number} made no progress (no claim, route, Worker "
@@ -3429,7 +3513,7 @@ def _idle_line(manager: str, stalled: _Stalled, clock):
             "so another would repeat it. Mail wakes it (a Slack DM, a routed "
             f"reply, `rite message {manager} …`), and so does a change on the "
             f"board (read every {int(BOARD_RECHECK_SECONDS)}s) or in the "
-            "project. The window still ends the run."
+            "project. The window still ends the run." + blocked
         )
 
     return line

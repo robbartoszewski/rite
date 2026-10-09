@@ -112,6 +112,24 @@ class Cycle:
     workers: list[WorkerView] = field(default_factory=list)
     ready: list[str] = field(default_factory=list)
     """Ticket ids waiting on the board."""
+    ready_titles: dict[str, str] = field(default_factory=dict)
+    """ticket id -> its title and the opening of its body, for the brief.
+
+    🔴 **An id alone is not work a Manager can take (SCRUM-102).** The board
+    brief named ready tickets by id, and a Manager's sandbox has no board
+    credential by design — so it was handed numbers for work it could not
+    read. Measured on the v0.7.0 gate run: `lead` asked "the board summary I
+    was given ("ready: 1, 2") is all I have: no titles, no descriptions,
+    nothing to quote in a refinement round", and parked for two hours with
+    both tickets open. It claimed them within three minutes of being told
+    their titles by hand.
+
+    ⚠ **Title and body, NOT the agreed definition of done.** The DoD is
+    pinned at the Worker's start by the spec/definition session
+    (`gates.definition_snapshot`: "no Worker … is recorded as started on 1,
+    so there is no definition of done pinned to it"), so for a ready and
+    unstarted ticket there is none to carry. The body is what the board has
+    and what the Manager said it lacked."""
     finished: list[str] = field(default_factory=list)
     """Tickets the board still labels as work but whose status says the work
     is over (SCRUM-73), one line each. Said out loud and otherwise inert:
@@ -609,6 +627,12 @@ def _ready(
     work = admit.admit(
         states, open_max=limits.open_max, start_per_session=limits.start_per_session
     )
+    # The headline of each READY ticket, from the read that just happened —
+    # not a second board call. See `Cycle.ready_titles`.
+    ready_ids = set(work.ready)
+    cycle.ready_titles = {
+        ticket.id: _headline(ticket) for ticket, _ in states if ticket.id in ready_ids
+    }
     if refiner is None or owner == refiner:
         cycle.refinement = work
         last = rounds.last_session(root, owner) if owner else None
@@ -621,6 +645,25 @@ def _ready(
             owed=events.owed,
         )
     return work.ready
+
+
+HEADLINE_BODY_CHARS = 400
+
+
+def _headline(ticket) -> str:
+    """One ticket's title and the opening of its body, for the board brief.
+
+    Capped, because a brief is read every cycle and a long board would crowd
+    out the instruction around it. The cap is on the BODY only: a title is
+    short by nature and truncating it is how an id became ambiguous in the
+    first place."""
+    title = str(getattr(ticket, "title", "") or "").strip()
+    body = " ".join(str(getattr(ticket, "description", "") or "").split())
+    if len(body) > HEADLINE_BODY_CHARS:
+        body = body[:HEADLINE_BODY_CHARS].rstrip() + " […]"
+    if title and body:
+        return f"{title} — {body}"
+    return title or body
 
 
 def _refiner_of(project, refiner: str | None) -> str:

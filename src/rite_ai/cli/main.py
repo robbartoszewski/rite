@@ -9584,12 +9584,17 @@ class LoopAnswer(str):
     read_at: float | None = None
     """When the board read behind this verdict came back, so a stop on
     `idle` can say what it saw AS OF when (DF4)."""
+    ready_titles: dict | None = None
+    """What each ready ticket IS, carried to the board brief (SCRUM-102).
+    Not part of `basis`: the brief's wording must not change what F22's
+    no-progress guard compares, which is the set of ready ids."""
 
     @classmethod
     def of(cls, cycle) -> "LoopAnswer":
         answer = cls(str(getattr(cycle, "verdict", "unknown") or "unknown"))
         answer.detail = str(getattr(cycle, "detail", "") or "")
         answer.read_at = getattr(cycle, "board_read_at", None)
+        answer.ready_titles = dict(getattr(cycle, "ready_titles", {}) or {})
         answer.basis = (
             str(answer),
             tuple(sorted(getattr(cycle, "ready", []) or [])),

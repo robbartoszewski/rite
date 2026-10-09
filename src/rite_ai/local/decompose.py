@@ -276,11 +276,24 @@ def _write_pending(state, candidate, author, version, result, warnings):
     # plan could then be approved by the Manager that wrote it while the check
     # meant to prevent exactly that still passed. Caught by a surviving
     # mutation, not by review.
+    # ⚠ **`returns` CARRIES ACROSS THE RE-AUTHOR (SCRUM-101).** `candidate` is
+    # fresh model output, so it arrives with `returns=()` — and this replaced
+    # the standing plan wholesale, discarding the rejection history. That is
+    # not only a lost record: RL-10's bound is COUNTED from `plan.returns`
+    # (`plan_review`), so every re-author reset the count and `MAX_RETURNS` was
+    # never reached. The reject → re-author cycle was unbounded, held back only
+    # by RL-69's convergence on IDENTICAL reasons — which a reviewer raising a
+    # new objection each round does not trigger.
+    #
+    # Measured on the v0.7.0 gate run: the stage log records `rejected` and the
+    # approved plan's `returns` is `[]`.
+    standing = getattr(dec.read(state, candidate.ticket), "plan", None)
     plan = replace(
         candidate,
         approval=dec.PENDING,
         approved_by="",
         decomposed_by=author,
+        returns=tuple(getattr(standing, "returns", ()) or ()),
     )
     written = dec.write(state, plan, version)
     if type(written).__name__ != "Written":
