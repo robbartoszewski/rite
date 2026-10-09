@@ -97,8 +97,8 @@ export const GAPS: StatusRow[] = [
   },
   {
     label: 'caveat',
-    lead: 'An all-local fleet is slow.',
-    text: 'It runs, at hours per ticket on a single 32&nbsp;GB GPU. The mixed shape — Claude planning and reviewing, a local GPU implementing — is what is worth running today.',
+    lead: 'A fleet with no Claude in it is slow.',
+    text: 'All-local — including the first claim and kickoff — runs at hours per ticket on a single 32&nbsp;GB GPU. The supported shape is a Claude Manager with a Claude Worker and a GPU Worker; that is what to start from.',
   },
   {
     label: 'not-proven',
