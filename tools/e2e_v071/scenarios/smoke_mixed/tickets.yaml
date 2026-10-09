@@ -1,0 +1,24 @@
+# One ticket. Its test ships FAILING in the app, so "delivered" cannot be
+# satisfied by doing nothing — rite runs this verify itself (RL-7) and the
+# recomposition verify runs it again (RL-8).
+
+tickets:
+  - key: gpu-slug
+    for_worker: gpu1
+    title: "Add tally.slugify(text) (GPU Worker)"
+    body: |
+      For the GPU Worker. Add `slugify(text)`: lowercase, keep [a-z0-9], join
+      words with single dashes, strip leading/trailing dashes.
+    definition_of_done:
+      - "slugify('  Rent  for March! ') == 'rent-for-march'; slugify('!!!') == ''"
+    verify: "uv run pytest -q tests/test_slug.py"
+
+  - key: claude-format
+    for_worker: alpha
+    title: "Add tally.format_amount(value) (Claude Worker)"
+    body: |
+      Add `format_amount(value: Decimal) -> str` returning two decimal places
+      with thousands separators.
+    definition_of_done:
+      - "format_amount(Decimal('1234.5')) == '1,234.50'; format_amount(Decimal('-0.5')) == '-0.50'"
+    verify: "uv run pytest -q tests/test_format.py"

@@ -72,6 +72,13 @@ class Subtask:
     attempts: int = 0
     branch: str = ""
     last_failure: str = ""
+    stops: int = 0
+    """How many turns for this subtask were STOPPED on a timeout (SCRUM-103).
+
+    Separate from `attempts`, which counts work. A stop is not work and not a
+    verdict on the work: it is the turn being cut off. Bounded by
+    `step.MAX_STOPS` so a subtask that hangs every time still stops the
+    ticket, which is what `goose_agent` rightly worried about."""
 
 
 @dataclass(frozen=True)
@@ -172,6 +179,7 @@ def render(plan: Decomposition) -> bytes:
                 "attempts": s.attempts,
                 "branch": s.branch,
                 "last_failure": s.last_failure,
+                "stops": s.stops,
             }
             for s in plan.subtasks
         ],
@@ -212,6 +220,11 @@ def parse(raw: bytes) -> Decomposition | str:
         attempts = item.get("attempts", 0)
         if type(attempts) is not int or attempts < 0:
             return f"{item['id']}: attempts must be a whole number"
+        # Defaults to 0 for a plan written before SCRUM-103, which is what
+        # makes this field readable in both directions.
+        stops = item.get("stops", 0)
+        if type(stops) is not int or stops < 0:
+            return f"{item['id']}: stops must be a whole number"
         subtasks.append(
             Subtask(
                 id=str(item["id"]),
@@ -223,6 +236,7 @@ def parse(raw: bytes) -> Decomposition | str:
                 attempts=attempts,
                 branch=str(item.get("branch", "")),
                 last_failure=str(item.get("last_failure", "")),
+                stops=stops,
             )
         )
     return Decomposition(

@@ -56,7 +56,10 @@ class TestTheSupervisorQueuesAFullSlot:
     def test_a_full_slot_puts_the_request_back_and_says_so_once(self, root):
         _ask(root)
         said: list[str] = []
-        full = lambda raw: (NO_SLOT, "the schedule allows 1 Worker(s) right now")  # noqa: E731
+        full = lambda raw, manager="": (  # noqa: E731
+            NO_SLOT,
+            "the schedule allows 1 Worker(s) right now",
+        )
         sup._honour_worker_requests(root, OWNER, full, said.append)
         assert queued(root, OWNER), "the request was dropped"
         assert [raw for _, raw in take_requests(root, OWNER)] == [RAW]
@@ -70,10 +73,13 @@ class TestTheSupervisorQueuesAFullSlot:
     def test_when_the_slot_frees_it_starts_and_says_started(self, root):
         _ask(root)
         sup._honour_worker_requests(
-            root, OWNER, lambda raw: (NO_SLOT, "full"), [].append
+            root, OWNER, lambda raw, manager="": (NO_SLOT, "full"), [].append
         )
         sup._honour_worker_requests(
-            root, OWNER, lambda raw: (True, "started Worker 'w1'"), [].append
+            root,
+            OWNER,
+            lambda raw, manager="": (True, "started Worker 'w1'"),
+            [].append,
         )
         assert not queued(root, OWNER)
         assert any(t.startswith("Started:") or "Started:" in t for t in _told(root))
@@ -81,7 +87,10 @@ class TestTheSupervisorQueuesAFullSlot:
     def test_control_a_real_refusal_is_still_final(self, root):
         _ask(root)
         sup._honour_worker_requests(
-            root, OWNER, lambda raw: (False, "'worker' is not declared"), [].append
+            root,
+            OWNER,
+            lambda raw, manager="": (False, "'worker' is not declared"),
+            [].append,
         )
         assert not queued(root, OWNER)
         assert any("NOT started" in t for t in _told(root))

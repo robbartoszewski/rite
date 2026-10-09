@@ -114,11 +114,23 @@ def test_every_assigned_ticket_is_asked_about(tmp_path):
     assert tickets == ["KAN-1", "KAN-3"]
 
 
-def test_it_asks_the_board_for_this_managers_tickets(tmp_path):
+def test_it_asks_the_board_for_the_scheduled_backlog(tmp_path):
+    """The BACKLOG's question, the one `loop._ready` asks.
+
+    🔴 This test asserted `assignee == "lead"` and so pinned SCRUM-79 in place
+    rather than catching it. Corrected to `label == "lead"` it pinned the
+    SECOND wrong answer: a Manager's name on a ticket is how the Owner routes
+    work to another Manager, and in a single-Owner project it is on nothing —
+    which the e2e's real-board pickup guard caught before a fleet ran on it.
+    The per-Manager scoping is `_local_worker_holds`'s, and it is exact.
+    """
+    from rite_ai.coordination.ticket_labels import SCHEDULED
+
     board = _Board({"KAN-1": REFINED})
     with _answer(board), _held():
         _local_tier_tickets(tmp_path, board, "lead")
-    assert getattr(board.listed[0], "assignee", None) == "lead"
+    assert getattr(board.listed[0], "label", None) == SCHEDULED
+    assert getattr(board.listed[0], "assignee", None) is None
 
 
 # ── a board that cannot answer ───────────────────────────────────────────────

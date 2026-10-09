@@ -184,7 +184,7 @@ def test_a_managers_refused_request_tells_it_the_state_and_the_remedy(
     _honour_worker_requests(
         tmp_path,
         "lead",
-        lambda raw: broker_mod.honour(tmp_path, request),
+        lambda raw, manager="": broker_mod.honour(tmp_path, request),
         lambda _line: None,
     )
     (note,) = read(tmp_path, "lead", INBOX)

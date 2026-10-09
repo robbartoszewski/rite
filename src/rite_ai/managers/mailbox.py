@@ -248,6 +248,41 @@ def mailbox_dir(root: Path, manager: str, box: str) -> Path:
     return mail_root(root, manager) / box
 
 
+def out_of_reach(root: Path, manager: str, box: str) -> str:
+    """Why this box cannot be read at all, or "" — never "it is empty".
+
+    ⚠ **BECAUSE EVERY OTHER READ HERE SWALLOWS A DENIAL.** `read` and
+    `_cursor` are called from the supervisor's wait loop and must not take a
+    run down over one file, so both treat an unreadable box as no messages.
+    That is right for the loop and wrong for a person: `rite replies` would
+    say "nothing new" about a box it could not open, which reads as "the
+    Manager has said nothing" and is the one answer that is never true.
+
+    A Manager's profile grants its OWN mail root by exact path and no other
+    (`enclosure`), so from inside one Manager's boundary another's outbox is
+    denied BY DESIGN. One `listdir` tells denial from absence: a missing box
+    is readable-and-empty (ENOENT), and a denied one — the box itself or any
+    directory above it — is EACCES on the walk.
+    """
+    path = mailbox_dir(root, manager, box)
+    try:
+        os.listdir(path)
+    except PermissionError:
+        return (
+            f"cannot read {manager!r}'s outbox: {path} is not readable by this "
+            f"session. A Manager's mailbox is granted to that Manager alone, so "
+            f"from inside another Manager's sandbox this is refused by design, "
+            f"and nothing was read — this is NOT 'it has said nothing'. A "
+            f"person reads it on the host, outside any sandbox. A Manager does "
+            f"not read another's outbox at all: route work with `rite route "
+            f"{manager} --ticket <id>` and the reply arrives in your OWN inbox, "
+            f"delivered at the start of your next turn."
+        )
+    except OSError:
+        return ""
+    return ""
+
+
 def _mark_project(root: Path, manager: str) -> None:
     """Record which project a checkout key is, for the person reading
     `_mail_home()`. Best effort: inside the boundary it is refused, and

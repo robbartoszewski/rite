@@ -70,20 +70,39 @@ class Footprint:
     """Stop, destroy and restart requests not yet honoured (SCRUM-59): asking
     rite to change a Worker is coordination too. Not `status` or `gate`,
     which only look (`lifecycle.acting_requests`)."""
+    pipeline: str = ""
+    """The staged pipeline's persisted stages, hashed (SCRUM-72).
+
+    🔴 **Without this a fleet whose only remaining work is the pipeline
+    starves.** The local tier runs once per CYCLE, and a cycle that advanced
+    nothing else was judged idle — so the no-progress guard parked the
+    supervisor, and the parked supervisor never opened the cycle the pipeline
+    needed. Measured 2026-10-09 on the v0.7.0 gate fleet: the cycle that
+    accepted subtask s1 was itself judged idle, `lead` parked with "session 8
+    made no progress", and the ticket sat at `stepping` with s2 planned and
+    nothing left that could ever move it.
+
+    It is exactly the failure this module's own docstring warns of — "a false
+    'it did nothing' is a stalled Manager" — and advancing a stage is as much
+    this Manager's progress as taking a claim.
+
+    ⚠ Read from the plan-state home, which is OUTSIDE the project, so it is
+    not caught by `project` above; and it moves only when a stage moves, never
+    every cycle, so it does not make an idle session look productive."""
 
     def differs_from(self, other: Footprint) -> list[str]:
-        """The names of the parts that changed, in a fixed order."""
+        """The names of the parts that changed, in declaration order.
+
+        ⚠ **Taken from the dataclass, not a list repeated here.** This held a
+        hardcoded tuple of the seven parts, so `pipeline` was added to the
+        class, computed by `footprint`, included in COORDINATION — and never
+        compared. The footprint moved and `differs_from` returned `[]`, which
+        is the precise shape of a fix that does nothing. Declaration order is
+        fixed, so the ordering this promised is unchanged.
+        """
         return [
             name
-            for name in (
-                "project",
-                "claims",
-                "outbox",
-                "routes",
-                "requests",
-                "deliveries",
-                "lifecycle",
-            )
+            for name in self.__dataclass_fields__
             if getattr(self, name) != getattr(other, name)
         ]
 
@@ -162,4 +181,52 @@ def footprint(root: Path, manager: str) -> Footprint:
         requests=_own_names(root, manager, REQUESTS_DIRNAME, own_dir.STATE),
         deliveries=_own_names(root, manager, DELIVERIES_DIRNAME, own_dir.STATE),
         lifecycle=acting_requests(root, manager),
+        pipeline=_pipeline_state(root),
     )
+
+
+def _pipeline_state(root: Path) -> str:
+    """Every persisted stage record, hashed. "" when there are none or it
+    cannot be read — an unreadable one must not read as a change on every
+    cycle, which would make every session look productive."""
+    import hashlib
+
+    try:
+        from rite_ai.local.plan_state import home
+
+        where = home(root)
+        if not where.is_dir():
+            return ""
+        # ⚠ **One `state.json`, not a file per ticket.** `LocalStateLayer`
+        # keeps every key in a single document, and `stage.key_for` returns
+        # `stages/<ticket>.json` as a KEY INSIDE it, not a path. The first
+        # version of this globbed `stages/*.json`, found nothing, and returned
+        # "" for every pipeline — so the fix it was making did not work and the
+        # test that proved it was the only reason anyone found out.
+        #
+        # Hashing the whole document is right rather than merely convenient: a
+        # decomposition written, an approach recorded and an approval are all
+        # this Manager's pipeline progress too, and all live here.
+        digest = hashlib.sha256()
+        contributed = False
+        for path in sorted(where.iterdir()):
+            if not path.is_file() or path.suffix == ".lock":
+                continue
+            digest.update(path.name.encode("utf-8"))
+            digest.update(path.read_bytes())
+            contributed = True
+        # 🔴 **AN EMPTY DIRECTORY MUST HASH LIKE NO DIRECTORY, and it did not.**
+        # `plan_state.layer(root)` CREATES this directory the first time
+        # anything READS it, and a supervisor cycle reads it whether or not
+        # there is any pipeline work — so an empty digest (`e3b0c442…`, sha256
+        # of nothing) came back where `""` had come back the cycle before. The
+        # footprint moved on the first cycle of EVERY Manager, which made a
+        # genuinely idle session look productive exactly once and woke the
+        # no-progress guard's hold.
+        #
+        # Measured: `test_no_progress_guard` and seven of its neighbours went
+        # red on this, and they are the tests that own the rule — reading the
+        # plan state is not advancing it.
+        return digest.hexdigest() if contributed else ""
+    except OSError:
+        return ""

@@ -261,7 +261,7 @@ class TestWhoseWorker:
 
         assert _ask("start", "alpha", "--ticket", "RT-12").exit_code == 0
         supervise._honour_worker_requests(
-            project, "lead", lambda raw: (True, "started"), lambda s: None
+            project, "lead", lambda raw, manager="": (True, "started"), lambda s: None
         )
         assert lifecycle._owner_of(project, "alpha") == "lead"
         assert broker.take_requests(project, "lead") == []
@@ -720,7 +720,7 @@ def test_the_older_request_directories_are_not_followed_either(
     said: list[str] = []
     if run == "start":
         supervise._honour_worker_requests(
-            project, "lead", lambda raw: pytest.fail("started"), said.append
+            project, "lead", lambda raw, manager="": pytest.fail("started"), said.append
         )
         assert broker.queued(project, "lead") is False
     elif run == "deliver":

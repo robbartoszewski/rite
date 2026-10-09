@@ -79,6 +79,27 @@ class AgentReport:
     claimed_success: bool
     summary: str = ""
     touched: tuple[str, ...] = ()
+    stopped: bool = False
+    """The turn was STOPPED on a timeout: it ran, and it did not finish.
+
+    🔴 **A third category, because two were not enough (SCRUM-103).** The
+    existing pair is "the turn happened" and "the turn did not happen"
+    (`infrastructure_fault`). A timeout is neither: it ran, it had every
+    chance to edit files, and it was cut off. `goose_agent` argued that
+    correctly and drew the only conclusion the two categories allowed —
+    treat it as a real turn — which records the subtask as FAILED, and
+    `step.next_subtask` makes a FAILED subtask terminal by design. So an
+    infrastructure condition permanently killed a subtask.
+
+    ⚠ **It is NOT `infrastructure_fault`, and that distinction is the whole
+    point.** `goose_agent`'s own note rejected marking it one, for a sound
+    reason: "a subtask that hangs every time would be retried for ever".
+    This field exists so a stop can be retried a BOUNDED number of times
+    (`step.MAX_STOPS`) instead of either being terminal or being free.
+
+    Measured on the v0.7.0 gate run `smoke_mixed-20261009T063320Z`: both
+    subtasks of ticket 1 were stopped at 1200s with nothing committed, each
+    terminal on its first stop, and the ticket could not complete."""
     infrastructure_fault: bool = False
     """The turn did not happen: an endpoint that was down, a model that is not
     there, a binary that is missing.
@@ -97,12 +118,46 @@ class AgentReport:
 class VerifyResult:
     passed: bool
     output: str = ""
+    ran: bool = True
+    """Whether the command EXECUTED at all, as distinct from passing (RL-47).
+
+    🔴 **It was missing, and the distinction was being made and then lost.**
+    `runners.SubprocessVerifier` catches `FileNotFoundError` deliberately —
+    "the tool is not installed on this machine… saying the verify failed would
+    spend an attempt proving a machine was set up wrong" — and then had
+    nowhere to put that fact: the result was `(passed=False, output=<prose>)`,
+    so every consumer saw a failing verify. RL-7 spent an attempt against
+    `MAX_ATTEMPTS`, and RL-8 reported "the composed work FAILS its agreed
+    verify" and returned the plan to review, spending an RL-10 return that no
+    plan change can satisfy.
+
+    Measured on the v0.7.0 gate run (SCRUM-95): a definition of done agreed as
+    `python -m pytest -q tests/test_format.py` cannot run at all on a
+    uv-managed host, where there is no bare `python`. That is the natural
+    phrasing, not an exotic one.
+
+    ⚠ A TIMEOUT is `ran=True`. It executed and was stopped; treating it as a
+    non-attempt would retry a hanging verify without bound.
+    """
 
 
 @dataclass(frozen=True)
 class Commit:
     sha: str = ""
     error: str = ""
+    nothing_to_commit: bool = False
+    """There was no commit to make, as distinct from a commit that FAILED.
+
+    🔴 **SCRUM-96: this was the difference between a delivered ticket and a
+    wedged one.** `run_subtask` reads `if commit.error:` and leaves the
+    subtask at `VERIFIED`, which has no successor — the local tier then
+    reports "neither runnable nor finished" every cycle, for ever. Measured on
+    the v0.7.0 gate run: s2 asked for a test that s1's work had already made
+    pass, so the agent correctly changed nothing, the verify passed, and the
+    ticket could never finish.
+
+    A subtask whose required outcome already holds is a PASS. RL-7's rule is
+    that the verify alone decides, and the verify said yes."""
     note: str = ""
     """Something a reader must know about HOW this commit was made, when the
     commit itself succeeded. Carried onto the outcome's notes.
@@ -150,6 +205,10 @@ class Outcome:
     notes: list[str] = field(default_factory=list)
     infrastructure_fault: bool = False
     """Carried from the agent's report, for `counts_as_attempt`."""
+    stopped: bool = False
+    """The agent's turn was stopped on a timeout — see `AgentReport.stopped`.
+    `step` decides what that does to the subtask's status, because the bound
+    on stops lives with the record that persists them."""
 
     @property
     def counts_as_attempt(self) -> bool:
@@ -253,6 +312,7 @@ def run_subtask(
         )
         outcome.agent_claimed = report.claimed_success
         outcome.infrastructure_fault = report.infrastructure_fault
+        outcome.stopped = report.stopped
         if report.summary:
             # ⚠ KEPT, because discarding it hid the first real failure. The
             # agent refused before its turn and said why in `summary`; the
@@ -268,11 +328,22 @@ def run_subtask(
         result = verifier.run(subtask.verify, workspace)
         outcome.verified = result.passed
         outcome.verify_output = result.output
-        outcome.claim_disagreed_with_verify = report.claimed_success != result.passed
+        # ⚠ A verify that never RAN contradicts nobody. The agent is not shown
+        # to have been wrong by a command that did not execute, so the honesty
+        # signal is not raised — and the run is not an attempt (RL-47), which
+        # is what keeps `MAX_ATTEMPTS` from retiring a subtask over a missing
+        # interpreter. `or`, not `=`: the agent's own fault still stands.
+        ran = getattr(result, "ran", True)
+        outcome.claim_disagreed_with_verify = ran and (
+            report.claimed_success != result.passed
+        )
+        if not ran:
+            outcome.infrastructure_fault = True
+            outcome.notes.append(f"the verify never ran: {result.output}")
 
         if not result.passed:
             outcome.status = FAILED
-            if report.claimed_success:
+            if report.claimed_success and ran:
                 outcome.notes.append(
                     "the agent reported success and the verify disagreed — kept "
                     "as evidence about the agent, not about the work"
@@ -284,6 +355,24 @@ def run_subtask(
             outcome.branch,
             f"{plan.ticket} {subtask.id}: {subtask.intent}",
         )
+        if commit.error and getattr(commit, "nothing_to_commit", False):
+            # ⚠ ACCEPTED WITH NO COMMIT, and said in those words (SCRUM-96).
+            # There is nothing for composition to apply because the required
+            # state already held — which is not the same as work that could
+            # not be committed, and the two were indistinguishable here.
+            #
+            # The guard this does NOT weaken: an ACCEPTED subtask carrying an
+            # empty sha used to mean "the commit was made and rite lost the
+            # reference", which composition would apply blindly. That case
+            # still fails below, because it arrives with `error` set and
+            # `nothing_to_commit` false.
+            outcome.status = ACCEPTED
+            outcome.notes.append(
+                f"accepted with no commit: {commit.error}. The verify passed, "
+                "so the subtask's required state holds; there is nothing for "
+                "composition to apply"
+            )
+            return outcome
         if commit.error:
             # Verified work that could not be committed is not accepted: the
             # branch is what composition later applies, and there is nothing

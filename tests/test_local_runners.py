@@ -144,15 +144,26 @@ def test_work_outside_the_scope_is_left_behind(tmp_path):
 
 
 def test_edits_only_outside_the_scope_say_exactly_that(tmp_path):
-    """The distinction a step review needs: the agent changed things, just not
-    the things it was asked to."""
+    """The distinction a step review needs: nothing in scope changed, and the
+    workspace is not clean either.
+
+    ⚠ It used to end "— the agent edited outside it", naming nothing. SCRUM-96
+    measured what that costs: on the gate run the only unclean paths were
+    `__pycache__`, `*.egg-info` and `uv.lock`, every one a product of rite
+    running the verify, so rite asserted the agent had edited outside its
+    scope and gave a reader no way to check it. The message now says what it
+    SAW, and this asserts that rather than the sentence."""
     repo = _repo(tmp_path)
     (repo / "elsewhere.py").write_text("not asked for\n")
 
     commit = GitCommitter(scope=("parser.py",)).commit_to_branch(str(repo), "b", "m")
 
     assert not commit.sha
-    assert "edited outside it" in commit.error
+    assert "elsewhere.py" in commit.error, "the path it saw is named"
+    assert "parser.py" in commit.error, "and the scope it looked in"
+    assert "not clean elsewhere" in commit.error
+    # Distinguished from a commit that FAILED: there was none to make.
+    assert commit.nothing_to_commit is True
 
 
 def test_a_partly_finished_subtask_still_commits_what_exists(tmp_path):

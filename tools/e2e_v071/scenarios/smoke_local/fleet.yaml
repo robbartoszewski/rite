@@ -1,0 +1,179 @@
+# The happy-path SMOKE (Robert, 2026-10-08): one trivial ticket, no induced
+# failures, four transitions asserted. Narrower than the full gate on purpose —
+# the point is to SEE the local/GPU loop work end to end in this fleet shape.
+#
+# Nothing is mocked: a real board, a real model through a real Ollama endpoint,
+# a real sandbox, a real commit, and rite's own verify deciding it.
+
+project_name: e2e-smoke-local
+
+scenario:
+  name: smoke_local
+  title: "Smoke B — local Manager + GPU Worker (pure-local)"
+  smoke: true                  # run until the one ticket is delivered; no inductions
+  pipeline_tickets: [gpu-slug]
+  kill_worker: ""              # no kill, and so no stale-claim restart either
+  # The app has NO git remote, which is the only shape in which a Worker's
+  # sandbox starts without a GitHub token of its own
+  # (`sandbox.start_problem`: a non-GitHub remote is refused outright,
+  # "if not remotes: return None"). Delivery therefore lands as a branch in the
+  # project's own checkout. The host collects a Worker's branch either way
+  # (OL5b), so what this skips is the push and the PR, not the handover.
+  board_only_repo: true
+  publish_strategy: commit
+  checks:
+    - dispatched_to_the_gpu_worker
+    - went_through_the_review_gates
+    - delivered_and_handed_back
+    - the_manager_picked_it_up
+
+github:
+  owner: robbartoszewski
+  repo_prefix: rite-smoke-smoke_local-
+  # No GitHub App: see the full scenarios. Delivery here does not open a PR.
+
+managers:
+  # 🔴 **The author is the 17 GB model because the smaller ones cannot drive
+  # step 1.** Measured 2026-10-08, one session each and consistent:
+  #   qwen3.8 (17 GB)  claimed the ticket, requested the Worker, owned it, and
+  #                    (once SCRUM-88 stopped discarding it) emitted a VALID
+  #                    two-subtask plan.
+  #   qwen3:14b        wrote placeholder refinement questions for an already
+  #                    refined ticket, then a malformed command; no progress.
+  #   qwen3:8b         "session 1 made no progress (no claim, route, Worker
+  #                    request or delivery)"; rite parked it.
+  # So a faster author is not available, and a full delivery is a multi-hour
+  # run. The approver is the SMALLEST different model (RL-6), to make each
+  # author/approver hand-off reload as little as possible.
+  # 🔴 **Duties, not presets, and the split is load-bearing.** rite decides
+  # three things independently, and a smoke needs them to line up:
+  #   - the Manager that STARTS a Worker owns it ("'gpu1' was started for
+  #     Manager 'lead', not you; only the Manager that asked for a Worker may
+  #     stop, restart, destroy, inspect or gate it");
+  #   - only the DECOMPOSE duty holder can author a plan;
+  #   - the local tier only drives a ticket held by a local Worker OF THE
+  #     MANAGER whose cycle is running.
+  # So the Worker's starter, its owner and its plan author must be ONE Manager.
+  # The shipped presets put `decompose` on `planner` and `plan_review` on
+  # `lead`, and `lead` is the one with `board`/`route` that picks the ticket up
+  # and asks for the Worker — so out of the box no Manager could advance the
+  # ticket past `defined`. Measured twice: once with the Worker under `lead`
+  # ("'lead' does not hold the decompose duty"), once with it moved to
+  # `planner` (the ownership refusal above).
+  #
+  # RL-6/DD-3.5 still hold: the plan's approver is a DIFFERENT Manager, on a
+  # different engine. It simply is not the author.
+  - name: lead
+    # The APPROVER only (RL-6: a different model from the author). The small
+    # model is enough to review a plan, and keeping it small is what holds the
+    # pair near ~22 GB resident instead of the 46 GB the 32b split needed.
+    duties: "plan-review,integrate"
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3:8b"
+    agent: goose
+    context_window: 32768
+  - name: planner              # writes the GPU Worker's plan (decompose)
+    duties: "decide,board,route,spec,decompose,execute"
+    engine: "local:large"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+workers:
+  - name: gpu1
+    # 🔴 **Reports to `planner`, not `lead`, and that is load-bearing.** The
+    # local tier's driver only sees a ticket held by a local Worker of the
+    # Manager whose cycle is running (`_local_worker_holds`), and only the
+    # DECOMPOSE duty holder can author a plan. With the Worker under `lead`:
+    # lead saw the ticket and could not decompose it ("'lead' does not hold
+    # the decompose duty — holders: planner"), planner held the duty and never
+    # saw the ticket. No Manager could advance it past `defined`.
+    #
+    # RL-6 forces two Managers (author != approver, on different models), so
+    # the Worker necessarily sits with one of them — and it has to sit with the
+    # AUTHOR. `lead` can still start it: `broker.decide`'s `known_worker` asks
+    # whether a Worker exists, not whose it is.
+    manager: planner
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+heartbeat:
+  interval_minutes: 2
+  stall_threshold: 2
+
+run:
+  # 🔴 **Sized from a measurement, not a guess.** One plan-authoring turn by
+  # the 17 GB model took 45 minutes on this machine and then failed with an
+  # infrastructure fault (a localhost "network error", the signature of the
+  # model being evicted mid-generation). The pipeline needs a turn per stage —
+  # author, approach, step, recompose — plus the approver's own cycles, and a
+  # 120-minute window could not fit the first stage twice. Robert, 2026-10-08:
+  # the point is to SEE pure-local deliver once, so the window is long enough
+  # that slowness cannot be mistaken for a wall.
+  deadline_minutes: 480
+  poll_seconds: 20
+  start_planner_loop: true
+  # The approver's model and the author's do not both fit on this GPU,
+  # so it is not started until there is a plan for it to review.
+  defer_idle_managers: true
+  timezone: Europe/Warsaw
+
+yoloai:
+  patched_bin_dir: ~/.local/opt/yoloai-0.11.0-broad
+  patched_version_marker: "-broad"
+
+fixed_build:
+  min_version: "0.7.0a10"
+  probes:
+    - {fix: SCRUM-72, argv: [plan, --help], expect: "approve"}
+    - {fix: SCRUM-64, python: "import rite_ai.managers.reconcile"}
+    # 🔴 **BEHAVIOUR, NOT A VERSION STRING.** The version above did not change
+    # across any of these fixes, and `uv tool install --force` does not rebuild
+    # when it is unchanged — so a run can report the right version while running
+    # the old code. Each probe below asserts the FIX, and every one of them was
+    # found by the run that these replace.
+    - fix: SCRUM-93
+      python: |
+        from rite_ai.managers.supervise import COORDINATION
+        from rite_ai.managers.progress import Footprint
+        import inspect
+        assert "pipeline" in COORDINATION, "advancing the pipeline is not progress"
+        assert "pipeline" in Footprint.__dataclass_fields__
+        assert "__dataclass_fields__" in inspect.getsource(Footprint.differs_from), \
+            "differs_from still compares a hardcoded field list"
+    - fix: SCRUM-95
+      python: |
+        import tempfile
+        from rite_ai.local.harness import VerifyResult
+        from rite_ai.local.runners import SubprocessVerifier
+        assert "ran" in VerifyResult.__dataclass_fields__
+        r = SubprocessVerifier().run("rite-no-such-program --version", tempfile.mkdtemp())
+        assert r.ran is False and r.passed is False, "a missing program reads as a failure"
+    - fix: SCRUM-96
+      python: |
+        import inspect
+        from rite_ai.local.harness import Commit, run_subtask
+        from rite_ai.local import loop
+        assert "nothing_to_commit" in Commit.__dataclass_fields__
+        assert "accepted with no commit" in inspect.getsource(run_subtask)
+        assert 'getattr(result, "lines", ())' in inspect.getsource(loop.advance_ticket), \
+            "the loop still drops the step's own reason"
+    - fix: SCRUM-92-remedy
+      python: |
+        import inspect
+        from rite_ai.spec.slice import unit_text
+        assert "rite spec index" in inspect.getsource(unit_text)
+    - fix: SCRUM-83
+      python: |
+        from rite_ai.config.managers import ManagerRole
+        from rite_ai.local.decompose import author_for
+        roles = [ManagerRole(name="lead", engine="claude", preset="lead"),
+                 ManagerRole(name="planner", engine="local:large", duties=("decompose",))]
+        assert author_for(roles, "lead") == ("planner", ""), "the owner does not delegate"
+        who, why = author_for([roles[0]], "lead")
+        assert who == "" and "no Manager in this project does" in why

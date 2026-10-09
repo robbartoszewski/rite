@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title><style>
+:root{--bg:#fff;--fg:#1d1d1f;--mute:#6e6e73;--line:#e5e5ea;--card:#f5f5f7;--ok:#1a7f37;--bad:#cf222e;--wait:#9a6700;--ind:#8250df;--acc:#0969da}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#f2f2f7;--mute:#a1a1a6;--line:#2c2c2e;--card:#1c1c1e;--ok:#3fb950;--bad:#f85149;--wait:#d29922;--ind:#a371f7;--acc:#58a6ff}}
+*{box-sizing:border-box}body{background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif;margin:0;padding:20px 16px;max-width:1200px;margin:auto}
+h1{font-size:20px;margin:0 0 4px}.mute{color:var(--mute)}
+.verdict{font-weight:700}.PASS{color:var(--ok)}.FAIL{color:var(--bad)}.INCOMPLETE,.PENDING{color:var(--wait)}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0;padding:10px;background:var(--card);border-radius:10px}
+button,select{font:inherit;padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+input[type=range]{flex:1;min-width:160px}
+.wrap{overflow-x:auto}table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:center;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+td.done{color:var(--ok);font-weight:600}td.await{color:var(--wait)}td.na{color:var(--mute)}
+.grid{display:grid;grid-template-columns:1fr;gap:16px}@media(min-width:900px){.grid{grid-template-columns:3fr 2fr}}
+.card{background:var(--card);border-radius:10px;padding:12px}
+.tl{max-height:420px;overflow-y:auto;font:12.5px/1.5 ui-monospace,monospace}
+.tl div{padding:2px 0;border-bottom:1px dashed var(--line)}.tl .induce{color:var(--ind)}.tl .delivered{color:var(--ok)}.tl .refused{color:var(--bad)}.tl .owner{color:var(--acc)}
+.res td{text-align:left;white-space:normal}</style></head><body>
+<h1 id="title"></h1><div class="mute" id="sub"></div>
+<div class="bar"><button id="play">▶ Play</button>
+<select id="speed"><option value="30">×30</option><option value="120" selected>×120</option><option value="600">×600</option></select>
+<input id="scrub" type="range" min="0" max="1000" value="1000"><span id="clock" class="mute"></span></div>
+<div class="card wrap"><table id="pipe"></table>
+<div class="mute" style="margin-top:6px">✔ passed · … awaiting · – not this ticket's path. A stage whose record SCRUM-72 has not defined yet shows “awaiting SCRUM-72”, never ✔.</div></div>
+<div class="grid" style="margin-top:16px"><div class="card"><b>What happened</b><div class="tl" id="tl"></div></div>
+<div class="card"><b>Acceptance checks</b><table class="res" id="res"></table><div style="margin-top:10px"><b>Fleet</b><div id="fleet" class="mute"></div></div></div></div>
+<script>
+const D=__DATA__;const T=D.timeline;const t0=T.length?T[0].at:0;const t1=T.length?T[T.length-1].at:0;
+let cur=t1,timer=null;const $=id=>document.getElementById(id);
+$("title").textContent=D.title;$("sub").innerHTML=`run ${D.run} · verdict <span class="verdict ${D.verdict}">${D.verdict}</span>`;
+$("fleet").innerHTML=[...D.fleet.managers.map(m=>`Manager ${m.name}: ${m.engine} ${m.model}`),...D.fleet.workers.map(w=>`Worker ${w.name}: ${w.engine} ${w.model}`)].join("<br>");
+$("res").innerHTML=D.results.map(r=>`<tr><td class="${r.status}">${r.status}</td><td>${esc(r.criterion||r.name)}<div class="mute">${esc(r.evidence)}</div></td></tr>`).join("")||"<tr><td class='mute'>not judged yet</td></tr>";
+function esc(s){return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
+function cell(c){if(c.at&&c.at<=cur)return["done","✔"];if(c.state==="logged")return["done","✔"];if(c.state&&c.state.startsWith("awaiting"))return["await","awaiting SCRUM-72"];if(c.state&&c.state.startsWith("n/a"))return["na","–"];return["","·"]}
+function draw(){const head="<tr><th>Ticket</th>"+D.columns.map(c=>`<th title="${esc(c.proof)}">${c.label}</th>`).join("")+"</tr>";
+$("pipe").innerHTML=head+Object.entries(D.pipeline).map(([k,row])=>"<tr><td>"+k+"</td>"+D.columns.map(c=>{const[cls,txt]=cell(row[c.id]||{});const pr=row[c.id]&&row[c.id].pr&&row[c.id].at<=cur?` <a href="${row[c.id].pr}">PR</a>`:"";return`<td class="${cls}">${txt}${pr}</td>`}).join("")+"</tr>").join("");
+$("tl").innerHTML=T.filter(e=>e.at<=cur).map(e=>`<div class="${e.kind}">+${((e.at-t0)/60).toFixed(1)}m [${esc(e.lane)}] ${esc(e.text)}</div>`).join("");$("tl").scrollTop=1e9;
+$("clock").textContent=`+${((cur-t0)/60).toFixed(1)} of ${((t1-t0)/60).toFixed(1)} min`;$("scrub").value=t1>t0?Math.round(1000*(cur-t0)/(t1-t0)):1000}
+$("scrub").oninput=e=>{cur=t0+(t1-t0)*e.target.value/1000;draw()};
+$("play").onclick=()=>{if(timer){clearInterval(timer);timer=null;$("play").textContent="▶ Play";return}if(cur>=t1)cur=t0;$("play").textContent="❚❚ Pause";
+timer=setInterval(()=>{cur+=0.1*Number($("speed").value);if(cur>=t1){cur=t1;clearInterval(timer);timer=null;$("play").textContent="▶ Play"}draw()},100)};
+draw();
+</script></body></html>

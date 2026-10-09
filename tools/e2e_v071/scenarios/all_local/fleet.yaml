@@ -1,0 +1,134 @@
+# Scenario 2 — ALL-LOCAL: no Claude anywhere. Local (Ollama) Managers drive a GPU Worker.
+#
+# ⚠ TWO local Managers, on two DIFFERENT models, not one. A plan must be approved by a
+# Manager that did not write it (DD-3.5) and runs a different model from its author
+# (RL-6, `engine_identity` compares the model for a local engine). One local Manager that
+# both writes and approves cannot pass the review stage at all. So:
+#   planner  writes the plans   (qwen3.8, the same model as the GPU Worker)
+#   lead     approves them      (qwen3-32b, a different model) and is the Owner
+# Memory: the two models are ~17 GB + ~20 GB on a 48 GB machine. Ollama may swap them;
+# turns get slower, nothing breaks. One GPU Worker for the same reason (add gpu2 to try two).
+
+project_name: e2e-local
+
+scenario:
+  name: all_local
+  title: "All-local fleet — local lead + local planner + GPU Worker (no Claude)"
+  pipeline_tickets: [gpu-slug, gpu-total]
+  owner_ticket: null             # see README: a local Worker's question path is unproven
+  decoy_ticket: done-decoy
+  kill_worker: gpu1
+  restart_manager: lead
+  checks:
+    - every_ticket_delivered
+    - pipeline_tickets_worked_by_gpu_workers
+    - plans_written_by_planner_approved_by_owner
+    - plans_approved_through_inbox
+    - killed_sandbox_recovered
+    - recovery_went_through_manager
+    - restart_releases_stale_claim
+    - restart_did_not_escalate
+    - induced_failures_journaled
+    - done_ticket_never_offered
+    - pipeline_stages_in_order
+    - no_forbidden_host_commands
+    - no_claude_in_the_fleet
+
+github:
+  owner: robbartoszewski
+  repo_prefix: rite-e2e-local-
+  app_id: "5156044"
+  installation_id: "167030531"
+
+managers:
+  - name: lead            # the Owner (route) and the plan reviewer (plan-review); local
+    preset: lead
+    engine: "local:large"
+    endpoint: "http://localhost:11434"
+    model: "qwen3-32b-ctx32k:latest"
+    agent: goose
+    context_window: 32768
+  - name: planner         # writes the GPU Worker's plans (decompose); local, another model
+    preset: planner
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+workers:
+  - name: gpu1
+    manager: lead
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+heartbeat:
+  interval_minutes: 2
+  stall_threshold: 2
+
+run:
+  deadline_minutes: 360        # local turns take minutes each; two models may swap
+  poll_seconds: 30
+  start_planner_loop: true
+  kill_after_minutes: 5
+  timezone: Europe/Warsaw
+
+yoloai:
+  patched_bin_dir: ~/.local/opt/yoloai-0.11.0-broad
+  patched_version_marker: "-broad"
+
+fixed_build:
+  min_version: ""
+  probes:
+    - {fix: SCRUM-69, argv: [reply, --help], expect: "--from-file"}
+    - {fix: SCRUM-59, argv: [request, --help], expect: "restart"}
+    - {fix: SCRUM-72, argv: [plan, --help], expect: "approve"}
+    - {fix: SCRUM-64, python: "import rite_ai.managers.reconcile"}
+    # 🔴 **BEHAVIOUR, NOT A VERSION STRING.** The version above did not change
+    # across any of these fixes, and `uv tool install --force` does not rebuild
+    # when it is unchanged — so a run can report the right version while running
+    # the old code. Each probe below asserts the FIX, and every one of them was
+    # found by the run that these replace.
+    - fix: SCRUM-93
+      python: |
+        from rite_ai.managers.supervise import COORDINATION
+        from rite_ai.managers.progress import Footprint
+        import inspect
+        assert "pipeline" in COORDINATION, "advancing the pipeline is not progress"
+        assert "pipeline" in Footprint.__dataclass_fields__
+        assert "__dataclass_fields__" in inspect.getsource(Footprint.differs_from), \
+            "differs_from still compares a hardcoded field list"
+    - fix: SCRUM-95
+      python: |
+        import tempfile
+        from rite_ai.local.harness import VerifyResult
+        from rite_ai.local.runners import SubprocessVerifier
+        assert "ran" in VerifyResult.__dataclass_fields__
+        r = SubprocessVerifier().run("rite-no-such-program --version", tempfile.mkdtemp())
+        assert r.ran is False and r.passed is False, "a missing program reads as a failure"
+    - fix: SCRUM-96
+      python: |
+        import inspect
+        from rite_ai.local.harness import Commit, run_subtask
+        from rite_ai.local import loop
+        assert "nothing_to_commit" in Commit.__dataclass_fields__
+        assert "accepted with no commit" in inspect.getsource(run_subtask)
+        assert 'getattr(result, "lines", ())' in inspect.getsource(loop.advance_ticket), \
+            "the loop still drops the step's own reason"
+    - fix: SCRUM-92-remedy
+      python: |
+        import inspect
+        from rite_ai.spec.slice import unit_text
+        assert "rite spec index" in inspect.getsource(unit_text)
+    - fix: SCRUM-83
+      python: |
+        from rite_ai.config.managers import ManagerRole
+        from rite_ai.local.decompose import author_for
+        roles = [ManagerRole(name="lead", engine="claude", preset="lead"),
+                 ManagerRole(name="planner", engine="local:large", duties=("decompose",))]
+        assert author_for(roles, "lead") == ("planner", ""), "the owner does not delegate"
+        who, why = author_for([roles[0]], "lead")
+        assert who == "" and "no Manager in this project does" in why

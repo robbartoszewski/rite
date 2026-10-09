@@ -435,7 +435,7 @@ def test_a_queued_worker_starts_when_a_slot_frees_with_no_manager_session(
     (where / "1.json").write_text(json.dumps({"worker": "w1", "ticket": "RT-1"}))
     asked: list[float] = []
 
-    def broker(raw):
+    def broker(raw, manager=""):
         asked.append(patient["t"])
         if patient["t"] < 2 * 3600:
             return NO_SLOT, "the schedule allows 1 Worker(s) right now"

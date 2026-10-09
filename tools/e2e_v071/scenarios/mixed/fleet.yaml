@@ -1,0 +1,140 @@
+# Scenario 1 — MIXED: a Claude Manager drives a GPU Worker (the SCRUM-72 path).
+# The v0.7.1 acceptance gate's fleet as V071_DOGFOOD_FIXES.md §4.2 has it. Everything the
+# harness creates is named from `project_name` + the run id, so nothing it touches can
+# collide with the yoloAI dogfood, Bentora, or any other rite project.
+
+project_name: e2e-mixed
+
+scenario:
+  name: mixed
+  title: "Mixed fleet — Claude lead + local planner + Claude Worker + GPU Worker"
+  # Tickets that must go through the local tier's deterministic pipeline
+  # (spec → refine → approach → review → delivered), shown as swimlanes in the demo.
+  pipeline_tickets: [gpu-slug]
+  owner_ticket: owner-currency   # the ticket whose definition of done needs the Owner
+  decoy_ticket: done-decoy
+  kill_worker: alpha             # whose sandbox is killed mid-ticket
+  restart_manager: lead          # whose supervisor is restarted with stale state
+  checks:
+    - every_ticket_delivered
+    - pipeline_tickets_worked_by_gpu_workers
+    - plans_written_by_planner_approved_by_owner
+    - plans_approved_through_inbox
+    - owner_answer_reached_worker
+    - killed_sandbox_recovered
+    - recovery_went_through_manager
+    - restart_releases_stale_claim
+    - restart_did_not_escalate
+    - induced_failures_journaled
+    - done_ticket_never_offered
+    - pipeline_stages_in_order
+    - no_forbidden_host_commands
+
+github:
+  owner: robbartoszewski
+  # The board (GitHub issues) AND the PR target: rite has no offline board, and
+  # `publish.strategy: pull_request` needs a GitHub origin. One private repo per run,
+  # created only by `harness.py setup --create-repo` (an outward-facing action).
+  repo_prefix: rite-e2e-mixed-
+  # No GitHub App: rite opens PRs with the Worker's own github_token. An App
+  # would have to be installed on each run's new repo by hand, which a
+  # repeatable gate cannot depend on. Set app_id/installation_id here to use one.
+
+managers:
+  - name: lead            # Claude; the Owner (holds `route`) and the plan reviewer (plan-review)
+    preset: lead
+  - name: planner         # writes the GPU Worker's plans (decompose); §3.3/§3.3b
+    preset: planner
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+workers:
+  - name: alpha           # the Claude Worker
+    manager: lead
+  - name: gpu1            # the GPU Worker, driven by the local tier under a Claude Manager (SCRUM-72)
+    manager: lead
+    engine: "local:small"
+    endpoint: "http://localhost:11434"
+    model: "qwen3.8:latest"
+    agent: goose
+    context_window: 32768
+
+# Shortened so a stalled Worker is noticed in minutes, not the default 30.
+heartbeat:
+  interval_minutes: 2
+  stall_threshold: 2
+
+run:
+  deadline_minutes: 240        # the whole gate; past it, every unmet check FAILs
+  poll_seconds: 30
+  # Whether `planner` gets its own `rite start`. The plan (§3.3) says this is to be
+  # confirmed while building SCRUM-72: if the supervisor drives the planner's decompose
+  # step itself, set this false. Either way the harness records which it did.
+  start_planner_loop: true
+  kill_after_minutes: 3        # how long the Claude Worker works before its sandbox is killed
+  timezone: Europe/Warsaw
+
+yoloai:
+  # DF16: the Worker sandbox escape through a host tmux socket. The run uses the patched
+  # build ("-broad"), first on PATH; preflight also runs the WRITEUP #35 probe against it.
+  patched_bin_dir: ~/.local/opt/yoloai-0.11.0-broad
+  patched_version_marker: "-broad"
+
+# What the fixed build must offer before `run` will start (no partial fleet against
+# half-built fixes). Each is probed, not assumed. min_version: set it to the RC that
+# carries the merged fixes once it is cut.
+fixed_build:
+  min_version: ""
+  probes:
+    - {fix: SCRUM-69, argv: [reply, --help], expect: "--from-file"}
+    - {fix: SCRUM-59, argv: [request, --help], expect: "restart"}
+    - {fix: SCRUM-72, argv: [plan, --help], expect: "approve"}
+    - {fix: SCRUM-64, python: "import rite_ai.managers.reconcile"}
+    # 🔴 **BEHAVIOUR, NOT A VERSION STRING.** The version above did not change
+    # across any of these fixes, and `uv tool install --force` does not rebuild
+    # when it is unchanged — so a run can report the right version while running
+    # the old code. Each probe below asserts the FIX, and every one of them was
+    # found by the run that these replace.
+    - fix: SCRUM-93
+      python: |
+        from rite_ai.managers.supervise import COORDINATION
+        from rite_ai.managers.progress import Footprint
+        import inspect
+        assert "pipeline" in COORDINATION, "advancing the pipeline is not progress"
+        assert "pipeline" in Footprint.__dataclass_fields__
+        assert "__dataclass_fields__" in inspect.getsource(Footprint.differs_from), \
+            "differs_from still compares a hardcoded field list"
+    - fix: SCRUM-95
+      python: |
+        import tempfile
+        from rite_ai.local.harness import VerifyResult
+        from rite_ai.local.runners import SubprocessVerifier
+        assert "ran" in VerifyResult.__dataclass_fields__
+        r = SubprocessVerifier().run("rite-no-such-program --version", tempfile.mkdtemp())
+        assert r.ran is False and r.passed is False, "a missing program reads as a failure"
+    - fix: SCRUM-96
+      python: |
+        import inspect
+        from rite_ai.local.harness import Commit, run_subtask
+        from rite_ai.local import loop
+        assert "nothing_to_commit" in Commit.__dataclass_fields__
+        assert "accepted with no commit" in inspect.getsource(run_subtask)
+        assert 'getattr(result, "lines", ())' in inspect.getsource(loop.advance_ticket), \
+            "the loop still drops the step's own reason"
+    - fix: SCRUM-92-remedy
+      python: |
+        import inspect
+        from rite_ai.spec.slice import unit_text
+        assert "rite spec index" in inspect.getsource(unit_text)
+    - fix: SCRUM-83
+      python: |
+        from rite_ai.config.managers import ManagerRole
+        from rite_ai.local.decompose import author_for
+        roles = [ManagerRole(name="lead", engine="claude", preset="lead"),
+                 ManagerRole(name="planner", engine="local:large", duties=("decompose",))]
+        assert author_for(roles, "lead") == ("planner", ""), "the owner does not delegate"
+        who, why = author_for([roles[0]], "lead")
+        assert who == "" and "no Manager in this project does" in why

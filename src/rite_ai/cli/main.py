@@ -699,6 +699,69 @@ def _workers_without_github_token(
     return on_github, lacking
 
 
+def _doctor_authored_plan_holder(root: Path, problems: list) -> None:
+    """A Worker whose plan rite must author, and no Manager able to author it.
+
+    🔴 **The failure this catches is a Worker that starts, claims its paths and
+    never gets a subtask.** `rite sandbox start` succeeds, the Worker sits at
+    its prompt, and the staged pipeline never reaches it because no Manager
+    holds `decompose` — so nothing is wrong anywhere a person looks. Measured
+    over an evening of real runs: the fleet reads as healthy and advances
+    nothing, which is exactly the shape the spin guard cannot see.
+
+    ⚠ **Duty and CAPABILITY, never an engine** (SCRUM-83's line). The question
+    asked of each Worker is `needs_authored_plan`; the question asked of the
+    Managers is whether any holds `decompose`. A new provider declares the
+    capability and this check keeps working.
+
+    ⚠ It says the whole remedy, as one command. A check that reports a missing
+    role without the line that creates it is a check that sends a non-power
+    user into `.rite/config.yaml`, which is the UX defect this is part of
+    fixing.
+    """
+    from rite_ai.config.managers import DECOMPOSE, effective_duties
+    from rite_ai.config.parse import parse_config
+    from rite_ai.sandbox import worker_manifest
+
+    config = parse_config(root / ".rite" / "config.yaml")
+    roles = config.coordination.manager_roles
+    declared = len(roles)
+    holders = sorted(
+        r.name for r in roles if DECOMPOSE in effective_duties(r, declared)
+    )
+
+    need = []
+    for path in sorted((root / "workers").glob("*/worker.yml")):
+        name = path.parent.name
+        manifest = worker_manifest(root, name)
+        if manifest is not None and manifest.needs_authored_plan:
+            need.append(name)
+    if not need:
+        return
+
+    if holders:
+        click.echo(
+            f"workers: {_first_few(need)} need rite to author their plans, and "
+            f"{', '.join(holders)} can — the staged pipeline can run"
+        )
+        return
+
+    click.echo(
+        f"workers: {_first_few(need)} need rite to author their plans and NO "
+        "Manager holds the `decompose` duty, so each would start, claim its "
+        "paths and never be given a subtask. Declare a planner — any local "
+        "model will do:\n"
+        "  rite add manager planner --duties decompose --engine local:large \\\n"
+        "    --endpoint http://localhost:11434 --model <your-model> \\\n"
+        "    --agent goose --context-window 32768\n"
+        "  (its model must differ from the approving Manager's, so the plan is "
+        "reviewed by something that does not share its blind spots — RL-6.)"
+    )
+    problems.append(
+        f"no Manager can author plans for {_first_few(need)}, which need one"
+    )
+
+
 def _doctor_worker_github_token(root: Path, modules: list, problems: list) -> None:
     from rite_ai.credentials.store import store_is_readable
 
@@ -1161,6 +1224,15 @@ def _doctor_report(problems: list[str], *, network: bool = False) -> None:
     # a Worker that works and cannot deliver. Dogfood #28: doctor printed
     # `github_token: not set` and counted nothing, and KAN-7's Worker hit
     # `could not read Username`. `rite sandbox start` refuses the same state.
+    # 🔴 OUTSIDE the sandbox condition below, and in its own guard. Whether a
+    # Worker's plan is anybody's to author is a question about DUTIES and the
+    # Worker's own capability (`needs_authored_plan`) — the sandbox has nothing
+    # to do with it, and a project that runs its Workers unsandboxed starves
+    # exactly the same way. It sat inside `if module_sandbox.enabled:` when it
+    # was added, which made the one check that catches a silently-starving
+    # fleet unreachable for the fleets least likely to notice.
+    with _doctor_check("a Manager that can author their plans", problems):
+        _doctor_authored_plan_holder(root, problems)
     if module_sandbox.enabled:
         _doctor_worker_github_token(root, modules, problems)
         # And whether the token that IS there can write, which is the half
@@ -3535,11 +3607,42 @@ def credential_check(name: str) -> None:
     Examples:
       rite credential check jira_token
     """
+    from rite_ai.credentials.services import (
+        SERVICES,
+        canonical_service,
+        service_key,
+    )
     from rite_ai.credentials.store import resolve
 
-    r = resolve(name, _project_credentials())
-    click.echo(f"{name}: {r.describe()}")
-    if not r.found:
+    # 🔴 **SCRUM-82: a SERVICE name is accepted here too, because `set` takes
+    # one.** `rite credential set claude` stores the key `claude_token`, and
+    # this command resolved whatever it was handed as a KEY — so `rite
+    # credential check claude` reported "claude: not set" and advised running
+    # `rite credential set claude`, which the operator had just run. Measured
+    # 2026-10-08, with `list` and `check claude_token` both correctly saying
+    # set: three commands, two vocabularies, and the one that answers
+    # yes-or-no spoke the wrong one.
+    # ⚠ `service_key` and not `f.name`: a Field's `name` is the SUFFIX of the
+    # stored key (its own docstring says `<service>_<name>`), so claude's field
+    # is `token` and the key is `claude_token`. Spelling that join here instead
+    # would be a second definition of where a credential lives — and the first
+    # attempt at this fix did exactly that and reported "token: not set".
+    service = canonical_service(name)
+    keys = (
+        [service_key(service, f.name) for f in SERVICES[service].secrets]
+        if service
+        else [name]
+    )
+    missing = []
+    for key in keys:
+        found = resolve(key, _project_credentials())
+        click.echo(f"{key if key == name else f'{name} -> {key}'}: {found.describe()}")
+        if not found.found:
+            missing.append(key)
+    if missing:
+        # Advise against the FIRST missing key, and report under its name
+        # rather than the service's, so the remedy names something real.
+        name = missing[0]
         # A check that reports failure through exit code 0 is not a check —
         # every script guarding on it proceeds straight into the failure it
         # was written to prevent.
@@ -7909,47 +8012,13 @@ def spec_slice(unit: str, worker: str, depth: int | None) -> None:
         click.echo(str(e), err=True)
         raise SystemExit(2) from e
 
-    # A section's range covers the subsections inside it, and a slice can hold
-    # both. Printed once: a Worker reading the same paragraph twice under two
-    # headings has no way to tell it is one paragraph.
-    shown: set[tuple[str, int]] = set()
-    for unit_id in computed.units + computed.pinned:
-        found = graph.units.get(unit_id)
-        if found is None:
-            continue
-        lines = parsed.lines.get(found.source, [])
-        wanted = [
-            n
-            for n in range(found.start, found.end + 1)
-            if (found.source, n) not in shown
-        ]
-        if not wanted:
-            continue
-        shown.update((found.source, n) for n in wanted)
-        # Printed as the runs actually included, each labelled with its own
-        # range, with the gaps marked. A decision register whose rows are
-        # separate units is printed after those rows, so joining what is left
-        # under the register's full range would show a complete-looking table
-        # with a row missing from the middle — which a Worker would read as
-        # "that decision does not exist".
-        runs: list[list[int]] = []
-        for n in wanted:
-            if runs and n == runs[-1][-1] + 1:
-                runs[-1].append(n)
-            else:
-                runs.append([n])
-        spans = ", ".join(f"{r[0]}" if len(r) == 1 else f"{r[0]}-{r[-1]}" for r in runs)
-        click.echo(f"# {unit_id} ({found.source}:{spans})")
-        for i, run in enumerate(runs):
-            if i:
-                click.echo("# … part of this unit is printed elsewhere …")
-            click.echo("\n".join(lines[n - 1] for n in run).rstrip())
-        if wanted[0] != found.start or wanted[-1] != found.end or len(runs) > 1:
-            click.echo(
-                f"# (this is {unit_id}, lines {found.start}-{found.end}; the "
-                "rest of it is printed elsewhere in this slice)"
-            )
-        click.echo("")
+    # ⚠ Rendered by `slice.render`, which is also what plan-time cite
+    # validation and the Worker's slice use (SCRUM-92). This loop used to live
+    # here, and a second copy of it would be a second answer to "what does this
+    # unit say".
+    from rite_ai.spec.slice import render
+
+    click.echo(render(graph, parsed, computed), nl=False)
     record_retrieval(root, unit, worker=worker, slice_ratio=computed.ratio)
     # On stderr: the slice itself is what a Worker pipes or reads, and a
     # measurement inside it would read as part of the spec.
@@ -9515,12 +9584,17 @@ class LoopAnswer(str):
     read_at: float | None = None
     """When the board read behind this verdict came back, so a stop on
     `idle` can say what it saw AS OF when (DF4)."""
+    ready_titles: dict | None = None
+    """What each ready ticket IS, carried to the board brief (SCRUM-102).
+    Not part of `basis`: the brief's wording must not change what F22's
+    no-progress guard compares, which is the set of ready ids."""
 
     @classmethod
     def of(cls, cycle) -> "LoopAnswer":
         answer = cls(str(getattr(cycle, "verdict", "unknown") or "unknown"))
         answer.detail = str(getattr(cycle, "detail", "") or "")
         answer.read_at = getattr(cycle, "board_read_at", None)
+        answer.ready_titles = dict(getattr(cycle, "ready_titles", {}) or {})
         answer.basis = (
             str(answer),
             tuple(sorted(getattr(cycle, "ready", []) or [])),
@@ -10246,7 +10320,16 @@ def _local_worker_holds(root, manager: str, ticket: str) -> bool:
         worker = _worker_for(Path(root), manager, ticket)
         if not worker:
             return False
-        return bool(getattr(worker_manifest(Path(root), worker), "is_local", False))
+        # ⚠ **The CAPABILITY, not the provider.** This asked `is_local`, which
+        # is a question about which engine a Worker runs; the question the
+        # driver actually has is whether rite must author this Worker's plan.
+        # Same answer today, and the difference is that a new provider declares
+        # the capability instead of this line needing to learn its name
+        # (Robert, 2026-10-08: the Manager/Worker interfaces are to be provider-
+        # and platform-agnostic).
+        return bool(
+            getattr(worker_manifest(Path(root), worker), "needs_authored_plan", False)
+        )
     except Exception:  # noqa: BLE001 - cannot tell is not a reason to drive
         return False
 
@@ -10254,9 +10337,35 @@ def _local_worker_holds(root, manager: str, ticket: str) -> bool:
 def _local_tier_tickets(root, board, manager: str) -> tuple[list[str], str]:
     """(the REFINED tickets assigned to `manager`, or why they could not be read).
 
-    `TicketFilter(assignee=...)` is the board's own question, asked of the board
-    assignment already labels, so a ticket's owner lives in one place rather than
-    two. A `BackendError` is returned rather than raised: a board that cannot be
+    🔴 **SCRUM-79, and it took TWO wrong answers to find the right one.**
+
+    It asked `TicketFilter(assignee=<manager>)` first. A backend's `assignee` is
+    the backend's OWN field — a GitHub login, a JIRA account — and nothing in
+    rite's automated flow puts a Manager's name there (`backend.assign` has one
+    caller, the operator-run `rite board assign`). Measured against a real
+    board: no filter -> ['1'], `assignee='lead'` -> []. The driver found nothing
+    every cycle, silently, and SCRUM-72's headline mixed fleet was wired
+    correctly and never ran.
+
+    ⚠ Then it asked `label=<manager>`, which is no better and was caught by the
+    e2e's own pickup guard before a fleet ran on it. A Manager's NAME on a
+    ticket is how the Owner ROUTES work to another Manager
+    (`coordination.distribution`); it is not how an Owner's own backlog is
+    marked, and a project with one Owner has no such label on anything.
+
+    **The question is the BACKLOG's, and `loop._ready` already asks it:**
+    `label=SCHEDULED`. The per-Manager scoping does not belong in the board read
+    at all — `_local_worker_holds` below is exact about it, because it reads
+    what `rite sandbox start` recorded. Asking the board to scope as well was
+    what produced two wrong spellings of a question that did not need asking.
+
+    ⚠ The suite could not see any of this: every test here used a board whose
+    `list_tickets` ignored `filters`, so every spelling was indistinguishable.
+    `tests/test_the_local_tier_finds_the_tickets_rite_assigned.py` answers the
+    filter, and `tools/e2e_v071/board_pickup.py` asks a REAL board before a
+    fleet starts — which is what caught the second wrong answer.
+
+    A `BackendError` is returned rather than raised: a board that cannot be
     read is a cycle that advanced nothing, not a run that ends.
 
     ⚠ **GATED on REFINED (TR5), and this gate was missing when L-6 was first
@@ -10270,10 +10379,11 @@ def _local_tier_tickets(root, board, manager: str) -> tuple[list[str], str]:
     Owner's to refine (TR2), it is not this Manager's to complain about, and a
     line per unrefined ticket per cycle would bury the local tier's own notes.
     """
+    from rite_ai.coordination.ticket_labels import SCHEDULED
     from rite_ai.refinement import status as refinement_status
     from rite_ai.tickets.interface import BackendError, TicketFilter
 
-    page = board.list_tickets(TicketFilter(assignee=manager))
+    page = board.list_tickets(TicketFilter(label=SCHEDULED))
     if isinstance(page, BackendError):
         return [], page.message
     found = getattr(page, "tickets", page) or []
@@ -10663,7 +10773,37 @@ def _start_a_manager(
     # Manager must not clear or remove the credentials that Manager is using.
     from rite_ai.managers.github_access import hold_run
 
-    run_lock = hold_run(root, role.name)
+    try:
+        run_lock = hold_run(root, role.name)
+    except OSError as e:
+        # 🔴 **A sandbox cannot reach the run lock, and that is deliberate** —
+        # it lives "under no path any profile grants" (`hold_run`'s own
+        # docstring). A Manager that runs `rite start` from inside its own
+        # session therefore got a bare PermissionError traceback out of
+        # `os.chmod`. `hold_run` handles `BlockingIOError` (the lock is held)
+        # and could not handle this (the lock cannot be looked at), though both
+        # mean "not yours to take".
+        #
+        # ⚠ It is NOT reported as `None`, which is what a held lock returns:
+        # that path says "another `rite start` holds its run lock", and here
+        # nothing does. Telling a Manager its own role is already running, when
+        # the truth is that it asked from the wrong side of a boundary, sends
+        # it looking for a process that does not exist.
+        #
+        # Measured 2026-10-08: Manager 'lead' inside its seatbelt sandbox,
+        # PermissionError chmod '~/Library/Application Support/rite/managers/
+        # rite-mgr-…-lead'. It journalled the crash itself.
+        click.echo(
+            f"refusing to start Manager {role.name!r}: its run lock could not "
+            f"be reached ({type(e).__name__}). That directory sits outside "
+            "every sandbox grant on purpose, so this is what `rite start` "
+            "looks like from INSIDE a Manager's or Worker's sandbox — a "
+            "sandbox cannot start a Manager, and nothing was changed. If you "
+            "are a Manager orienting yourself, use `rite status`, `rite board "
+            "list` or `rite handover show` instead.",
+            err=True,
+        )
+        raise SystemExit(1) from e
     if run_lock is None:
         click.echo(
             f"refusing to start Manager {role.name!r}: another `rite start` "
@@ -10981,6 +11121,7 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         action_label,
         full_warning,
         mark_read,
+        out_of_reach,
         prune,
         unread,
     )
@@ -10998,6 +11139,16 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         click.echo(
             f"no Manager named {manager_name!r} in this project — {known}", err=True
         )
+        raise SystemExit(1)
+    # ⚠ BEFORE the read, because the read cannot fail: `mailbox.read` treats
+    # an unreadable box as no messages, deliberately, so that one bad file
+    # cannot end a supervised run. Asked about a box this session may not
+    # open, it would answer "nothing new from 'planner'" — which a person
+    # reads as "it has said nothing". Reproduced: from inside `lead`'s
+    # boundary, `rite replies planner` is denied at every step.
+    blocked = out_of_reach(root, manager_name, OUTBOX)
+    if blocked:
+        click.echo(blocked, err=True)
         raise SystemExit(1)
     try:
         waiting_for_reader = unread(root, manager_name, OUTBOX, reader)

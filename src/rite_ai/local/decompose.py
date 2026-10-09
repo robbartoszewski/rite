@@ -92,6 +92,16 @@ class DecomposeResult:
     problem: str = ""
     """Why nothing was even attempted — a misconfiguration or an unreachable
     agent, not a rejected plan."""
+    author: str = ""
+    """WHO authored the plan, which under SCRUM-83's delegation is not the
+    Manager that drove the call.
+
+    🔴 It was not reported, so `loop` had nothing to say but the driver's name
+    and said "decomposed by lead" on the line above "plan review asked of
+    lead". The plan state is attributed correctly — `_write_pending` takes the
+    author — but a person auditing RL-6 from the LOG would read a Manager
+    reviewing its own plan, which is the one thing RL-6 forbids. Seen in the
+    v0.7.0 gate run's own log, where `planner` authored and `lead` approved."""
     lines: list[str] = field(default_factory=list)
 
 
@@ -119,12 +129,17 @@ def decompose_ticket(
             result.problem = problem
             return result
     holders = _decompose_holders(roles)
-    if manager not in holders:
-        result.problem = (
-            f"{manager!r} does not hold the decompose duty, so it cannot author a "
-            f"plan — holders: {', '.join(sorted(holders)) or 'none'}"
-        )
+    # SCRUM-83 refined: the driving Manager authors when it holds the duty, and
+    # otherwise DELEGATES to the one Manager that does.
+    author, problem = author_for(roles, manager)
+    if problem:
+        result.problem = problem
         return result
+    if author != manager:
+        result.lines.append(
+            f"{manager!r} holds no authoring duty, so the plan is authored by "
+            f"{author!r}, which does (SCRUM-83 delegation)"
+        )
 
     if state is None:
         from rite_ai.local.plan_state import layer
@@ -148,12 +163,15 @@ def decompose_ticket(
     version = read.version
 
     if proposer is None:
-        proposer, problem = _proposer_for(roles, manager)
+        # ⚠ The AUTHOR's engine, not the driver's: a delegated plan is written
+        # by the model whose role holds the duty.
+        proposer, problem = _proposer_for(roles, author)
         if problem:
             result.problem = problem
             return result
 
-    base_prompt = _prompt_for(ticket, ticket_text)
+    result.author = author
+    base_prompt = _prompt_for(ticket, ticket_text, available_units(root))
     previous: tuple[str, ...] | None = None
     addendum = ""
 
@@ -169,9 +187,26 @@ def decompose_ticket(
             return result
 
         result.attempts += 1
-        parsed = dec.parse(proposal.bytes)
+        # SCRUM-88: the agent's stdout is a transcript; the plan is inside it.
+        bytes_for_parse = plan_document(proposal.bytes)
+        parsed = dec.parse(bytes_for_parse)
         if isinstance(parsed, str):
-            reasons: tuple[str, ...] = (f"the bytes are not a decomposition: {parsed}",)
+            # ⚠ A STATED REFUSAL IS NOT A PARSE ERROR. See `stated_refusal`:
+            # the author can report that the task as posed cannot be done, and
+            # that sentence is what a person needs — not a message about where
+            # goose's banner stops being JSON. The parse message is kept after
+            # it, because the bytes are still not a plan and a reader must be
+            # able to tell a refusal from a mangled one.
+            declined = stated_refusal(proposal.bytes)
+            reasons: tuple[str, ...] = (
+                (
+                    f"the decomposer DECLINED rather than failing — it reports: "
+                    f"{declined}",
+                    f"(its output is also not a decomposition: {parsed})",
+                )
+                if declined
+                else (f"the bytes are not a decomposition: {parsed}",)
+            )
         else:
             # The ticket identity AND the author are rite's, never the model's.
             # The author is the Manager rite ASKED, not whoever the model named
@@ -180,7 +215,10 @@ def decompose_ticket(
             # that names someone would misdirect RL-6's independence check once
             # `produced_by` is wired. Filling it here — the same way `ticket` is
             # filled — is what lets a prompt-compliant plan be written at all.
-            candidate = replace(parsed, ticket=ticket, decomposed_by=manager)
+            # ⚠ `decomposed_by` is the AUTHOR, which under delegation is not
+            # the driver. RL-6 compares the author with the approver, so
+            # recording the driver here would compare the wrong pair.
+            candidate = replace(parsed, ticket=ticket, decomposed_by=author)
             problems = candidate_problems(
                 candidate,
                 root=root,
@@ -190,11 +228,20 @@ def decompose_ticket(
             )
             if problems.ok:
                 return _write_pending(
-                    state, candidate, manager, version, result, problems.warnings
+                    state, candidate, author, version, result, problems.warnings
                 )
             reasons = problems.refusals
 
         result.reasons = reasons
+        # 🔴 SCRUM-87: the model's own output, kept beside the refusal. Written
+        # for EVERY refused attempt, not only a parse failure — a candidate
+        # refused by validation is just as hard to argue with when nobody can
+        # see it.
+        kept = keep_rejected(
+            root, manager, ticket, result.attempts, reasons, proposal.bytes
+        )
+        if kept:
+            result.lines.append(f"the refused candidate was kept at {kept}")
         # RL-69 — identical reasons mean the loop has converged on failure.
         if previous is not None and reasons == previous:
             result.converged_early = True
@@ -216,15 +263,37 @@ def decompose_ticket(
     return result
 
 
-def _write_pending(state, candidate, manager, version, result, warnings):
+def _write_pending(state, candidate, author, version, result, warnings):
     """Write the valid candidate as a PENDING plan and never as APPROVED."""
-    # `candidate.decomposed_by` is already the Manager rite asked (set before
-    # validation); pinned again here so the author recorded is never the model's.
+    # `candidate.decomposed_by` is already the AUTHOR rite asked (set before
+    # validation); pinned again here so the author recorded is never the
+    # model's.
+    #
+    # ⚠ **The AUTHOR, not the driving Manager.** This parameter was `manager`
+    # and re-pinned the driver here, which silently undid SCRUM-83's delegation
+    # one line after it was applied: a plan written by the delegate was filed
+    # as the driver's. RL-6 compares `decomposed_by` with the approver, so a
+    # plan could then be approved by the Manager that wrote it while the check
+    # meant to prevent exactly that still passed. Caught by a surviving
+    # mutation, not by review.
+    # ⚠ **`returns` CARRIES ACROSS THE RE-AUTHOR (SCRUM-101).** `candidate` is
+    # fresh model output, so it arrives with `returns=()` — and this replaced
+    # the standing plan wholesale, discarding the rejection history. That is
+    # not only a lost record: RL-10's bound is COUNTED from `plan.returns`
+    # (`plan_review`), so every re-author reset the count and `MAX_RETURNS` was
+    # never reached. The reject → re-author cycle was unbounded, held back only
+    # by RL-69's convergence on IDENTICAL reasons — which a reviewer raising a
+    # new objection each round does not trigger.
+    #
+    # Measured on the v0.7.0 gate run: the stage log records `rejected` and the
+    # approved plan's `returns` is `[]`.
+    standing = getattr(dec.read(state, candidate.ticket), "plan", None)
     plan = replace(
         candidate,
         approval=dec.PENDING,
         approved_by="",
-        decomposed_by=manager,
+        decomposed_by=author,
+        returns=tuple(getattr(standing, "returns", ()) or ()),
     )
     written = dec.write(state, plan, version)
     if type(written).__name__ != "Written":
@@ -249,9 +318,261 @@ def _roles_for(root: Path):
     return parsed.coordination.manager_roles, ""
 
 
+REJECTED_DIRNAME = "rejected-plans"
+"""Where a refused candidate's own bytes are kept, under the Manager's state
+directory. ⚠ **Not the journal**: `test_nothing_in_rite_reads_the_journal`
+forbids any module outside `journal.py` from even locating that, and these are
+not journal entries — they are an artefact a person opens when a plan would not
+parse."""
+
+MAX_KEPT_BYTES = 64 * 1024
+"""Enough to see what the model did, capped so a runaway turn cannot fill a
+disk. A truncated capture says so in the file."""
+
+
+def plan_document(raw: bytes) -> bytes:
+    """The decomposition inside an agent's output, or `raw` unchanged.
+
+    🔴 **SCRUM-88, and it was never a model-capability problem.** `_propose`
+    returns the WHOLE of the agent's stdout, and for goose that is an
+    interactive transcript: an ASCII-art banner, a `▸ tree` / `▸ shell` trace
+    per tool call, and every command's output. `parse` was handed all 58 KB of
+    it and said `Expecting value: line 2 column 5 (char 5)` — which is exactly
+    where `__( O)>` sits on line 2 of goose's banner.
+
+    Measured 2026-10-08: a 17 GB local author emitted a completely valid
+    two-subtask plan, with real verifies it had checked fail today, inside a
+    ```json fence at the end of its transcript. rite threw it away and the
+    ticket escalated. Nothing was wrong with the model.
+
+    ⚠ **A fenced block is preferred, and the LAST decomposition-shaped
+    candidate wins.** A transcript legitimately contains other JSON — this one
+    carried `.rite/events.jsonl` lines (`{"at": ..., "event":
+    "sandbox-started", "ticket": "1", ...}`) that `cat`-ing a file put there —
+    so "the last balanced object" alone would pick an event. Candidates are
+    filtered to ones that look like a decomposition, and the last is taken
+    because an agent that revises its answer leaves the earlier attempt above.
+
+    ⚠ **`raw` is returned unchanged when nothing qualifies**, so a genuinely
+    unparseable output still produces `parse`'s own message about the real
+    bytes rather than a tidier lie about a slice of them.
+    """
+    import json as _json
+    import re as _re
+
+    text = (raw or b"").decode("utf-8", "replace")
+    candidates: list[str] = []
+    # Fenced blocks first: ```json ... ``` or a bare ``` ... ```
+    for m in _re.finditer(r"```(?:json)?\s*\n(.*?)```", text, _re.S):
+        candidates.append(m.group(1))
+    # Then every balanced top-level object, for an agent that fenced nothing.
+    depth, start = 0, -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidates.append(text[start : i + 1])
+                start = -1
+
+    chosen = ""
+    for candidate in candidates:
+        body = candidate.strip()
+        if not body.startswith("{"):
+            continue
+        try:
+            parsed = _json.loads(body)
+        except ValueError:
+            continue
+        # It must LOOK like a decomposition; a transcript's other JSON must not
+        # be mistaken for one.
+        if isinstance(parsed, dict) and "subtasks" in parsed:
+            chosen = body
+    return chosen.encode("utf-8") if chosen else (raw or b"")
+
+
+def stated_refusal(raw: bytes) -> str:
+    """What the decomposer said when it DECLINED, or "".
+
+    🔴 **The planner told us exactly what was wrong and rite threw it away.**
+    Measured on the v0.7.0 gate run: with `spec.paths: []` no cite can resolve,
+    so no plan can satisfy RL-63 — and the local author said so, in valid JSON,
+    twice:
+
+        {"format_version": 1, "ticket": "2", "decomposed": false,
+         "reason": "This project registers no spec units, so no cite can
+                    resolve: every subtask rule requires citing at least one
+                    existing spec unit, and the ticket explicitly forbids
+                    inventing a cite."}
+
+    `plan_document` filters candidates on `"subtasks"`, which a refusal has
+    none of, so it returned `raw` and `parse` reported
+    `Expecting value: line 2 column 5 (char 5)` — a parse error about goose's
+    banner. The one actionable sentence in 5 KB of transcript was replaced by
+    a message about the wrong thing, the operator spent 25 minutes finding it
+    in the captured bytes, and DD-3.3 fed the parse error back to the retry,
+    so the second attempt was told nothing it could act on.
+
+    ⚠ A refusal is not a failure of the model and not an infrastructure fault.
+    It is the decomposer reporting that the task as posed cannot be done, and
+    it belongs in the problem a person reads.
+
+    ⚠ The LAST one wins, as in `plan_document`, and for the same reason.
+    """
+    import json as _json
+
+    text = (raw or b"").decode("utf-8", "replace")
+    said = ""
+    depth, start = 0, -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                body = text[start : i + 1]
+                start = -1
+                try:
+                    parsed = _json.loads(body)
+                except ValueError:
+                    continue
+                if not isinstance(parsed, dict) or "subtasks" in parsed:
+                    continue
+                # Declined, and said why. `decomposed: false` is the shape the
+                # prompt asks for; a bare `reason` with no plan is accepted too,
+                # because refusing to read a stated reason is the defect here.
+                if parsed.get("decomposed") is False or (
+                    "reason" in parsed and "ticket" in parsed
+                ):
+                    reason = str(parsed.get("reason") or "").strip()
+                    if reason:
+                        said = reason
+    return said
+
+
+def rejected_dir(root: Path, manager: str) -> Path:
+    # ⚠ `manager_dir` ALREADY ends in `state/` (its docstring:
+    # `<data>/rite/mail/<checkout>/<name>/state/`). Appending another put the
+    # first captures under `state/state/`, which is how this was found.
+    from rite_ai.managers import manager_dir
+
+    return manager_dir(Path(root), manager) / REJECTED_DIRNAME
+
+
+def keep_rejected(
+    root: Path,
+    manager: str,
+    ticket: str,
+    attempt: int,
+    reasons: tuple[str, ...],
+    raw: bytes,
+) -> str:
+    """Write a refused candidate's own output beside why it was refused.
+
+    🔴 **SCRUM-87.** A candidate that would not parse was reported as "the
+    bytes are not a decomposition" and the bytes were then dropped — captured
+    in-process with `capture_output=True` and never written anywhere. So the
+    one artefact needed to tell "the model wrote prose", "it fenced the JSON"
+    and "it emitted a different schema" apart was the one thing not kept, and
+    a format failure could only be guessed at. Measured 2026-10-08: a 17 GB
+    local author failed both attempts with `Expecting value: line 2 column 5`
+    and left nothing behind to read.
+
+    Returns the path written, or "" — and NEVER raises. A capture that could
+    not be written must not end a decomposition that was going to fail anyway;
+    losing the diagnostic is bad, turning it into a crash is worse.
+    """
+    try:
+        from rite_ai.names import require_safe_name
+
+        # ⚠ `require_safe_name` RAISES or returns None — it is a validator, not
+        # a sanitiser. Assigning its result named the first captures
+        # `None-attempt1.txt`, losing which ticket they belonged to.
+        require_safe_name(ticket, kind="ticket")
+        safe = str(ticket)
+        where = rejected_dir(root, manager)
+        where.mkdir(parents=True, exist_ok=True)
+        body = raw or b""
+        clipped = body[:MAX_KEPT_BYTES]
+        header = [
+            f"# the candidate plan {manager!r} refused for ticket {safe}",
+            f"# attempt: {attempt}",
+            f"# bytes: {len(body)}"
+            + (
+                f" (showing the first {MAX_KEPT_BYTES})"
+                if len(body) > len(clipped)
+                else ""
+            ),
+            "# refused because:",
+            *(f"#   - {r}" for r in reasons or ()),
+            "#",
+            "# Everything below is the MODEL'S OWN OUTPUT, verbatim and",
+            "# unparsed. It is kept so a format failure can be read rather",
+            "# than guessed at (SCRUM-87).",
+            "",
+        ]
+        path = where / f"{safe}-attempt{attempt}.txt"
+        with path.open("wb") as f:
+            f.write(("\n".join(header)).encode("utf-8", "replace"))
+            f.write(clipped)
+        return str(path)
+    except Exception:  # noqa: BLE001 - see the docstring
+        return ""
+
+
 def _decompose_holders(roles: list[ManagerRole]) -> set[str]:
     declared = len(roles)
     return {r.name for r in roles if DECOMPOSE in effective_duties(r, declared)}
+
+
+def author_for(roles: list[ManagerRole], manager: str) -> tuple[str, str]:
+    """(the Manager that authors a plan when `manager` drives, or a problem).
+
+    🔴 **SCRUM-83, refined: an owner may HOLD OR DELEGATE the authoring duty.**
+    The first shape of that rule required the Worker's owner to hold
+    `decompose` itself, which forced the owner, the Worker's starter and the
+    plan's author to be one Manager. That is satisfiable only by a Manager that
+    can author — and the one measured to drive step 1 RELIABLY cannot (its
+    decomposer adapter is unbuilt, DD-2.4), while the one that can author was
+    measured to reach step 1 only sometimes. The rule excluded the one fleet
+    shape that works.
+
+    So an owner that holds no authoring duty may still own and drive a Worker,
+    provided exactly one other Manager holds `decompose`: that Manager authors,
+    and the owner drives. ⚠ **This is what keeps the original deadlock from
+    returning** — the deadlock was "owner cannot author AND author cannot touch
+    the Worker", and delegation breaks the first half: the plan IS authored, by
+    the delegate, under the owner's own driving cycle.
+
+    ⚠ Fail closed and never guess between candidates. Nobody holding the duty
+    is a refusal; SEVERAL holding it is also a refusal, because picking one
+    would make which model authored a plan depend on dict order, and RL-6
+    compares the author with the approver.
+
+    ⚠ Duty only. No engine or provider is named here, and
+    `test_the_author_is_chosen_by_duty_alone` keeps it that way.
+    """
+    holders = _decompose_holders(roles)
+    if manager in holders:
+        return manager, ""
+    if not holders:
+        return "", (
+            f"{manager!r} does not hold the decompose duty and no Manager in "
+            "this project does, so no plan can be authored at all"
+        )
+    if len(holders) > 1:
+        return "", (
+            f"{manager!r} does not hold the decompose duty and {len(holders)} "
+            f"Managers do ({', '.join(sorted(holders))}), so rite cannot tell "
+            "which should author for it — give the duty to one, or to this "
+            "Manager"
+        )
+    return next(iter(holders)), ""
 
 
 def _rejection_addendum(reasons: tuple[str, ...]) -> str:
@@ -263,10 +584,56 @@ def _rejection_addendum(reasons: tuple[str, ...]) -> str:
     )
 
 
-def _prompt_for(ticket: str, ticket_text: str) -> str:
+def available_units(root) -> tuple[str, ...]:
+    """Every spec unit id a cite may name, as rite's own parser derives them.
+
+    🔴 **The decomposer was told to cite "a spec unit that exists" and never
+    told which ones do.** It had to infer ids from the spec's prose, and a
+    heading that begins with a hex id makes that a trap: measured 2026-10-08,
+    a heading `## 978a36de0d0fbb2fba559f87 — slugify behavior` yields the unit
+    `978a36de0d0fbb2fba559f87-slugify-behavior`, and the model cited
+    `978a36de0d0fbb2fba559f87` — the refinement record id, which the same
+    document mentions by name. RL-63 refused both subtasks, correctly, for a
+    cite that was a reasonable misreading of text rite could simply have
+    quoted.
+
+    Empty for a project with no spec, or one whose spec cannot be parsed:
+    the prompt then says so rather than listing nothing as if it were a list.
+    """
+    from pathlib import Path
+
+    try:
+        from rite_ai.config.parse import parse_config
+        from rite_ai.spec.units import parse_paths
+
+        root = Path(root)
+        config = parse_config(root / ".rite" / "config.yaml")
+        paths = list(getattr(config.spec, "paths", ()) or ())
+        if not paths:
+            return ()
+        parsed = parse_paths(root, paths, getattr(config.spec, "extra_units", ()) or ())
+        return tuple(u.id for u in parsed.units)
+    except Exception:  # noqa: BLE001 - a prompt must not die on a bad spec
+        return ()
+
+
+def _prompt_for(ticket: str, ticket_text: str, units: tuple[str, ...] = ()) -> str:
     """The decomposer's instruction. The model emits BYTES — a JSON object — and
     `parse` + `candidate_problems` decide whether they are a plan (DD-2.2)."""
     body = ticket_text.strip() or "(no ticket text was supplied)"
+    if units:
+        shown = "\n".join(f"  - {u}" for u in units)
+        cites_help = (
+            "\n\nThe spec units you may cite, exactly as written — a cite that "
+            "is not one of these is refused (RL-63), and nothing else is a unit "
+            "id however it looks in the spec's text:\n" + shown
+        )
+    else:
+        cites_help = (
+            "\n\n⚠ This project registers no spec units, so no cite can "
+            "resolve and this ticket cannot be decomposed by this path. Say so "
+            "rather than inventing a cite."
+        )
     return (
         f"Decompose ticket {ticket} into independent subtasks. Emit ONE JSON "
         "object and nothing else, of the form:\n"
@@ -284,7 +651,7 @@ def _prompt_for(ticket: str, ticket_text: str) -> str:
         "repo; each subtask cites at least one spec unit that exists; no two "
         "subtasks share a scope path; the verify is a real command, never `true` "
         "or `:`. Do NOT set an approval — a plan-review holder approves the "
-        "plan.\n\nThe ticket:\n" + body
+        "plan.\n\nThe ticket:\n" + body + cites_help
     )
 
 

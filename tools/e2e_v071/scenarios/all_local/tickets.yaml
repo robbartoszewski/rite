@@ -1,0 +1,34 @@
+# The all-local scenario's board: two tickets for the GPU Worker, both through the
+# deterministic pipeline, plus the SCRUM-73 decoy. Same throwaway app as the mixed
+# scenario; `setup` REFINES each with `rite refine accept`.
+
+tickets:
+  - key: gpu-slug
+    for_worker: gpu1
+    title: "Add tally.slugify(text) (GPU Worker)"
+    body: |
+      For the GPU Worker. Add `slugify(text)`: lowercase, keep [a-z0-9], join
+      words with single dashes, strip leading/trailing dashes.
+    definition_of_done:
+      - "slugify('  Rent  for March! ') == 'rent-for-march'; slugify('!!!') == ''"
+    verify: "uv run pytest -q tests/test_slug.py"
+
+  - key: gpu-total
+    for_worker: gpu1
+    title: "Add tally.total(amounts) (GPU Worker)"
+    body: |
+      For the GPU Worker. Add `total(amounts)`: it takes strings, parses each
+      with `parse_amount`, and returns their Decimal sum (0 for none).
+    definition_of_done:
+      - "tally.total sums parsed amounts and returns Decimal('0') for an empty list"
+    verify: "uv run pytest -q tests/test_total.py"
+
+  - key: done-decoy
+    decoy_done: true
+    title: "Already done: rename the package (do NOT work this)"
+    body: |
+      This ticket is already done. If it is ever offered, readiness is reading
+      labels instead of status (SCRUM-73).
+    definition_of_done:
+      - "nothing: the ticket is closed"
+    verify: "uv run pytest -q tests/test_parse.py"

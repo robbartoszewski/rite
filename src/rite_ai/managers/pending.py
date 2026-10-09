@@ -142,11 +142,41 @@ def kind_of(root: Path, manager: str, message) -> str:
 
 def sync(root: Path, manager: str, *, now: float | None = None) -> str:
     """Record every message in the outbox that needs the person and is not
-    recorded yet. Returns a line to say, the first time only (see the module
-    note on upgrading), else ""."""
+    recorded yet. Returns a line to say — the first time only (see the module
+    note on upgrading), or why the ledger is out of reach — else "".
+
+    Never raises: see the OSError branch below."""
     from rite_ai.managers.mailbox import OUTBOX, read
 
     messages = [m for m in read(root, manager, OUTBOX) if _tracked(root, manager, m)]
+    try:
+        return _sync(root, manager, messages, now)
+    except OSError as e:
+        # ⚠ THE LEDGER IS NOT THE MESSAGE. This runs on the supervisor's path
+        # and on `rite replies`, and the ledger lives in the Manager's own
+        # directory — which another Manager's sandbox cannot write, by design
+        # (`enclosure`). Raising here took `rite replies <other-manager>` down
+        # with a bare PermissionError traceback and would have ended a
+        # supervised run over a file nothing waits on. What it costs is named,
+        # not swallowed: the message is still shown, and stays unconfirmed, so
+        # it comes back at the next check-in rather than being recorded as
+        # delivered on no evidence.
+        return _unreachable_note(root, manager, e)
+
+
+def _unreachable_note(root: Path, manager: str, e: OSError) -> str:
+    return (
+        f"delivery tracking is unavailable for {manager!r}: {_path(root, manager)} "
+        f"could not be written ({e.strerror or e}). Messages are shown and sent "
+        f"as normal; what needs you is NOT recorded as having reached you, so it "
+        f"is listed again at the next check-in. A Manager's ledger is writable by "
+        f"that Manager only, so this is expected from inside another's sandbox"
+    )
+
+
+def _sync(root: Path, manager: str, messages: list, now: float | None) -> str:
+    from rite_ai.managers.mailbox import OUTBOX, read
+
     with _locked(root, manager) as data:
         first = "items" not in data
         items = data.setdefault("items", {})
@@ -194,7 +224,17 @@ def _first_sync_note(manager: str, count: int) -> str:
 
 
 def posted(root: Path, manager: str, name: str, channel: str, ts: str) -> None:
-    """Where the relay put it, so its thread can be read for the answer."""
+    """Where the relay put it, so its thread can be read for the answer.
+
+    Never raises: an unwritable ledger costs the thread's address, which
+    means the answer is not read from there, not the post (see `sync`)."""
+    try:
+        _posted(root, manager, name, channel, ts)
+    except OSError:
+        return
+
+
+def _posted(root: Path, manager: str, name: str, channel: str, ts: str) -> None:
     with _locked(root, manager) as data:
         entry = data.get("items", {}).get(name)
         if entry is None:
@@ -205,7 +245,16 @@ def posted(root: Path, manager: str, name: str, channel: str, ts: str) -> None:
 
 def confirm(root: Path, manager: str, name: str, how: str, *, at: float) -> bool:
     """Record that `name` reached a person, and how. False when it was not
-    tracked or was already confirmed (the first confirmation is kept)."""
+    tracked, was already confirmed (the first confirmation is kept), or the
+    ledger could not be written — which leaves it pending, so it is asked
+    again rather than recorded as delivered on no evidence (see `sync`)."""
+    try:
+        return _confirm(root, manager, name, how, at=at)
+    except OSError:
+        return False
+
+
+def _confirm(root: Path, manager: str, name: str, how: str, *, at: float) -> bool:
     with _locked(root, manager) as data:
         entry = data.get("items", {}).get(name)
         if entry is None or entry.get("confirmed"):

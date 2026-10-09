@@ -377,6 +377,94 @@ def project_capacity(root: Path) -> int:
     return int(getattr(parsed.sandbox, "max_concurrent_workers", 0) or 0)
 
 
+def _may_own_worker(root: Path, manager: str, worker: str) -> str:
+    """Why `manager` may not be given `worker`, or "" when it may.
+
+    ⚠ Private: its only caller is `for_project` in this file, which is
+    deliberate — "composed here rather than in the supervisor, so every input
+    to the decision is assembled in the one file whose job is to be
+    suspicious". `test_no_dead_wiring` flagged the public name as having no
+    caller outside its module, and it was right to: a public name promises a
+    cross-module seam this has no reason to offer.
+
+    🔴 **SCRUM-83.** Nothing used to gate WHO may ask for a Worker: `decide`
+    checked the request's size, its JSON, that the Worker and ticket exist and
+    that a slot was free, and no duty at all. So in a mixed fleet the Manager
+    that got there first owned the Worker — and ownership is load-bearing three
+    times over: only the owner may gate or step it (`lifecycle._may_act`), only
+    the owner's cycle drives its ticket (`_local_tier_tickets`), and only the
+    `decompose` holder can author a plan. A Manager that cannot author, holding
+    a Worker whose plan must be authored, is a deadlock with no configuration
+    that escapes it. Measured 2026-10-08: a Claude Manager holding only
+    `plan-review` won the GPU Worker and the ticket never left `defined`.
+
+    ⚠ **Gated on DUTY and CAPABILITY, never on a provider.** The question asked
+    of the Worker is "does rite have to author your plan"
+    (`needs_authored_plan`), not "are you local"; the question asked of the
+    Manager is "do you hold `decompose`", not "are you Claude". A Worker that
+    plans its own work may be owned by any Manager, as before. Adding a
+    provider needs no change here.
+
+    ⚠ **Fail closed.** Anything that cannot be read is a refusal, which is this
+    module's rule: a Worker handed to a Manager that cannot drive it is a fleet
+    that looks healthy and advances nothing, and that is worse than a refusal
+    somebody has to read.
+    """
+    from rite_ai.config.parse import parse_config
+
+    try:
+        from rite_ai.sandbox import worker_manifest
+
+        manifest = worker_manifest(Path(root), worker)
+    except Exception as e:  # noqa: BLE001 - cannot tell is a refusal
+        return (
+            f"rite could not read {worker!r}'s manifest, so it cannot tell "
+            f"whether {manager!r} is able to drive it ({type(e).__name__})"
+        )
+    if manifest is None:
+        # 🔴 **`worker_manifest` returns None for a manifest it could not
+        # read**, and a bare `getattr(manifest, ..., False)` turned that into
+        # "this Worker plans its own work" and allowed the request — fail-OPEN,
+        # in the one function whose whole job is to fail closed. Caught by
+        # `test_an_unreadable_manifest_is_a_refusal`.
+        return (
+            f"rite could not read {worker!r}'s manifest, so it cannot tell "
+            f"whether {manager!r} is able to drive it"
+        )
+    if not manifest.needs_authored_plan:
+        # It plans its own work. Who owns it is not this gate's business.
+        return ""
+
+    try:
+        roles = parse_config(
+            Path(root) / ".rite" / "config.yaml"
+        ).coordination.manager_roles
+    except Exception as e:  # noqa: BLE001
+        return (
+            f"rite could not read this project's Managers, so it cannot tell "
+            f"whether {manager!r} may author {worker!r}'s plan "
+            f"({type(e).__name__})"
+        )
+    # 🔴 SCRUM-83 refined: HOLD **OR DELEGATE**. An owner with no authoring
+    # duty may still own and drive this Worker, provided exactly one other
+    # Manager holds `decompose` and authors for it. Asked of the same function
+    # the decomposer uses, so the gate cannot accept an arrangement the
+    # authoring path would then refuse — which is how the deadlock this
+    # replaces came about.
+    from rite_ai.local.decompose import author_for
+
+    author, problem = author_for(roles, manager)
+    if problem:
+        return (
+            f"{worker!r} needs rite to author its plan, and {problem}. Only a "
+            "Worker's owner may gate or step it, and only its owner's cycle "
+            "drives its ticket, so the Manager that owns this one must hold "
+            "the authoring duty or be able to delegate it."
+        )
+    del author
+    return ""
+
+
 def for_project(root: Path, board: object = None, capacity: int | None = None):
     """The decide-and-launch callable the supervisor holds.
 
@@ -466,7 +554,7 @@ def for_project(root: Path, board: object = None, capacity: int | None = None):
         counted = count_active_sandboxes(root, _configured_workers(root))
         return -1 if isinstance(counted, CountUnavailable) else int(counted)
 
-    def handle(raw: str) -> tuple[bool | None, str]:
+    def handle(raw: str, manager: str = "") -> tuple[bool | None, str]:
         bound = project_capacity(Path(root)) if capacity is None else capacity
         if bound < 0:
             return False, (
@@ -495,6 +583,23 @@ def for_project(root: Path, board: object = None, capacity: int | None = None):
             return NO_SLOT, decision.reason
         if not decision.ok or decision.request is None:
             return False, f"refusing to start a Worker: {decision.reason}"
+        # 🔴 SCRUM-83, AFTER `decide` has validated the request (so the Worker
+        # name is a real one) and BEFORE `honour` starts anything. Here rather
+        # than inside `decide` so the policy function stays testable without a
+        # project on disk, which is what its own docstring asks for.
+        # ⚠ **Only when a MANAGER asked.** `manager` is "" for a caller that is
+        # not one — a direct broker call, and the capacity tests' own `handle`.
+        # Gating ownership on an empty name gates on nothing: it asked whether
+        # '' may drive a Worker, failed closed on an unreadable manifest, and
+        # turned "is this project at its Worker limit?" into a refusal about
+        # authorship. There is no ownership question without an owner.
+        why = (
+            _may_own_worker(Path(root), manager, decision.request.worker)
+            if manager
+            else ""
+        )
+        if why:
+            return False, f"refusing to start a Worker: {why}"
         return honour(Path(root), decision.request)
 
     return handle

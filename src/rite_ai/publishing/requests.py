@@ -216,6 +216,77 @@ def honour_deliveries(root: Path, manager: str, say, record=None) -> None:
                 )
         say(f"{manager!r}: {request.worker}: {result.sandbox}")
         tell(f"{request.worker}: {result.sandbox}")
+        for line in _hand_back_the_pipelines_account(
+            root, manager, request.worker, request.ticket
+        ):
+            say(f"{manager!r}: {line}")
+
+
+def _hand_back_the_pipelines_account(
+    root: Path, manager: str, worker: str, ticket: str
+) -> list[str]:
+    """Write the handback a pipeline-delivered ticket otherwise never gets
+    (SCRUM-100). Returns lines to say; never raises.
+
+    🔴 **A Worker-driven ticket hands back prose; a pipeline-driven one handed
+    back nothing.** `handback` is "the record a Worker writes when it
+    finishes", and on this path no Worker session finishes — rite drives each
+    subtask itself and asks for the delivery after RL-8. Measured on the
+    v0.7.0 gate run: the Claude Worker's ticket produced 11 KB of account and
+    the pipeline's produced a branch and silence.
+
+    ⚠ **HERE, after `deliver` returned.** `deliver` collects the ticket branch
+    into the project before it returns, so this is the first moment the commits
+    are readable from the project — and the Worker's sandbox, where they lived,
+    is gone by now.
+
+    ⚠ **It does not overwrite a Worker's own account.** A Worker that wrote one
+    for this same ticket said something rite cannot reconstruct; composing over
+    it would replace testimony with a transcript. Only a missing record, or one
+    about a different ticket, is written.
+
+    ⚠ The record RELAYS to the Manager like a Worker's, by Robert's decision
+    (2026-10-09, option (a)): the Manager drove the work and is told what was
+    handed back under it.
+    """
+    from rite_ai import handback
+    from rite_ai.local import decomposition as dec
+    from rite_ai.local import plan_state
+    from rite_ai.local.handover import account_for, branch_for
+
+    try:
+        existing = handback.read(Path(root), worker)
+    except Exception:  # noqa: BLE001 - said, never raised into the cycle
+        existing = None
+    if existing is not None and str(getattr(existing, "ticket", "")) == str(ticket):
+        return []
+
+    # ⚠ **`compose` IS INSIDE THE TRY, although it promises never to raise.**
+    # A promise in a docstring is not a guarantee at a call site that runs on
+    # the supervisor's cycle: `pending.sync` carried the same promise and took
+    # `rite replies` down with a traceback (see its own fix). A delivery that
+    # happened must never be reported as an error because the prose about it
+    # could not be written.
+    try:
+        summary = account_for(Path(root), manager, ticket)
+        if not summary:
+            return []  # not a pipeline ticket, or its plan could not be read
+        state = plan_state.layer(Path(root))
+        plan = getattr(dec.read(state, ticket), "plan", None)
+        branch = branch_for(plan) if plan is not None else ""
+        path = handback.write(
+            Path(root), worker, ticket=str(ticket), branch=branch, summary=summary
+        )
+    except Exception as e:  # noqa: BLE001 - a missing account must not fail a delivery
+        return [
+            f"the work for {ticket} was delivered, but rite could not write the "
+            f"account of it ({type(e).__name__}: {e}). The pipeline's records are "
+            f"intact; nothing about the delivery is in doubt"
+        ]
+    return [
+        f"wrote the pipeline's own account of {ticket} to {path} — composed from "
+        f"its records, not a Worker's testimony"
+    ]
 
 
 def _staged_pipeline_refusal(root: Path, manager: str, ticket: str) -> str:

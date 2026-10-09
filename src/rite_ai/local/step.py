@@ -119,25 +119,28 @@ def _slice_for(
     both: the spec says how this codebase does things, the definition says
     what done means for this ticket.
     """
-    from rite_ai.spec.digest_files import unit_filename, units_dir
+    from rite_ai.spec.slice import unit_text
 
     if not cites:
         return "", "the subtask cites no spec unit, so there is no slice to give"
-    where = units_dir(Path(root))
+    # 🔴 **SCRUM-92: the SAME resolver the plan validator uses.** This read the
+    # derived unit file only, and the validator did too — so relaxing one
+    # without the other would accept a plan here and refuse its subtask at
+    # execution, which is the gate/authoring divergence SCRUM-83 was bitten by.
+    # `unit_text` resolves a cite from the derived text or from a slice of the
+    # spec source, and both callers ask it.
     parts: list[str] = []
-    missing: list[str] = []
+    problems: list[str] = []
     for cite in cites:
-        path = where / unit_filename(cite)
-        try:
-            parts.append(path.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            missing.append(cite)
-    if missing:
+        got, problem = unit_text(Path(root), cite)
+        if problem:
+            problems.append(problem)
+        else:
+            parts.append(got)
+    if problems:
         return "", (
-            f"the derived spec text for {', '.join(missing)} is not in "
-            f"{where} — run `rite spec index` so the slice can be built, "
-            "because a subtask run without its slice is the free-form run "
-            "this path exists to replace"
+            f"{problems[0]} — a subtask run without its slice is the free-form "
+            "run this path exists to replace"
         )
     text = "\n\n".join(parts)
     if definition:
@@ -180,6 +183,48 @@ class _LedgerClaims:
 
     def release(self, paths: tuple[str, ...], worker: str) -> None:
         self.ledger.release(worker, list(paths))
+
+
+FAILURE_CHARS = 500
+
+
+def _why_it_stopped(outcome) -> str:
+    """What to record as a subtask's last failure, in `FAILURE_CHARS`.
+
+    🔴 **The TAIL, and the agent's own words first (SCRUM-103).** This kept
+    `verify_output[:500]`, which truncates from the START. For the gate run's
+    stopped turn the first 500 characters were `uv`'s venv setup — "Using
+    CPython 3.14.3 / Creating virtual environment / Building tally / Installed"
+    — and the reason was past the cut. Read from the plan state alone, a
+    stopped turn looked like a failing assertion.
+
+    The signal in command output is at the END, and when the agent said
+    something about the turn itself — "did not finish within …s and was
+    stopped" — that outranks any output, because it explains why the output is
+    incomplete."""
+    said = " | ".join(n for n in (outcome.notes or []) if n.strip())
+    output = (outcome.verify_output or "").strip()
+    if getattr(outcome, "stopped", False) and said:
+        return said[:FAILURE_CHARS]
+    if not output:
+        return said[:FAILURE_CHARS]
+    tail = output[-FAILURE_CHARS:]
+    return tail if len(output) <= FAILURE_CHARS else "…" + tail[1:]
+
+
+MAX_STOPS = 2
+"""How many of a subtask's turns may be STOPPED on a timeout before it fails.
+
+🔴 **The bound that makes a stop retryable without being free (SCRUM-103).**
+`goose_agent` rejected treating a timeout as an infrastructure fault because
+"a subtask that hangs every time would be retried for ever" — correctly. But
+the alternative it had was to record the subtask FAILED, and `next_subtask`
+below makes that terminal, so a clock became a verdict on work nobody judged.
+
+Two, not one: a single stop is what the gate run hit on a leg that had
+completed in nine minutes the run before, so one stop says more about the hour
+than the subtask. Not more than two, because past that the evidence is about
+the subtask."""
 
 
 def next_subtask(plan: dec.Decomposition) -> dec.Subtask | None:
@@ -556,11 +601,34 @@ def _record(state, plan, subtask, outcome: Outcome, version: str, step: Step) ->
     step.verify_output = outcome.verify_output
     step.lines = list(outcome.notes)
 
+    # ⚠ **A STOPPED turn does not record the subtask as FAILED** (SCRUM-103).
+    # `next_subtask` makes FAILED terminal on purpose, so a turn cut off by a
+    # clock would end the subtask without anything having judged the work. A
+    # stop leaves it PLANNED, up to `MAX_STOPS`, and fails it at the bound —
+    # which is what keeps a genuinely hanging subtask from being retried for
+    # ever, the objection `goose_agent` raised against the obvious fix.
+    stopped = bool(getattr(outcome, "stopped", False)) and not outcome.accepted
+    stops = subtask.stops + (1 if stopped else 0)
+    status = outcome.status
+    if stopped and stops < MAX_STOPS:
+        status = dec.PLANNED
+        step.lines.append(
+            f"the turn was stopped on a timeout, not judged: {subtask.id} stays "
+            f"planned ({stops} of {MAX_STOPS} stops used)"
+        )
+    elif stopped:
+        step.lines.append(
+            f"{subtask.id} has now been stopped {stops} time(s), the limit, so "
+            f"it is recorded as failed — the work was never judged, and a "
+            f"person or a step review decides what happens to it"
+        )
+
     updated = dec.with_subtask(
         plan,
         replace(
             subtask,
-            status=outcome.status,
+            stops=stops,
+            status=status,
             # ⚠ **RL-47, through the property that decides it.**
             # `Outcome.counts_as_attempt` says "work counts, and a turn that
             # never happened does not" — and this incremented
@@ -573,9 +641,7 @@ def _record(state, plan, subtask, outcome: Outcome, version: str, step: Step) ->
             # subtask nobody tried".
             attempts=subtask.attempts + (1 if outcome.counts_as_attempt else 0),
             branch=outcome.branch,
-            last_failure=(
-                "" if outcome.accepted else (outcome.verify_output or "")[:500]
-            ),
+            last_failure=("" if outcome.accepted else _why_it_stopped(outcome)),
         ),
     )
     written = dec.write(state, updated, version)

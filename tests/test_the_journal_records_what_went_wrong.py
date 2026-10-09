@@ -383,7 +383,7 @@ class TestEachWiredSiteActuallyRecords:
         _honour_worker_requests(
             root,
             "lead",
-            lambda _raw: (False, "there is no Worker called 'ghost'"),
+            lambda _raw, manager="": (False, "there is no Worker called 'ghost'"),
             lambda _line: None,
             _recorder(root),
         )
@@ -407,7 +407,7 @@ class TestEachWiredSiteActuallyRecords:
         _honour_worker_requests(
             root,
             "lead",
-            lambda _raw: (NO_SLOT, "2 Worker(s) already running"),
+            lambda _raw, manager="": (NO_SLOT, "2 Worker(s) already running"),
             lambda _line: None,
             _recorder(root),
         )
@@ -426,7 +426,7 @@ class TestEachWiredSiteActuallyRecords:
         _honour_worker_requests(
             root,
             "lead",
-            lambda _raw: (True, "started alpha on KAN-7"),
+            lambda _raw, manager="": (True, "started alpha on KAN-7"),
             lambda _line: None,
             _recorder(root),
         )
