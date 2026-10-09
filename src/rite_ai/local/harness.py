@@ -209,6 +209,16 @@ class Outcome:
     """The agent's turn was stopped on a timeout — see `AgentReport.stopped`.
     `step` decides what that does to the subtask's status, because the bound
     on stops lives with the record that persists them."""
+    never_started: bool = False
+    """This run never began: the harness refused it before the agent ran.
+
+    ⚠ `infrastructure_fault` already keeps such a run from counting as an
+    ATTEMPT, but for a long time nothing carried it through to the STATUS, and
+    `next_subtask` only ever returns a PLANNED subtask. So a subtask blocked
+    by a neighbour's claim was recorded FAILED — terminal — having never been
+    tried, which is the comment two returns below this one describing its own
+    bug. `step` decides what this does to the status, for the same reason
+    `stopped` does: the bound lives with the record that persists it."""
 
     @property
     def counts_as_attempt(self) -> bool:
@@ -282,6 +292,7 @@ def run_subtask(
         # and still spent one, which is how a subtask blocked by a neighbour's
         # claim could be retired without ever having been tried.
         outcome.infrastructure_fault = True
+        outcome.never_started = True
         outcome.notes.append(
             f"{plan.ticket} is not approved by a plan-review holder, so nothing "
             "from its decomposition may run"
@@ -292,6 +303,7 @@ def run_subtask(
         outcome.status = FAILED
         # The note already said this; now it is true. See above.
         outcome.infrastructure_fault = True
+        outcome.never_started = True
         outcome.notes.append(
             f"another worker holds part of {', '.join(subtask.scope)} — not "
             "started, so nothing here counts as an attempt"

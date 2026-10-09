@@ -213,6 +213,11 @@ def _why_it_stopped(outcome) -> str:
 
 
 MAX_STOPS = 2
+# A scope held by a neighbour frees itself the moment that Worker is DELIVERED,
+# so the skip that matters is transient and a small bound clears it. Higher
+# than MAX_STOPS because a stop costs a whole turn and a skip costs nothing —
+# but bounded, so a scope held for good still stops the ticket.
+MAX_SKIPS = 3
 """How many of a subtask's turns may be STOPPED on a timeout before it fails.
 
 🔴 **The bound that makes a stop retryable without being free (SCRUM-103).**
@@ -623,11 +628,41 @@ def _record(state, plan, subtask, outcome: Outcome, version: str, step: Step) ->
             f"person or a step review decides what happens to it"
         )
 
+    # ⚠ **A subtask THAT NEVER STARTED is not a failed one either.** The same
+    # argument as the stop above, and it had the same hole: `next_subtask`
+    # makes FAILED terminal, so a subtask refused before the agent ran — a
+    # neighbour holding part of its scope — was retired without ever being
+    # tried. `infrastructure_fault` kept it from spending an attempt and
+    # stopped there; nothing carried it to the status.
+    #
+    # Measured on gate run smoke_mixed-20261009T113241Z: s1 held
+    # `attempts=0` and `status=failed` together, the implementing subtask
+    # never ran, and the ticket could not reach `recomposed`. The claim it
+    # waited on was released three minutes later, by the delivery of the very
+    # Worker that held it.
+    never_started = bool(getattr(outcome, "never_started", False)) and not (
+        outcome.accepted
+    )
+    skips = subtask.skips + (1 if never_started else 0)
+    if never_started and skips < MAX_SKIPS:
+        status = dec.PLANNED
+        step.lines.append(
+            f"nothing ran, so this is not a verdict: {subtask.id} stays planned "
+            f"({skips} of {MAX_SKIPS} skips used)"
+        )
+    elif never_started:
+        step.lines.append(
+            f"{subtask.id} could not start {skips} time(s), the limit, so it is "
+            f"recorded as failed — nothing ever ran, and a person or a step "
+            f"review decides what happens to it"
+        )
+
     updated = dec.with_subtask(
         plan,
         replace(
             subtask,
             stops=stops,
+            skips=skips,
             status=status,
             # ⚠ **RL-47, through the property that decides it.**
             # `Outcome.counts_as_attempt` says "work counts, and a turn that
