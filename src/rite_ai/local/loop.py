@@ -448,6 +448,17 @@ def advance_ticket(
             else getattr(result, "status", "ran")
         )
         note = f"{getattr(result, 'subtask', '') or 'a subtask'} {verdict}"
+        # ⚠ **THE STEP'S OWN LINES, when it did not reach accepted** (SCRUM-96,
+        # defect 3). `step.lines` carries `Outcome.notes` — including the one
+        # sentence that explains a `VERIFIED` subtask, "verified but not
+        # committed: <why>" — and it was dropped here. The log said "s2
+        # verified" and then "neither runnable nor finished" every cycle, with
+        # the cause recorded NOWHERE: it had to be reconstructed from the
+        # Worker's branch and working tree. A stall whose reason is unrecorded
+        # is the same defect as SCRUM-93, one layer up.
+        if not getattr(result, "accepted", False):
+            for line in getattr(result, "lines", ()) or ():
+                note += f"; {line}"
         if stage == st.APPROVED:
             return moved_to(st.STEPPING, why=f"first subtask ran: {note}", note=note)
         # Already STEPPING: which subtask is where is the PLAN's business, and
@@ -459,11 +470,24 @@ def advance_ticket(
     if stage in (st.APPROVED, st.STEPPING):
         unfinished = [s.id for s in plan.subtasks if s.status != dec.ACCEPTED]
         if unfinished:
+            # ⚠ And it says what each one IS, and that this needs a person.
+            # "did not reach accepted" names no state and no remedy, which is
+            # what made the gate run's stall unreadable: a `verified` subtask
+            # is not runnable (nothing is planned) and not finished, so no
+            # cycle can move it, and the loop repeated that sentence for an
+            # hour without once saying which state it was stuck in.
+            where = ", ".join(
+                f"{s.id} is {s.status or 'in no state'}"
+                for s in plan.subtasks
+                if s.status != dec.ACCEPTED
+            )
             return Advance(
                 ticket,
                 blocked=(
                     f"nothing is planned and {', '.join(unfinished)} did not reach "
-                    "accepted, so the ticket is neither runnable nor finished"
+                    f"accepted, so the ticket is neither runnable nor finished "
+                    f"({where}). No cycle can move this on its own — the "
+                    f"subtask's own record says why it stopped there"
                 ),
             )
         from rite_ai.local import level2, recompose

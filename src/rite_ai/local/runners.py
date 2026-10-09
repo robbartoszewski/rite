@@ -221,15 +221,40 @@ class GitCommitter:
         staged = _git(["diff", "--cached", "--name-only"], workspace)
         if not (staged.stdout or "").strip():
             outside = _git(["status", "--porcelain"], workspace).stdout or ""
+            # ⚠ **NOTHING TO COMMIT IS NOT A FAILURE, AND IT SAYS SO** (SCRUM-96).
+            # Both branches here returned a bare `error`, and `run_subtask` reads
+            # any error as "verified but not committed" — a state the pipeline
+            # cannot leave. A subtask whose required outcome ALREADY HELD is a
+            # legitimate pass, and the verify is the only thing RL-7 trusts, so
+            # the caller is told which case this is instead of being handed a
+            # sentence to match on.
             if outside.strip():
                 # The distinction that matters to a step review: the agent
                 # changed things, just not the things it was asked to.
-                return Commit(
-                    error="nothing to commit inside the subtask's scope "
-                    f"({', '.join(self.scope)}), but the workspace is not "
-                    "clean — the agent edited outside it"
+                #
+                # ⚠ And it NAMES them. It did not, and the gate run showed why
+                # that matters: the only unclean paths were `__pycache__`,
+                # `*.egg-info` and `uv.lock` — every one a product of rite
+                # running the verify — so rite accused the agent of editing
+                # outside its scope on the strength of rite's own droppings,
+                # and a reader had no way to check it.
+                seen = sorted(
+                    line[3:].strip() for line in outside.splitlines() if len(line) > 3
                 )
-            return Commit(error="nothing to commit: the workspace is unchanged")
+                return Commit(
+                    nothing_to_commit=True,
+                    error="nothing to commit inside the subtask's scope "
+                    f"({', '.join(self.scope)}), and the workspace is not "
+                    f"clean elsewhere: {', '.join(seen[:8])}"
+                    + (f" (+{len(seen) - 8} more)" if len(seen) > 8 else "")
+                    + ". Nothing outside the scope is committed either way, so "
+                    "this says what was seen rather than what the agent meant",
+                )
+            return Commit(
+                nothing_to_commit=True,
+                error="nothing to commit: the scope is unchanged and the "
+                "workspace is clean",
+            )
 
         done = _git(["commit", "-m", message], workspace)
         if done.returncode != 0:

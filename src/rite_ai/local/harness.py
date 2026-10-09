@@ -124,6 +124,19 @@ class VerifyResult:
 class Commit:
     sha: str = ""
     error: str = ""
+    nothing_to_commit: bool = False
+    """There was no commit to make, as distinct from a commit that FAILED.
+
+    🔴 **SCRUM-96: this was the difference between a delivered ticket and a
+    wedged one.** `run_subtask` reads `if commit.error:` and leaves the
+    subtask at `VERIFIED`, which has no successor — the local tier then
+    reports "neither runnable nor finished" every cycle, for ever. Measured on
+    the v0.7.0 gate run: s2 asked for a test that s1's work had already made
+    pass, so the agent correctly changed nothing, the verify passed, and the
+    ticket could never finish.
+
+    A subtask whose required outcome already holds is a PASS. RL-7's rule is
+    that the verify alone decides, and the verify said yes."""
     note: str = ""
     """Something a reader must know about HOW this commit was made, when the
     commit itself succeeded. Carried onto the outcome's notes.
@@ -316,6 +329,24 @@ def run_subtask(
             outcome.branch,
             f"{plan.ticket} {subtask.id}: {subtask.intent}",
         )
+        if commit.error and getattr(commit, "nothing_to_commit", False):
+            # ⚠ ACCEPTED WITH NO COMMIT, and said in those words (SCRUM-96).
+            # There is nothing for composition to apply because the required
+            # state already held — which is not the same as work that could
+            # not be committed, and the two were indistinguishable here.
+            #
+            # The guard this does NOT weaken: an ACCEPTED subtask carrying an
+            # empty sha used to mean "the commit was made and rite lost the
+            # reference", which composition would apply blindly. That case
+            # still fails below, because it arrives with `error` set and
+            # `nothing_to_commit` false.
+            outcome.status = ACCEPTED
+            outcome.notes.append(
+                f"accepted with no commit: {commit.error}. The verify passed, "
+                "so the subtask's required state holds; there is nothing for "
+                "composition to apply"
+            )
+            return outcome
         if commit.error:
             # Verified work that could not be committed is not accepted: the
             # branch is what composition later applies, and there is nothing

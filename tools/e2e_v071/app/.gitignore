@@ -1,0 +1,12 @@
+# An ordinary Python project's ignores, and the gate needs them for a reason
+# (SCRUM-96): running the agreed verify leaves `__pycache__`, `*.egg-info` and
+# `uv.lock` in the Worker's tree, and rite judged the workspace "not clean"
+# from those — then told a step review the agent had edited outside its scope.
+# It had not. rite names what it saw now, and a normal project does not leave
+# these untracked in the first place.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+uv.lock
