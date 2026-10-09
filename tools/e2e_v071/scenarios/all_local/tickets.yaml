@@ -11,7 +11,7 @@ tickets:
       words with single dashes, strip leading/trailing dashes.
     definition_of_done:
       - "slugify('  Rent  for March! ') == 'rent-for-march'; slugify('!!!') == ''"
-    verify: "python -m pytest -q tests/test_slug.py"
+    verify: "uv run pytest -q tests/test_slug.py"
 
   - key: gpu-total
     for_worker: gpu1
@@ -21,7 +21,7 @@ tickets:
       with `parse_amount`, and returns their Decimal sum (0 for none).
     definition_of_done:
       - "tally.total sums parsed amounts and returns Decimal('0') for an empty list"
-    verify: "python -m pytest -q tests/test_total.py"
+    verify: "uv run pytest -q tests/test_total.py"
 
   - key: done-decoy
     decoy_done: true
@@ -31,4 +31,4 @@ tickets:
       labels instead of status (SCRUM-73).
     definition_of_done:
       - "nothing: the ticket is closed"
-    verify: "python -m pytest -q tests/test_parse.py"
+    verify: "uv run pytest -q tests/test_parse.py"

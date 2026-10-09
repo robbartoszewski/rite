@@ -11,4 +11,4 @@ tickets:
       words with single dashes, strip leading/trailing dashes.
     definition_of_done:
       - "slugify('  Rent  for March! ') == 'rent-for-march'; slugify('!!!') == ''"
-    verify: "python -m pytest -q tests/test_slug.py"
+    verify: "uv run pytest -q tests/test_slug.py"

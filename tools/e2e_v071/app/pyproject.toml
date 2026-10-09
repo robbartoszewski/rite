@@ -4,6 +4,21 @@ version = "0.1.0"
 description = "A throwaway app for rite's v0.7.1 acceptance gate. Not a product."
 requires-python = ">=3.11"
 
+# 🔴 **pytest IS A DEPENDENCY, because the agreed verify has to be runnable.**
+# It was not, and the v0.7.0 gate run found out the expensive way (SCRUM-95):
+# the tickets' agreed definition of done said `python -m pytest -q tests/...`,
+# there is no bare `python` on a uv-managed host, and rite's own derived test
+# command `uv run pytest` exited 2 with "Failed to spawn: pytest" because
+# pytest was in no dependency group. Both Workers had to SUBSTITUTE
+# `uv run --with pytest ...` and disclose it, and RL-8 — which runs the
+# refinement record's command literally and must — had nothing it could run.
+#
+# A gate fixture whose verify cannot execute measures nothing about rite. This
+# makes the app an ordinary Python project, so the agreed verify is the
+# project's own test command and no substitution is needed anywhere.
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

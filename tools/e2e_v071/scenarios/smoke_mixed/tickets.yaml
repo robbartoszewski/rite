@@ -11,7 +11,7 @@ tickets:
       words with single dashes, strip leading/trailing dashes.
     definition_of_done:
       - "slugify('  Rent  for March! ') == 'rent-for-march'; slugify('!!!') == ''"
-    verify: "python -m pytest -q tests/test_slug.py"
+    verify: "uv run pytest -q tests/test_slug.py"
 
   - key: claude-format
     for_worker: alpha
@@ -21,4 +21,4 @@ tickets:
       with thousands separators.
     definition_of_done:
       - "format_amount(Decimal('1234.5')) == '1,234.50'; format_amount(Decimal('-0.5')) == '-0.50'"
-    verify: "python -m pytest -q tests/test_format.py"
+    verify: "uv run pytest -q tests/test_format.py"
