@@ -105,7 +105,7 @@ yoloai:
   patched_version_marker: "-broad"
 
 fixed_build:
-  min_version: "0.7.0a10"
+  min_version: "0.7.0a11"
   probes:
     - {fix: SCRUM-72, argv: [plan, --help], expect: "approve"}
     - {fix: SCRUM-64, python: "import rite_ai.managers.reconcile"}
