@@ -12,6 +12,15 @@ npm run build
 npm run check      # astro check + copy-lint --strict
 ```
 
+## A note on the Python in `scripts/`
+
+`scripts/build-brand-*.py` are linted by **rite's own root `ruff` config**, not
+by anything under `website/`. CI runs `ruff check .` and `ruff format --check .`
+over the whole repository and excludes only `docs/`, so Python committed here
+has to match the package's style — 88 columns, sorted imports, no semicolons.
+Run `uv run ruff check . && uv run ruff format --check .` from the repository
+root before pushing a change to them.
+
 ## What governs the content
 
 Every product claim on this site traces to a verified fact in
@@ -34,10 +43,11 @@ src/
   content.config.ts    the blog schema
   layouts/             Site.astro (head, nav, footer), Post.astro
   components/          one per component; classes come from components.css
-  styles/              tokens.css + components.css (generated — do not hand-edit)
+  styles/              tokens.css (palette from the logo) + components.css
   pages/               /, /what-works, /licensing, /blog, /blog/[slug], 404
 public/                brand pack, favicons, og.png, robots.txt
-design/                BRAND.md and tokens.json, for reference
+scripts/               build-brand-*.py — regenerate the whole brand set
+                       from public/brand/rite-mark.svg
 ```
 
 ## Pages

@@ -87,8 +87,8 @@ export const WORKS: StatusRow[] = [
 export const GAPS: StatusRow[] = [
   {
     label: 'by-design',
-    lead: 'Unattended dispatch of Claude sessions is refused on purpose.',
-    text: 'It spends your quota with nobody watching. You start every run, and <code>rite start</code> runs a Manager in your own foreground terminal; the loop reports a stalled queue rather than working it. Perpetual unattended operation is the goal, not the state.',
+    lead: 'Nothing scheduled ever starts a session.',
+    text: 'You start a run and give it a budget in sessions and minutes; inside that budget it works the board without you, and reaches you in Slack. What rite refuses is starting <i>itself</i> — a scheduled path that opened a session would spend your quota with nobody reachable. A loop that closes on its own is the direction, not the state.',
   },
   {
     label: 'not-proven',
@@ -96,9 +96,9 @@ export const GAPS: StatusRow[] = [
     text: 'Each part of that path has been run.',
   },
   {
-    label: 'not-proven',
-    lead: 'A live sandboxed local-model turn is not measured.',
-    text: 'The path has been measured with the model replaced by a scripted command, inside a real sandbox; the live run is held behind an open sandbox-isolation issue.',
+    label: 'caveat',
+    lead: 'An all-local fleet is slow.',
+    text: 'It runs, at hours per ticket on a single 32&nbsp;GB GPU. The mixed shape — Claude planning and reviewing, a local GPU implementing — is what is worth running today.',
   },
   {
     label: 'not-proven',

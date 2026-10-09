@@ -1,72 +1,86 @@
-/* rite design tokens — generated from the design system tokens.json. Do not edit by hand. */
+/* rite design tokens.
+ *
+ * The palette is the keeper logo's own palette, taken from
+ * public/brand/rite-mark.svg: crimson #AC1E1C, yellow #F4B12A, ember #EC6C2D,
+ * blush #D36D4A, ink #222221, on off-white paper #FAF7F2.
+ *
+ * Accents are the SVG's fills verbatim. Surfaces, borders and muted text are
+ * the same lightness steps as before, re-derived from the new ink. Every text
+ * pair was re-checked against WCAG AA: crimson on paper 6.65, paper on crimson
+ * 6.65, ember on ink 5.12, muted 5.94 in both themes.
+ *
+ * Light mode uses crimson as the accent and dark mode ember, because crimson
+ * on ink is only 2.24 — a contrast decision, not a palette change. */
 :root, [data-theme="light"] {
   --surface: #faf7f2;
-  --surface-raised: #f1eee9;
-  --surface-sunken: #edeae5;
-  --border: #e0ddd8;
-  --border-strong: #83807c;
-  --text: #211e1b;
-  --text-muted: #625f5c;
-  --accent: #b82d22;
-  --accent-hover: #922920;
-  --action: #b82d22;
-  --action-hover: #922920;
+  --surface-raised: #f1eeea;
+  --surface-sunken: #ece9e5;
+  --border: #dedcd7;
+  --border-strong: #828281;
+  --text: #222221;
+  --text-muted: #626261;
+  --accent: #ac1e1c;
+  --accent-hover: #971a19;
+  --action: #ac1e1c;
+  --action-hover: #971a19;
   --on-action: #faf7f2;
-  --focus: #b82d22;
-  --crimson: #b82d22;
-  --ember: #e8743b;
-  --ember-glow: #e8743b24;
-  --brand-ink: #211e1b;
+  --focus: #ac1e1c;
+  --crimson: #ac1e1c;
+  --ember: #ec6c2d;
+  --yellow: #f4b12a;
+  --blush: #d36d4a;
+  --ember-glow: #ec6c2d24;
+  --brand-ink: #222221;
   --brand-paper: #faf7f2;
-  --term-bg: #211e1b;
+  --term-bg: #222221;
   --term-ink: #faf7f2;
-  --term-muted: #a3a09c;
-  --term-accent: #e8743b;
-  --term-border: #3b3835;
-  --term-control: #787571;
+  --term-muted: #9e9e9d;
+  --term-accent: #ec6c2d;
+  --term-border: #383837;
+  --term-control: #767675;
   --status-works: var(--text);
-  --status-gap: #b82d22;
+  --status-gap: #ac1e1c;
   --status-design: var(--text);
 }
 [data-theme="dark"] {
-  --surface: #211e1b;
-  --surface-raised: #2a2724;
-  --surface-sunken: #2e2b28;
-  --border: #3b3835;
-  --border-strong: #787571;
+  --surface: #222221;
+  --surface-raised: #2a2a29;
+  --surface-sunken: #2e2e2d;
+  --border: #383837;
+  --border-strong: #767675;
   --text: #faf7f2;
-  --text-muted: #a3a09c;
-  --accent: #e8743b;
-  --accent-hover: #ed9b72;
-  --action: #e8743b;
-  --action-hover: #ed9b72;
-  --on-action: #211e1b;
-  --focus: #e8743b;
-  --ember-glow: #e8743b33;
-  --term-bg: #191614;
+  --text-muted: #9e9e9d;
+  --accent: #ec6c2d;
+  --accent-hover: #ef8653;
+  --action: #ec6c2d;
+  --action-hover: #ef8653;
+  --on-action: #222221;
+  --focus: #ec6c2d;
+  --ember-glow: #ec6c2d33;
+  --term-bg: #1b1b1a;
   --status-works: var(--text);
-  --status-gap: #e8743b;
+  --status-gap: #ec6c2d;
   --status-design: var(--text);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --surface: #211e1b;
-    --surface-raised: #2a2724;
-    --surface-sunken: #2e2b28;
-    --border: #3b3835;
-    --border-strong: #787571;
+    --surface: #222221;
+    --surface-raised: #2a2a29;
+    --surface-sunken: #2e2e2d;
+    --border: #383837;
+    --border-strong: #767675;
     --text: #faf7f2;
-    --text-muted: #a3a09c;
-    --accent: #e8743b;
-    --accent-hover: #ed9b72;
-    --action: #e8743b;
-    --action-hover: #ed9b72;
-    --on-action: #211e1b;
-    --focus: #e8743b;
-    --ember-glow: #e8743b33;
-    --term-bg: #191614;
+    --text-muted: #9e9e9d;
+    --accent: #ec6c2d;
+    --accent-hover: #ef8653;
+    --action: #ec6c2d;
+    --action-hover: #ef8653;
+    --on-action: #222221;
+    --focus: #ec6c2d;
+    --ember-glow: #ec6c2d33;
+    --term-bg: #1b1b1a;
     --status-works: var(--text);
-    --status-gap: #e8743b;
+    --status-gap: #ec6c2d;
     --status-design: var(--text);
   }
 }

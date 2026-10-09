@@ -25,7 +25,7 @@ const CAVEATS = [
   },
   {
     lead: 'A Manager has your file and network access.',
-    text: 'It runs behind a generous permission allowlist (77 command families) because a Manager that must stop and ask is not running unattended — measured: the gated modes refused a Manager the ability to run <code>rite</code> or <code>gh</code> at all. Treat a Manager as having your own access, because a determined one does.',
+    text: 'It runs behind a generous 77-entry permission allowlist because a Manager that must stop and ask is not running unattended — measured: the gated modes refused a Manager the ability to run <code>rite</code> or <code>gh</code> at all. Treat a Manager as having your own access, because a determined one does.',
   },
   {
     lead: 'Quota runs out abruptly.',
@@ -49,12 +49,11 @@ const CAVEATS = [
         <p class="rt-eyebrow">Checked against {STATUS_CHECKED.version} · {STATUS_CHECKED.date}</p>
         <h1 class="rt-title">What works, what doesn&rsquo;t</h1>
         <p class="rt-lead">
-          rite is at <code>{VERSION}</code> — pre-1.0, and moving. This page is the version of this
-          product that a careful reader would arrive at after reading the source, written down in
-          advance so you don&rsquo;t have to.
+          rite is at <code>{VERSION}</code> — pre-1.0, and moving. What you would conclude after
+          reading the source, written down so you don&rsquo;t have to.
         </p>
         <p class="rt-body-sm" style="color: var(--text-muted)">
-          {nWorks} things work today. {nGaps} carry a label — <b style="color: var(--text)"
+          {nWorks} capabilities work today, each traceable to code. {nGaps} carry a label — <b style="color: var(--text)"
             >Not proven</b
           > (built, not yet shown end to end), <b style="color: var(--text)">Not built</b>, <b
             style="color: var(--text)">Caveat</b

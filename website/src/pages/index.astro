@@ -28,7 +28,7 @@ const TERM_LINES = [
 const FAQ = [
   {
     q: 'Is it production-ready?',
-    a: `No. It is <code>${VERSION}</code> — pre-1.0 ${MATURITY.label}. Claim exclusion is built and measured; the staged pipeline is built and enforced in rite&rsquo;s code. A sandboxed Worker has not yet carried a ticket end to end in one run, and unattended operation is the goal, not the state. <a class="rt-link" href="${url('/what-works')}">What works, what doesn&rsquo;t</a> has the full list.`,
+    a: `No — <code>${VERSION}</code>, pre-1.0 ${MATURITY.label}. Claim exclusion is measured; the staged pipeline and the independent plan review are enforced in rite&rsquo;s own code. Not there yet: a loop that closes without you starting it, and an all-local fleet fast enough to be the default. <a class="rt-link" href="${url('/what-works')}">What works, what doesn&rsquo;t</a> is the full list.`,
   },
   {
     q: 'Does it work on Linux?',
@@ -49,6 +49,14 @@ const FAQ = [
   {
     q: 'Can I use it on a repository I don’t own?',
     a: 'Yes, through a fork, and the shape is deliberate. You register your fork as the module and give the token write access to the fork and nothing else; the Worker pushes its branch there, and <b>you</b> open the pull request upstream. A diff going to someone else&rsquo;s project should be read by you before its maintainer sees it.',
+  },
+  {
+    q: 'Do I have to sit and watch it?',
+    a: 'No — that is the point. You start a run with a budget in sessions and minutes, and it works the board inside that budget. When it needs a decision it asks in Slack and your reply goes back to it. What it will <b>not</b> do is start itself: nothing scheduled ever opens a session, because that would spend your quota with nobody reachable.',
+  },
+  {
+    q: 'Can I run it entirely on my own GPU?',
+    a: 'Yes, and be realistic about the speed: an all-local fleet works, at <b>hours per ticket on a single 32&nbsp;GB GPU</b>. The shape that earns its keep today is mixed — Claude plans and reviews, a local GPU does the implementation. An all-local loop that closes on its own is the direction, not something rite ships.',
   },
   { q: 'Do I need this?', a: 'If you run one session at a time, no.' },
   {
@@ -90,12 +98,14 @@ const jsonLd = {
       style="display: flex; flex-direction: column; gap: 48px"
     >
       <div class="rt-stack" style="gap: 24px; max-width: var(--measure)">
-        <h1 class="rt-title-hero">Your agents can&rsquo;t skip the review step.</h1>
+        <h1 class="rt-title-hero">Tickets in. Draft pull requests out.</h1>
         <p class="rt-lead">
-          rite runs a fleet of AI coding agents against one codebase: exclusive file claims so they
-          don&rsquo;t collide, stages its own code won&rsquo;t let a model skip, and a plan approved
-          by a different model from the one that wrote it. Claude, local open-weight models, or both.
-          rite itself runs on your machine.
+          rite takes a ticket off your board, plans it, gets the plan approved by a <b>different model than wrote it</b> before a line is written, builds it, and opens the
+          pull request. You start a run and it works the board for the budget you gave it, asking
+          you questions in Slack rather than in a terminal you have to sit and watch.
+        </p>
+        <p class="rt-lead">
+          <b>Your hardware, your engine:</b> cloud Claude, a local GPU, or both at once.
         </p>
         <div class="rt-btn-row">
           <Button href={SPEC} variant="primary" external>Read the spec</Button>
@@ -121,7 +131,9 @@ const jsonLd = {
         <div class="rt-section-head">
           <p class="rt-eyebrow">The problem</p>
           <h2 class="rt-h2" id="problem-h">Many agents. One codebase.</h2>
-          <p class="rt-lead">One coding agent is easy. Six against the same repository is not.</p>
+          <p class="rt-lead">
+            One coding agent is easy. Six against the same repository, all day, is not.
+          </p>
         </div>
         <div class="rt-grid-3">
           <div class="rt-stack">
@@ -141,15 +153,14 @@ const jsonLd = {
           <div class="rt-stack">
             <h3 class="rt-h3">They report success.</h3>
             <p>
-              A step that failed comes back as done. In testing, a small local model more than once
-              reported a failed step as done, so rite checks every local-model reply in a separate
-              session before the Owner reads it. That checker is also a model, and can be wrong.
+              A step that failed comes back as done. Measured, not theoretical: in testing a small
+              local model did exactly that, more than once.
             </p>
           </div>
         </div>
         <p class="rt-lead" style="margin: 48px 0 0">
-          rite adds what a prompt can&rsquo;t enforce: claims it hands out, stages its code drives,
-          and a plan review a model can&rsquo;t skip.
+          A prompt can ask for all three. rite <b>enforces</b> them: claims it hands out, stages its
+          own code drives, and a review the model being reviewed cannot skip.
         </p>
       </div>
     </section>
@@ -157,19 +168,19 @@ const jsonLd = {
     <section class="rt-section" aria-labelledby="how-h" id="how">
       <div class="rt-container">
         <div class="rt-section-head">
-          <h2 class="rt-h2" id="how-h">How a ticket moves through rite.</h2>
+          <h2 class="rt-h2" id="how-h">From your board to a pull request.</h2>
         </div>
         <ol class="rt-steps">
           <li class="rt-step">
             <div class="rt-step-text">
               <span class="rt-step-n">01</span>
               <div>
-                <h3 class="rt-h3">Write the ticket.</h3>
+                <h3 class="rt-h3">Your board is the queue.</h3>
                 <p>
-                  <code>/refine "export invoices as CSV"</code> drafts a ticket a cold session could
-                  start: the paths it touches, a definition of done, and a <code>Verify</code> section
-                  naming the command that proves it. It checks your board — JIRA or GitHub Issues —
-                  for a duplicate first, and implements nothing.
+                  JIRA or GitHub Issues — the board you already run. <code>/refine "export invoices
+                  as CSV"</code> drafts a ticket a cold session can start: the paths it touches, a
+                  definition of done, and a <code>Verify</code> section naming the command that
+                  proves it. It checks the board for a duplicate first, and implements nothing.
                 </p>
               </div>
             </div>
@@ -178,7 +189,7 @@ const jsonLd = {
             <div class="rt-step-text">
               <span class="rt-step-n">02</span>
               <div>
-                <h3 class="rt-h3">Give each agent its own ground.</h3>
+                <h3 class="rt-h3">Every agent gets its own ground.</h3>
                 <p>
                   <code>rite add worker alpha</code> creates <code>workers/alpha/</code> with its own
                   clone of each module. Before touching anything, a Worker claims its paths, and the
@@ -196,13 +207,15 @@ const jsonLd = {
             <div class="rt-step-text">
               <span class="rt-step-n">03</span>
               <div>
-                <h3 class="rt-h3">Work moves through stages.</h3>
+                <h3 class="rt-h3">Seven stages, none of them skippable.</h3>
                 <p>
-                  Each stage is recorded and gated on its own artifact, and a model cannot skip or
-                  reorder one. The approver of a plan must hold the plan-review duty, must not be the
-                  plan&rsquo;s author, and must run a different model; an author rite can&rsquo;t
-                  place fails the check closed. A rejection sends the plan back to be re-authored with
-                  reasons, and that loop is bounded.
+                  Definition, plan, plan review, approach, work, recomposition verify, delivery.
+                  rite records where a ticket is, every move goes through one guard, and a stage
+                  cannot be entered until the artifact it claims already exists — so none of them
+                  can be skipped or reordered. <b>The model that approves a plan is never the model
+                  that wrote it</b> — rite checks the duty, the author and the engine, and fails
+                  closed when it can&rsquo;t place the author. A rejection goes back to the planner
+                  with reasons, and that loop is bounded.
                 </p>
                 <p>
                   The gates are on rite&rsquo;s stages and the ticket&rsquo;s own agreed check — not
@@ -226,25 +239,31 @@ const jsonLd = {
             <div class="rt-step-text">
               <span class="rt-step-n">04</span>
               <div>
-                <h3 class="rt-h3">You read what came back.</h3>
+                <h3 class="rt-h3">It comes to you in Slack.</h3>
                 <p>
-                  <code>rite status</code> shows every Worker and the paths it holds. <code
-                    >rite loop start</code
-                  > watches the queue in the background and writes, every couple of minutes, one word
-                  for why the run is where it is — everyone busy, files held, schedule closed,
-                  nothing waiting, or <b>deadlocked</b>, where it stops and prints exactly what to
-                  release. It starts nothing.
+                  Wire up Slack once, and that is where it reaches you: when an agent needs a
+                  decision it asks in the thread, and your reply goes back to it. You never attach
+                  to a session to answer.
+                </p>
+                <p>
+                  <code>rite status</code> shows every Worker and the paths it holds.
+                  <code>rite loop start</code> writes one word, every couple of minutes, for why the
+                  run is where it is — everyone busy, files held, schedule closed, nothing waiting,
+                  or <b>deadlocked</b>, where it stops and prints exactly what to release.
                 </p>
               </div>
             </div>
           </li>
         </ol>
         <p class="rt-note">
-          You start every run: <code>rite start</code> runs a Manager — a long-running session that
-          works your board and talks to you — for the <code>--sessions</code> and <code>--minutes</code
-          > you give it, in your own foreground terminal, and Ctrl-C ends it. <a class="rt-link" href={PROOF.unattended} rel="noopener"
-            >Unattended dispatch of Claude sessions is refused on purpose ↗</a
-          >, because it spends your quota with nobody watching.
+          <b>You start the run, and nothing else starts one.</b> <code>rite start lead --sessions 3
+          --minutes 90</code> gives a Manager a budget in sessions and minutes, and it works the
+          board inside that budget. The run is your own process: Ctrl-C ends it, and so does closing
+          the terminal — there is no daemon, and nothing on a schedule ever opens a session. <a
+            class="rt-link"
+            href={PROOF.unattended}
+            rel="noopener">rite refuses that on purpose ↗</a
+          >, because it would spend your quota with nobody reachable.
         </p>
       </div>
     </section>
@@ -252,32 +271,36 @@ const jsonLd = {
     <section class="rt-section" aria-labelledby="features-h">
       <div class="rt-container">
         <div class="rt-section-head">
-          <h2 class="rt-h2" id="features-h">Engines, sandbox and secrets.</h2>
+          <h2 class="rt-h2" id="features-h">Your hardware. Your engine. Your call.</h2>
         </div>
         <div class="rt-cards">
           <article class="rt-card">
-            <h3 class="rt-h3">Frontier and local, in one fleet.</h3>
+            <h3 class="rt-h3">Mix frontier and local in one fleet.</h3>
             <p>
-              Claude Code; local open-weight models through Goose and Ollama; Cursor as a Manager
-              engine. Named integrations rather than a lowest-common-denominator abstraction — on
-              purpose.
+              The shape that works best today: <b>Claude plans and reviews, a local GPU does the
+              implementation.</b> You keep the judgement on a frontier model and push the token-heavy
+              work onto hardware you already own.
             </p>
             <p>
-              A local Manager must declare a context window of at least 32,768 tokens, and rite pins
-              it on the server, so Ollama&rsquo;s 4,096-token default doesn&rsquo;t decide it.
+              Claude Code, local open-weight models through Goose and Ollama, and Cursor as a Manager
+              engine — named integrations rather than a lowest-common-denominator abstraction, on
+              purpose. A local model&rsquo;s report is never taken at face value: rite re-checks
+              every one in a separate session before the Owner reads it, and says so when the
+              checker could not tell.
             </p>
             <p class="rt-caveat rt-card-caveat">
               <Icon name="warn" size={16} /><span
-                ><b>Caveat.</b> Mixed fleets run on one machine and one project root today. Several
-                Managers across machines is planned for 0.8.0.</span
+                ><b>Caveat.</b> An all-local fleet runs, but it is slow — hours per ticket on a
+                single 32&nbsp;GB GPU. A mixed fleet is one machine and one project root today;
+                several Managers across machines is planned for 0.8.0.</span
               >
             </p>
           </article>
           <article class="rt-card">
-            <h3 class="rt-h3">Sandboxed Workers on macOS.</h3>
+            <h3 class="rt-h3">Workers run sandboxed on macOS.</h3>
             <p>
-              A Worker runs under Seatbelt, and <code>rite init</code> turns it on by default on
-              macOS. What it buys is that a mistake stays inside the project.
+              Under Seatbelt, on by default from <code>rite init</code>, so a mistake stays inside
+              the project.
             </p>
             <p class="rt-caveat rt-card-caveat">
               <Icon name="warn" size={16} /><span
@@ -288,10 +311,10 @@ const jsonLd = {
             </p>
           </article>
           <article class="rt-card">
-            <h3 class="rt-h3">Secret scanning on pre-push and in CI.</h3>
+            <h3 class="rt-h3">Secrets don&rsquo;t get committed.</h3>
             <p>
-              The scan runs over full history. Suppressing a finding takes a written reason, and
-              there is no global off switch.
+              A scan runs on pre-push and in CI, over full history. Suppressing a finding takes a
+              written reason, and there is no global off switch.
             </p>
           </article>
         </div>
@@ -314,14 +337,7 @@ const jsonLd = {
             a Claude Owner with a local secondary Manager is the setup this release is built for, and
             in that setup the Owner&rsquo;s work still goes to Anthropic.
           </p>
-          <p>
-            Be precise about the edges: a Worker&rsquo;s sandbox does not restrict outbound network;
-            a Manager has your own file and network access; pushes go to the git remote you
-            configured; if you wire up Slack, a Manager&rsquo;s questions and replies go through
-            Slack; and if you share claims across machines, rite pushes that claim state to the
-            coordination git repository you configure. Beyond these, rite&rsquo;s own code sends
-            nothing.
-          </p>
+          <p>Every edge, by path out:</p>
         </div>
         <div class="rt-table-wrap">
           <table class="rt-table">
@@ -345,8 +361,8 @@ const jsonLd = {
               >
               <tr
                 ><th scope="row">A Claude or Cursor Manager</th><td
-                  >Anything you could send: it has your file and network access, behind an allowlist
-                  of 77 command families.</td
+                  >Anything you could send: it has your file and network access, behind a 77-entry
+                  allowlist.</td
                 ></tr
               >
               <tr
@@ -399,11 +415,10 @@ const jsonLd = {
     <section class="rt-section" aria-labelledby="oss-h">
       <div class="rt-container">
         <div class="rt-stack" style="max-width: var(--measure)">
-          <h2 class="rt-h2" id="oss-h">MIT, and the spec is public.</h2>
+          <h2 class="rt-h2" id="oss-h">MIT, and the design is public.</h2>
           <p>
-            The design document is in the repository: <b>101 numbered decisions</b>, each with the
-            question it answers and the reasoning behind it. If you want to know why something works
-            the way it does, it is written down.
+            <b>101 numbered decisions</b> in the repository, each with its reasoning. If you want to
+            know why something works the way it does, it is written down.
           </p>
           <p>{COMMERCIAL_SENTENCE}</p>
           <div class="rt-btn-row">
@@ -444,12 +459,13 @@ const jsonLd = {
     </section>
 
     <section class="rt-section rt-flame-bg" aria-labelledby="cta-h">
-      <img class="rt-flame-art" src={url('/brand/rite-mark.png')} alt="" width="240" height="542" />
+      <img class="rt-flame-art" src={url('/brand/rite-flame.svg')} alt="" width="240" height="546" />
       <div class="rt-container" style="display: flex; flex-direction: column; gap: 48px">
         <div class="rt-stack" style="max-width: var(--measure)">
-          <h2 class="rt-h2" id="cta-h">Six agents, one repository, limits written down.</h2>
+          <h2 class="rt-h2" id="cta-h">Put your board to work.</h2>
           <p class="rt-lead">
-            rite is MIT, installs from a release tag, and tells you what it cannot do.
+            Six agents on one repository, each holding its own files, none of them able to skip a
+            review. MIT, runs on your hardware, and every limit is written down.
           </p>
           <div class="rt-btn-row">
             <Button href={SPEC} variant="primary" external>Read the spec</Button>

@@ -343,19 +343,28 @@
  * aligned without the gap. */
 .rt-proof-figure { font-family: var(--font-sans); font-variant-numeric: tabular-nums; }
 
-/* Dark mode had no wordmark: the brand pack's horizontal lockup has an ink
- * wordmark (invisible on --surface) and its white lockup is the STACKED
- * version, which can't sit in a 30px-tall nav. The flame alone read as a
- * broken image. This sets the wordmark as text beside the mark in dark mode
- * only, so light mode keeps the official lockup.
- * TODO(assets) is tracked in BRAND-ASSETS.md: a horizontal off-white lockup
- * replaces this and lets the 88 KB light PNG go too. */
-.rt-nav-brand .rt-wordmark { display: none; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); line-height: 1; }
-[data-theme="dark"] .rt-nav-brand .rt-wordmark { display: block; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .rt-nav-brand .rt-wordmark { display: block; }
-}
 
 /* A code chip followed immediately by punctuation showed a visible gap
  * ("billing ;") because of the chip's right padding. */
 .rt-page :not(pre) > code { padding-inline: 0.25em; }
+
+/* ── Header brand: breathing room, and one lockup per theme ────────────────
+ * Two problems this replaces. The mark sat flush against the container's left
+ * edge with no padding of its own, so it read as cramped. And in dark mode the
+ * brand was a 13px flame <img> followed by a text "rite" span with no gap
+ * between them, because the brand pack had no horizontal lockup for a dark
+ * ground — the two touched, and their baselines never quite agreed.
+ *
+ * Both lockups are now real SVGs generated from the keeper logo, so the brand
+ * is a single image in either theme. The padding is asymmetric on purpose: the
+ * container already supplies the left gutter, so the inline padding is for
+ * optical space around the glyphs and a larger hit area, not indentation. */
+.rt-nav-brand {
+  gap: 0;
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  margin-left: calc(-1 * var(--space-1));
+  border-radius: var(--radius-sm);
+}
+.rt-nav-brand img { height: 32px; width: auto; }
+/* The brand needs air from the version chip next to it, at every width. */
+.rt-nav-inner { column-gap: var(--space-5); }

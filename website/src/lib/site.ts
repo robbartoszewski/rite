@@ -19,7 +19,7 @@ export const MATURITY = {
   show: true,
   label: 'alpha',
   /** The hero's one-line maturity statement. */
-  heroNote: 'Pre-1.0, and honest about it.',
+  heroNote: 'Pre-1.0. Every limit is on one page.',
 } as const;
 
 /** DECISION 2 — the commercial story. Default: one honest sentence, no prices.
