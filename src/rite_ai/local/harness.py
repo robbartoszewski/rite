@@ -97,6 +97,27 @@ class AgentReport:
 class VerifyResult:
     passed: bool
     output: str = ""
+    ran: bool = True
+    """Whether the command EXECUTED at all, as distinct from passing (RL-47).
+
+    🔴 **It was missing, and the distinction was being made and then lost.**
+    `runners.SubprocessVerifier` catches `FileNotFoundError` deliberately —
+    "the tool is not installed on this machine… saying the verify failed would
+    spend an attempt proving a machine was set up wrong" — and then had
+    nowhere to put that fact: the result was `(passed=False, output=<prose>)`,
+    so every consumer saw a failing verify. RL-7 spent an attempt against
+    `MAX_ATTEMPTS`, and RL-8 reported "the composed work FAILS its agreed
+    verify" and returned the plan to review, spending an RL-10 return that no
+    plan change can satisfy.
+
+    Measured on the v0.7.0 gate run (SCRUM-95): a definition of done agreed as
+    `python -m pytest -q tests/test_format.py` cannot run at all on a
+    uv-managed host, where there is no bare `python`. That is the natural
+    phrasing, not an exotic one.
+
+    ⚠ A TIMEOUT is `ran=True`. It executed and was stopped; treating it as a
+    non-attempt would retry a hanging verify without bound.
+    """
 
 
 @dataclass(frozen=True)
@@ -268,11 +289,22 @@ def run_subtask(
         result = verifier.run(subtask.verify, workspace)
         outcome.verified = result.passed
         outcome.verify_output = result.output
-        outcome.claim_disagreed_with_verify = report.claimed_success != result.passed
+        # ⚠ A verify that never RAN contradicts nobody. The agent is not shown
+        # to have been wrong by a command that did not execute, so the honesty
+        # signal is not raised — and the run is not an attempt (RL-47), which
+        # is what keeps `MAX_ATTEMPTS` from retiring a subtask over a missing
+        # interpreter. `or`, not `=`: the agent's own fault still stands.
+        ran = getattr(result, "ran", True)
+        outcome.claim_disagreed_with_verify = ran and (
+            report.claimed_success != result.passed
+        )
+        if not ran:
+            outcome.infrastructure_fault = True
+            outcome.notes.append(f"the verify never ran: {result.output}")
 
         if not result.passed:
             outcome.status = FAILED
-            if report.claimed_success:
+            if report.claimed_success and ran:
                 outcome.notes.append(
                     "the agent reported success and the verify disagreed — kept "
                     "as evidence about the agent, not about the work"

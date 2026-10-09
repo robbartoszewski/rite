@@ -219,9 +219,19 @@ def unit_text(root, cite: str) -> tuple[str, str]:
         config = parse_config(root / ".rite" / "config.yaml")
         paths = list(getattr(config.spec, "paths", ()) or ())
         if not paths:
+            # ⚠ WITH THE REMEDY. SCRUM-92 moved the "not derived" case down
+            # into this resolver, and the message it used to reach named the
+            # command that fixes it — "run `rite spec index` so the cite
+            # resolves". This one did not, and a refusal a person cannot act
+            # on is the UX defect SCRUM-92 was part of fixing.
+            # `tests/test_one_subtask_at_a_time.py` owns the property and
+            # caught the loss.
             return "", (
                 f"{cite} is not derived and this project registers no spec, so "
-                "there is nothing to slice it from"
+                "there is nothing to slice it from — register the spec under "
+                "`spec.paths` in .rite/config.yaml and run `rite spec index` "
+                "so the cite resolves, because a cite rite cannot resolve "
+                "stalls the subtask after approval (RL-63)"
             )
         parsed = parse_paths(root, paths, getattr(config.spec, "extra_units", ()) or ())
         graph = build_graph(parsed)

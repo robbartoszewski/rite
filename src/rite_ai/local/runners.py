@@ -69,6 +69,11 @@ class SubprocessVerifier:
     and output saying which, because the harness must distinguish work that
     was wrong from work that never ran (RL-47) and cannot do that from an
     exception it did not catch.
+
+    ⚠ **And it says WHICH in `ran`, not only in the prose.** Every branch here
+    that did not execute the command sets `ran=False`. It used to say so in
+    `output` alone, which made the distinction unreadable to a caller: see
+    `VerifyResult.ran` for the two gates that lost it (SCRUM-95).
     """
 
     timeout: int = VERIFY_TIMEOUT_SECONDS
@@ -77,12 +82,14 @@ class SubprocessVerifier:
         try:
             argv = shlex.split(command)
         except ValueError as e:
-            return VerifyResult(False, f"the verify command could not be read: {e}")
+            return VerifyResult(
+                False, f"the verify command could not be read: {e}", ran=False
+            )
         if not argv:
             # A subtask with an empty verify should never have been accepted
             # (`decomposition.problems` refuses it), so reaching here means
             # something bypassed the plan.
-            return VerifyResult(False, "the verify command is empty")
+            return VerifyResult(False, "the verify command is empty", ran=False)
 
         try:
             done = subprocess.run(
@@ -105,6 +112,7 @@ class SubprocessVerifier:
                 False,
                 f"{argv[0]!r} is not installed on this machine, so the verify "
                 "never ran — this is not evidence about the work",
+                ran=False,
             )
         except subprocess.TimeoutExpired:
             return VerifyResult(
@@ -113,7 +121,9 @@ class SubprocessVerifier:
                 "stopped — the subtask's claim is released either way",
             )
         except OSError as e:
-            return VerifyResult(False, f"the verify could not be started: {e}")
+            return VerifyResult(
+                False, f"the verify could not be started: {e}", ran=False
+            )
 
         output = _tail((done.stdout or "") + (done.stderr or ""))
         return VerifyResult(done.returncode == 0, output)

@@ -301,6 +301,23 @@ def run_recomposition(
                 plan=plan,
                 at=at,
             )
+        if not getattr(verdict, "ran", True):
+            # ⚠ RL-47, and this is where the module's own promise was broken:
+            # "a verify that could not run is a `problem`, which is not a
+            # failure" was true only for an exception the launcher raised —
+            # and the launcher catches the common one. A command that does not
+            # execute is not the composed work failing, and returning the plan
+            # for it spends an RL-10 return no plan change can satisfy.
+            return Result(
+                ticket=ticket,
+                problem=(
+                    f"`{command}` never ran, so the composed work is unverified "
+                    f"rather than wrong: {getattr(verdict, 'output', '')}"
+                ),
+                commands=commands,
+                plan=plan,
+                at=at,
+            )
         if not getattr(verdict, "passed", False):
             return Result(
                 ticket=ticket,
