@@ -11111,6 +11111,7 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         action_label,
         full_warning,
         mark_read,
+        out_of_reach,
         prune,
         unread,
     )
@@ -11128,6 +11129,16 @@ def replies(manager_name: str, reader: str, peek: bool) -> None:
         click.echo(
             f"no Manager named {manager_name!r} in this project — {known}", err=True
         )
+        raise SystemExit(1)
+    # ⚠ BEFORE the read, because the read cannot fail: `mailbox.read` treats
+    # an unreadable box as no messages, deliberately, so that one bad file
+    # cannot end a supervised run. Asked about a box this session may not
+    # open, it would answer "nothing new from 'planner'" — which a person
+    # reads as "it has said nothing". Reproduced: from inside `lead`'s
+    # boundary, `rite replies planner` is denied at every step.
+    blocked = out_of_reach(root, manager_name, OUTBOX)
+    if blocked:
+        click.echo(blocked, err=True)
         raise SystemExit(1)
     try:
         waiting_for_reader = unread(root, manager_name, OUTBOX, reader)
