@@ -79,6 +79,27 @@ class AgentReport:
     claimed_success: bool
     summary: str = ""
     touched: tuple[str, ...] = ()
+    stopped: bool = False
+    """The turn was STOPPED on a timeout: it ran, and it did not finish.
+
+    🔴 **A third category, because two were not enough (SCRUM-103).** The
+    existing pair is "the turn happened" and "the turn did not happen"
+    (`infrastructure_fault`). A timeout is neither: it ran, it had every
+    chance to edit files, and it was cut off. `goose_agent` argued that
+    correctly and drew the only conclusion the two categories allowed —
+    treat it as a real turn — which records the subtask as FAILED, and
+    `step.next_subtask` makes a FAILED subtask terminal by design. So an
+    infrastructure condition permanently killed a subtask.
+
+    ⚠ **It is NOT `infrastructure_fault`, and that distinction is the whole
+    point.** `goose_agent`'s own note rejected marking it one, for a sound
+    reason: "a subtask that hangs every time would be retried for ever".
+    This field exists so a stop can be retried a BOUNDED number of times
+    (`step.MAX_STOPS`) instead of either being terminal or being free.
+
+    Measured on the v0.7.0 gate run `smoke_mixed-20261009T063320Z`: both
+    subtasks of ticket 1 were stopped at 1200s with nothing committed, each
+    terminal on its first stop, and the ticket could not complete."""
     infrastructure_fault: bool = False
     """The turn did not happen: an endpoint that was down, a model that is not
     there, a binary that is missing.
@@ -184,6 +205,10 @@ class Outcome:
     notes: list[str] = field(default_factory=list)
     infrastructure_fault: bool = False
     """Carried from the agent's report, for `counts_as_attempt`."""
+    stopped: bool = False
+    """The agent's turn was stopped on a timeout — see `AgentReport.stopped`.
+    `step` decides what that does to the subtask's status, because the bound
+    on stops lives with the record that persists them."""
 
     @property
     def counts_as_attempt(self) -> bool:
@@ -287,6 +312,7 @@ def run_subtask(
         )
         outcome.agent_claimed = report.claimed_success
         outcome.infrastructure_fault = report.infrastructure_fault
+        outcome.stopped = report.stopped
         if report.summary:
             # ⚠ KEPT, because discarding it hid the first real failure. The
             # agent refused before its turn and said why in `summary`; the

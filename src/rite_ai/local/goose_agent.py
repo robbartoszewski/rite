@@ -52,7 +52,22 @@ from dataclasses import dataclass, field
 
 from rite_ai.local.harness import AgentReport, Context
 
-RUN_TIMEOUT_SECONDS = 20 * 60
+RUN_TIMEOUT_SECONDS = 45 * 60
+"""How long one turn may take before it is stopped.
+
+🔴 **Was 20 minutes, on a premise the v0.7.0 gate runs falsified.** The note
+below said twenty minutes was "comfortably above the benchmark's slowest
+measured task". Measured on this machine, same model (`qwen3.8:latest`, 17 GB,
+32k window, 100% GPU):
+
+* `smoke_mixed-20261009T034619Z`: s1's Level-2 approach ~15 min, its exec ~9 min
+* `smoke_mixed-20261009T063320Z`: BOTH subtasks' execs exceeded 20 min and were
+  stopped, with nothing committed, and each stop was terminal
+
+So the limit sat inside the spread of a normal turn rather than above it, which
+made every subtask a coin flip and a two-subtask ticket a coin flip twice. 45
+minutes is above the slowest leg measured here with margin; it is not a claim
+about every model, which is why `timeout` below is a field."""
 """One subtask, not a release. The benchmark's slowest task at a correct
 context window was 623s, so this is comfortably above measured work and well
 below an overnight stall."""
@@ -153,6 +168,9 @@ class GooseAgent:
     model: str
     endpoint: str
     binary: str = "goose"
+    timeout: int = RUN_TIMEOUT_SECONDS
+    """This turn's limit, so a slower engine or host can be given more without
+    editing a constant. A caller that knows its model is slow should set it."""
     mode: str = "auto"
     """`GOOSE_MODE`. ⚠ Goose expresses permission in the ENVIRONMENT, not on
     argv — the second of the contract's three axes.
@@ -275,18 +293,29 @@ class GooseAgent:
         try:
             completed = self._launch(argv, workspace, environment)
         except subprocess.TimeoutExpired as e:
-            # ⚠ **A timeout is NOT a turn that never happened.** It ran for
-            # `RUN_TIMEOUT_SECONDS` — twenty minutes, comfortably above the
-            # benchmark's slowest measured task — so it had every chance to
-            # edit files, and the verify below is the only thing that can say
-            # whether it got anywhere. Marking it an infrastructure fault would
-            # make a model that stalls for twenty minutes cost no attempt, and
-            # a subtask that hangs every time would be retried for ever.
+            # ⚠ **A timeout is NOT a turn that never happened, AND NOT A
+            # VERDICT ON THE WORK** (SCRUM-103). The first half of this note
+            # was already here and is still right: it ran, it had every chance
+            # to edit files, and marking it an `infrastructure_fault` would
+            # make "a subtask that hangs every time be retried for ever".
+            #
+            # 🔴 What was missing is that the only other option recorded the
+            # subtask as FAILED — and `step.next_subtask` makes a FAILED
+            # subtask terminal by design, "so a failure stops this ticket
+            # until a person or a step review looks at it". So a turn cut off
+            # by a clock became a permanent verdict on work nobody judged.
+            # Measured: both subtasks of the gate run's ticket 1 died that way.
+            #
+            # `stopped` is the third category. `step` retries a stop a bounded
+            # number of times (`MAX_STOPS`) and fails the subtask at the bound,
+            # which answers the worry above without spending a verdict on a
+            # clock.
             return AgentReport(
                 claimed_success=False,
+                stopped=True,
                 summary=(
                     f"{self.binary} did not finish within "
-                    f"{getattr(e, 'timeout', RUN_TIMEOUT_SECONDS)}s and was "
+                    f"{getattr(e, 'timeout', self.timeout)}s and was "
                     "stopped; whatever it had already changed is still there"
                 ),
             )
@@ -350,7 +379,7 @@ class GooseAgent:
             # strange character into a dead turn. Caught by the gate, not by
             # reasoning.
             errors="replace",
-            timeout=RUN_TIMEOUT_SECONDS,
+            timeout=self.timeout,
             stdin=subprocess.DEVNULL,
         )
 
