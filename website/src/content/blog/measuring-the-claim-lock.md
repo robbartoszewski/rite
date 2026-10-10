@@ -3,7 +3,7 @@ title: "Measuring the claim lock: six Workers, four minutes, 132,321 grants, zer
 description: A four-minute soak of six concurrent Workers against the new lock; the same harness ran ten seconds against the old one, which lost 309 updates.
 category: measurement
 author: "Rob Bartoszewski"
-appliesTo: v0.7.0a10 # see the HTML comment below: the soak version is unconfirmed
+appliesTo: v0.7.0 # see the HTML comment below: the soak version is unconfirmed
 draft: true
 sources:
   - label: README.md — soak results, with their conditions

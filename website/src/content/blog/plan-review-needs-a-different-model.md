@@ -1,13 +1,13 @@
 ---
 title: Plan review now needs a different model
-description: Until 0.7.0a10, rite stamped its own approval and nobody read the plan. Now the approver must not be the author, must run a different model, and fails closed when rite can't place the author.
+description: rite used to stamp its own approval, and nobody read the plan. Now the approver must not be the author, must run a different model, and fails closed when rite can't place the author.
 date: 2026-10-08
 category: changelog-note
 author: "Rob Bartoszewski"
-appliesTo: v0.7.0a10
+appliesTo: v0.7.0
 draft: false
 sources:
-  - label: CHANGELOG.md — 0.7.0a10
+  - label: CHANGELOG.md — 0.7.0
     href: https://github.com/robbartoszewski/rite/blob/main/CHANGELOG.md
   - label: src/rite_ai/local/stage.py — stage transitions
     href: https://github.com/robbartoszewski/rite/blob/main/src/rite_ai/local/stage.py
@@ -17,7 +17,7 @@ sources:
     href: https://github.com/robbartoszewski/rite/blob/main/src/rite_ai/local/approve.py#L148-L161
 ---
 
-Until this release, rite stamped its own approval, and nobody read the plan. As of `0.7.0a10`, approval is a check in rite's code, and the approver has to be a different model from the one that wrote the plan.
+rite used to stamp its own approval, and nobody read the plan. As of `0.7.0`, approval is a check in rite's code, and the approver has to be a different model from the one that wrote the plan.
 
 ## What changed
 
