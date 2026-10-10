@@ -17,9 +17,7 @@ import Button from './Button.astro';
     <Button href={PROOF.clone} external>Clone and read it</Button>
   </div>
   <p class="rt-install-note">
-    <b>Why the extra variable:</b> <code>install.sh</code> still defaults its own version to
-    <code>v0.6.0</code> whichever tag you fetch it from, and 0.6.0 has none of the staged pipeline
-    or the independent plan review above. Passing <code>RITE_VERSION</code> is what decides which
-    version you actually get. Check with <code>rite --version</code>.
+    <b>What that gives you:</b> rite 0.7.0 — the staged pipeline and the independent plan
+    review described above. Check with <code>rite --version</code>.
   </p>
 </div>

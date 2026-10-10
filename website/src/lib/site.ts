@@ -65,12 +65,11 @@ const BLOB = `${GH}/blob/main`;
  *  anything is inserted above it — and these anchors are the site's whole
  *  credibility argument. Bump this with VERSION, and re-check the line numbers
  *  in PROOF below against the new tag before you do. */
-/* ⚠ Still the last alpha, on purpose: these line anchors were verified against
- *  v0.7.0a10 and a tag that does not exist yet cannot be checked. Bump this to
- *  'v0.7.0' once that tag is cut, and re-read each line in PROOF below before
- *  you do — a line anchor into the wrong revision is a confident link to the
- *  wrong code. */
-const PROOF_REF = 'v0.7.0a10';
+/* Every anchor below was re-read against v0.7.0 itself on 2026-10-10, not
+ *  carried over: `soak` and `install` had both moved, because v0.7.0 rewrote
+ *  the README. A line anchor into the wrong revision is a confident link to
+ *  the wrong code, so re-read each one here whenever this ref changes. */
+const PROOF_REF = 'v0.7.0';
 const PINNED = `${GH}/blob/${PROOF_REF}`;
 
 export const REPO = GH;
@@ -89,8 +88,8 @@ const P_SPEC = `${PINNED}/SPEC.md`;
 const P_NOTES = `${PINNED}/docs/install-notes.md`;
 
 export const PROOF = {
-  /** README: "Claim exclusion is measured, not asserted." + both figures. */
-  soak: `${P_README}#L16-L18`,
+  /** README: "Claim exclusion, measured." + both figures. */
+  soak: `${P_README}#L34-L36`,
   /** stage.py: the transition table — what may follow what. */
   stageTransitions: `${PINNED}/src/rite_ai/local/stage.py#L97`,
   /** stage.py: `advance`, the single guard every stage move goes through. */
@@ -102,21 +101,18 @@ export const PROOF = {
   /** SPEC §9.12: "Nothing rite runs unattended starts a Claude session." */
   unattended: `${P_SPEC}#L5305`,
   /** README: the install one-liner. */
-  install: `${P_README}#L315`,
+  install: `${P_README}#L325`,
   /** install-notes.md: download-and-check-then-run. */
   verify: `${P_NOTES}#L80`,
   /** install-notes.md: clone and read everything. */
   clone: `${P_NOTES}#L87`,
 } as const;
 
-/** The install command, verbatim from the repository's README (line 315).
- *  ⚠ It pins the v0.6.0 tag because that is what the README publishes today.
- *  Bump BOTH when a newer tag ships an install.sh. */
-/** ⚠ `RITE_VERSION` is given explicitly because install.sh still defaults its
- *  own VERSION to v0.6.0 (SCRUM-89) whichever tag the script came from. Drop
- *  the variable only once that default is fixed. */
+/** The install command, verbatim from the repository's README (line 325).
+ *  install.sh defaults its own VERSION to v0.7.0 from 0.7.0 on (SCRUM-89), so
+ *  no RITE_VERSION is needed. Bump BOTH when a newer tag ships an install.sh. */
 export const INSTALL_COMMAND =
-  'curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh | RITE_VERSION=v0.7.0 sh';
+  'curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh | sh';
 
 /* ───────────────────────────── link helper ──────────────────────────────── */
 
