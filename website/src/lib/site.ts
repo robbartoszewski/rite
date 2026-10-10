@@ -11,7 +11,7 @@
  * ─────────────────────────────────────────────────────────────────────────── */
 
 /** DECISION 1 — maturity framing. Default: "Alpha — building in public".
- *  Shows a `v0.7.0a10 · alpha` chip in the nav on every page and a maturity
+ *  Shows a `v0.7.0` chip in the nav on every page and a maturity
  *  line in the hero. Set `label: 'beta'` to soften, or MATURITY.show = false
  *  to drop the chip entirely (not recommended before 1.0 — the candour is the
  *  positioning). */

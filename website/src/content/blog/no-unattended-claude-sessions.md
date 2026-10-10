@@ -3,7 +3,7 @@ title: Why rite won't start a Claude session when nobody is watching
 description: Unattended dispatch of Claude sessions is refused on purpose, because it spends your quota with nobody watching. What the loop does instead, and where that leaves the north star.
 category: design-decision
 author: "Rob Bartoszewski"
-appliesTo: v0.7.0a10
+appliesTo: v0.7.0
 draft: true
 sources:
   - label: "SPEC.md §9.12 — nothing rite runs unattended starts a Claude session"
