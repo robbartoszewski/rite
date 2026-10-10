@@ -322,17 +322,7 @@ installed anywhere else in your home directory, such as a project virtualenv,
 cannot run inside a sandbox.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
-```
-
-⚠ **That pin is the last stable release, and this page documents 0.7.0.**
-`rite local step`, the staged pipeline with `rite plan approve`,
-`rite add manager --preset` and `rite route --ticket … --from-file` all arrived
-in the 0.7.0 alphas, so a v0.6.0 install will not have them. For the version
-this page describes:
-
-```bash
-RITE_VERSION=v0.7.0a11 curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.6.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/robbartoszewski/rite/v0.7.0/install.sh | sh
 ```
 
 *That is a `curl | sh` for a tool that scans your repo for secrets, so two

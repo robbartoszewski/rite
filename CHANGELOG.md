@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.7.0 (2026-10-10)
+
+**0.7.0 in one paragraph.** A ticket on your board can now be driven to a
+delivered branch by a fleet you are not watching. A Manager runs on Claude Code
+or on a local model through Goose; Workers run on either; and between them sits
+a staged pipeline whose stages cannot be skipped — a plan authored by one
+model, reviewed by a different one, executed a subtask at a time, each subtask
+checked by the command the ticket named rather than by the agent's own report,
+then recomposed and delivered with an account of itself. The release series
+that led here (`0.7.0a1`–`0.7.0a11`, below) was mostly the cost of making that
+survive contact with real agents: stalls, timeouts, claim contention and
+credential walls each read as a healthy fleet advancing nothing, and each is
+now a condition rite recovers from rather than a verdict on the work.
+
+### The happy path, measured
+
+The four-check happy-path smoke passed unassisted on 2026-10-09, run
+`smoke_mixed-20261009T142706Z`: a Claude Manager orchestrating, a local model
+(`qwen3.8` on Ollama) authoring the plan, a GPU Worker implementing the ticket
+and a Claude Worker taking a second one. The plan was rejected once by a
+different model and re-authored; one subtask's turn hit its 45-minute ceiling,
+was retried rather than failed, and was accepted on the second attempt; rite's
+own verify decided acceptance; and the pipeline composed the handback the
+Manager read.
+
+⚠ **That is the four-check smoke, not the full gate.** One trivial ticket and
+no induced failures. It did not push a branch or open a pull request — the
+smoke's app has no remote. The full 13-check gate's other checks (recovery,
+stale claims, the Owner's answer, the decoy, journalling) have not been run,
+and are deferred to 0.7.1. "The happy path works" is the claim; "the release
+gate has passed" is not.
+
+### What this release ships open
+
+⚠ **A Worker's sandbox is escapable (DF16).** A command handed to a tmux
+server running outside the sandbox runs as you — the keychain, rite's
+credential store, `~/.ssh`, every project. The fix belongs in yoloAI's seatbelt
+profile and is not released; it has been measured working only in a locally
+patched build. Deferred to 0.7.1 as a conscious decision, disclosed in the
+README rather than left to be discovered: run Workers only with a patched
+yoloAI first on `PATH`, or treat every Worker as able to act as you.
+
+### Also in 0.7.0
+
+- **SCRUM-89 is closed.** `install.sh` defaults to `v0.7.0`, and the README and
+  `docs/install-notes.md` name it, so a bare `curl … | sh` installs this
+  release. Through 0.7.0a11 it still installed `v0.6.0`.
+- **The README leads with what rite promises** rather than a feature list, says
+  plainly that it runs on Claude and Ollama today, and drops the claims that
+  only survived with a paragraph of qualification.
+
 ## 0.7.0a11 (2026-10-09) — alpha: the gate harness, and the defects it found
 
 Robert's release gate for 0.7.0 is one real run: a Claude Manager
@@ -8,6 +59,10 @@ Worker implementing it, driving a ticket from board to delivery. This release
 is the harness that runs it and the defects running it exposed. Every one was
 found by a real run on real infrastructure — a real board, a real model on
 Ollama, real sandboxes, real commits — and not by reading the code.
+
+⚠ **Written before that run was made.** It was made the next day and the
+four-check smoke passed; see `0.7.0` above for what it did and did not cover.
+This entry describes the harness and the fixes, not a pending result.
 
 ### Deadlocks: a fleet that read as healthy and advanced nothing
 
