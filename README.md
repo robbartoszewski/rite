@@ -404,6 +404,13 @@ hanging on a prompt nobody is there to answer. The list covers what these
 agents were measured invoking — `git`, `rite`, `gh`, `python`, `uv`, `pytest`,
 `yoloai`, the file and text tools — and rite prints the grant on every run.
 
+```console
+permissions: Manager 'planner' may run 77 allowlisted command families
+(permissions.json); anything else is REFUSED rather than queued for
+approval. It runs inside a sandbox — a GUARD RAIL against mistakes, not
+containment. See the limitations printed below.
+```
+
 **The allowlist is yours to change, and a Manager can change it too.** Edit
 `permissions.allow` or `permissions.deny` in your own `.claude/settings.json`;
 rite rewrites its own file and never touches yours. But a steered Manager can
